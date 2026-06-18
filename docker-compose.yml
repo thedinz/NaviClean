@@ -7,6 +7,8 @@ services:
       - "${NAVICLEAN_PORT:-8080}:8080"
     environment:
       PORT: 8080
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       NAVICLEAN_DATA_DIR: /data
       NAVICLEAN_MUSIC_DIR: /music
     volumes:
