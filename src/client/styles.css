@@ -116,7 +116,10 @@ button:disabled {
 }
 
 .main-panel {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 100vh;
   padding: 24px;
 }
 
@@ -340,6 +343,25 @@ legend {
 .notice {
   color: #64706d;
   font-size: 0.9rem;
+}
+
+.version-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 24px;
+  color: #64706d;
+  font-size: 0.78rem;
+  font-weight: 760;
+}
+
+.version-footer span {
+  min-height: 26px;
+  padding: 5px 9px;
+  border: 1px solid #dfded6;
+  border-radius: 8px;
+  background: #fffefa;
 }
 
 .table-wrap {
@@ -604,11 +626,16 @@ input {
   }
 
   .topbar-actions,
+  .version-footer,
   .primary-button,
   .secondary-button,
   .danger-button,
   .toolbar {
     width: 100%;
+  }
+
+  .version-footer {
+    justify-content: flex-start;
   }
 
   .primary-button,
