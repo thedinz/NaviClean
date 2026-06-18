@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.data/
+data/
+music/
+.vite/
+coverage/
+npm-debug.log*
+.DS_Store
+.env
+.env.*
+!.env.example

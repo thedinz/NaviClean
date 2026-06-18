@@ -1,0 +1,233 @@
+import bcrypt from "bcryptjs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { SettingsUpdate, SettingsView } from "../shared/types.js";
+
+export type PrivateSettings = {
+  auth: {
+    enabled: boolean;
+    username: string;
+    passwordHash: string;
+  };
+  navidrome: {
+    baseUrl: string;
+    username: string;
+    password: string;
+  };
+  naming: {
+    libraryPath: string;
+    recycleBinPath: string;
+    artistFolderFormat: string;
+    standardTrackFormat: string;
+    multiDiscTrackFormat: string;
+    replaceIllegalCharacters: boolean;
+  };
+  scan: {
+    extensions: string[];
+  };
+};
+
+const defaultExtensions = [
+  ".flac",
+  ".mp3",
+  ".m4a",
+  ".aac",
+  ".ogg",
+  ".opus",
+  ".wav",
+  ".aiff",
+  ".aif",
+  ".alac",
+  ".wma"
+];
+
+const dataDir = process.env.NAVICLEAN_DATA_DIR || path.resolve(process.cwd(), ".data");
+const settingsPath = path.join(dataDir, "settings.json");
+
+export function getDataDir() {
+  return dataDir;
+}
+
+export async function loadSettings(): Promise<PrivateSettings> {
+  await fs.mkdir(dataDir, { recursive: true });
+
+  try {
+    const raw = await fs.readFile(settingsPath, "utf8");
+    return normalizeSettings(JSON.parse(raw) as Partial<PrivateSettings>);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+
+    const settings = await createDefaultSettings();
+    await saveSettings(settings);
+    return settings;
+  }
+}
+
+export async function saveSettings(settings: PrivateSettings) {
+  await fs.mkdir(dataDir, { recursive: true });
+  const tempPath = `${settingsPath}.tmp`;
+  await fs.writeFile(tempPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+  await fs.rename(tempPath, settingsPath);
+}
+
+export function toSettingsView(settings: PrivateSettings): SettingsView {
+  return {
+    auth: {
+      enabled: settings.auth.enabled,
+      username: settings.auth.username
+    },
+    navidrome: {
+      baseUrl: settings.navidrome.baseUrl,
+      username: settings.navidrome.username,
+      passwordSet: settings.navidrome.password.length > 0
+    },
+    naming: settings.naming,
+    scan: settings.scan
+  };
+}
+
+export async function updateSettings(update: SettingsUpdate): Promise<PrivateSettings> {
+  const current = await loadSettings();
+  const next: PrivateSettings = {
+    auth: { ...current.auth },
+    navidrome: { ...current.navidrome },
+    naming: { ...current.naming },
+    scan: { extensions: [...current.scan.extensions] }
+  };
+
+  if (update.auth) {
+    if (typeof update.auth.enabled === "boolean") {
+      next.auth.enabled = update.auth.enabled;
+    }
+    if (typeof update.auth.username === "string" && update.auth.username.trim()) {
+      next.auth.username = update.auth.username.trim();
+    }
+    if (typeof update.auth.password === "string" && update.auth.password.length > 0) {
+      next.auth.passwordHash = await bcrypt.hash(update.auth.password, 12);
+    }
+  }
+
+  if (update.navidrome) {
+    if (typeof update.navidrome.baseUrl === "string") {
+      next.navidrome.baseUrl = trimTrailingSlash(update.navidrome.baseUrl.trim());
+    }
+    if (typeof update.navidrome.username === "string") {
+      next.navidrome.username = update.navidrome.username.trim();
+    }
+    if (typeof update.navidrome.password === "string" && update.navidrome.password.length > 0) {
+      next.navidrome.password = update.navidrome.password;
+    }
+  }
+
+  if (update.naming) {
+    next.naming = {
+      ...next.naming,
+      ...compactStringValues(update.naming)
+    };
+  }
+
+  if (update.scan?.extensions) {
+    next.scan.extensions = normalizeExtensions(update.scan.extensions);
+  }
+
+  await saveSettings(next);
+  return next;
+}
+
+async function createDefaultSettings(): Promise<PrivateSettings> {
+  return {
+    auth: {
+      enabled: true,
+      username: "admin",
+      passwordHash: await bcrypt.hash("admin", 12)
+    },
+    navidrome: {
+      baseUrl: "",
+      username: "",
+      password: ""
+    },
+    naming: {
+      libraryPath: process.env.NAVICLEAN_MUSIC_DIR || "/music",
+      recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash"),
+      artistFolderFormat: "{Artist Name}",
+      standardTrackFormat: "{Album Title}/{track:00} {Track Title}",
+      multiDiscTrackFormat: "{Album Title}/{medium:00}-{track:00} {Track Title}",
+      replaceIllegalCharacters: true
+    },
+    scan: {
+      extensions: defaultExtensions
+    }
+  };
+}
+
+function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
+  const fallback = {
+    auth: {
+      enabled: true,
+      username: "admin",
+      passwordHash: bcrypt.hashSync("admin", 12)
+    },
+    navidrome: {
+      baseUrl: "",
+      username: "",
+      password: ""
+    },
+    naming: {
+      libraryPath: process.env.NAVICLEAN_MUSIC_DIR || "/music",
+      recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash"),
+      artistFolderFormat: "{Artist Name}",
+      standardTrackFormat: "{Album Title}/{track:00} {Track Title}",
+      multiDiscTrackFormat: "{Album Title}/{medium:00}-{track:00} {Track Title}",
+      replaceIllegalCharacters: true
+    },
+    scan: {
+      extensions: defaultExtensions
+    }
+  };
+
+  return {
+    auth: {
+      enabled: partial.auth?.enabled ?? fallback.auth.enabled,
+      username: partial.auth?.username || fallback.auth.username,
+      passwordHash: partial.auth?.passwordHash || fallback.auth.passwordHash
+    },
+    navidrome: {
+      baseUrl: trimTrailingSlash(partial.navidrome?.baseUrl || fallback.navidrome.baseUrl),
+      username: partial.navidrome?.username || fallback.navidrome.username,
+      password: partial.navidrome?.password || fallback.navidrome.password
+    },
+    naming: {
+      ...fallback.naming,
+      ...partial.naming
+    },
+    scan: {
+      extensions: normalizeExtensions(partial.scan?.extensions || fallback.scan.extensions)
+    }
+  };
+}
+
+function normalizeExtensions(extensions: string[]) {
+  const normalized = extensions
+    .map((extension) => extension.trim().toLowerCase())
+    .filter(Boolean)
+    .map((extension) => (extension.startsWith(".") ? extension : `.${extension}`));
+
+  return Array.from(new Set(normalized));
+}
+
+function compactStringValues<T extends Record<string, unknown>>(values: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(values).filter(([, value]) => {
+      if (typeof value !== "string") {
+        return typeof value !== "undefined";
+      }
+      return value.trim().length > 0;
+    })
+  ) as Partial<T>;
+}
+
+function trimTrailingSlash(value: string) {
+  return value.replace(/\/+$/, "");
+}
