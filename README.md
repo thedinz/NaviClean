@@ -9,14 +9,14 @@ It scans a mounted music library, previews Lidarr-compatible artist/album/track 
 - Login: `admin` / `admin`
 - Config volume: `/data`
 - Music volume: `/music`
-- Image: `ghcr.io/thedinz/naviclean:dev`
+- Image: `ghcr.io/thedinz/naviclean:latest`
 
 ## Docker Compose
 
 ```yaml
 services:
   naviclean:
-    image: ghcr.io/thedinz/naviclean:dev
+    image: ghcr.io/thedinz/naviclean:latest
     container_name: naviclean
     restart: unless-stopped
     ports:
