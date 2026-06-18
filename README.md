@@ -9,6 +9,7 @@ It scans a mounted music library, previews Lidarr-compatible artist/album/track 
 - Login: `admin` / `admin`
 - Config volume: `/data`
 - Music volume: `/music`
+- Runtime user: `PUID=1000`, `PGID=1000`
 - Image: `ghcr.io/thedinz/naviclean:latest`
 
 ## Docker Compose
@@ -22,12 +23,16 @@ services:
     ports:
       - "${NAVICLEAN_PORT:-8080}:8080"
     environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       NAVICLEAN_DATA_DIR: /data
       NAVICLEAN_MUSIC_DIR: /music
     volumes:
       - ${NAVICLEAN_DATA_PATH:-./data}:/data
       - ${NAVICLEAN_MUSIC_PATH:-./music}:/music
 ```
+
+For Unraid, set `PUID=99` and `PGID=100` so NaviClean can write to `/mnt/user/appdata/naviclean` and the mounted music share.
 
 ## Naming model
 
