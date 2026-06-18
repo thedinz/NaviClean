@@ -28,6 +28,7 @@ import type {
   TrackFile
 } from "../shared/types";
 import { api } from "./api";
+import { appVersion } from "./version";
 
 type Page = "dashboard" | "library" | "duplicates" | "organize" | "settings";
 
@@ -162,6 +163,7 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
         {page === "duplicates" && <DuplicatesPage onChanged={refreshStats} />}
         {page === "organize" && <OrganizePage onChanged={refreshStats} />}
         {page === "settings" && <SettingsPage onAuthChange={onAuthChange} />}
+        <VersionFooter />
       </main>
     </div>
   );
@@ -735,6 +737,15 @@ function MessageScreen({ title, message }: { title: string; message: string }) {
       <h1>{title}</h1>
       <p>{message}</p>
     </main>
+  );
+}
+
+function VersionFooter() {
+  return (
+    <footer className="version-footer">
+      <span>Version {appVersion.version}</span>
+      <span>Branch {appVersion.branch}</span>
+    </footer>
   );
 }
 
