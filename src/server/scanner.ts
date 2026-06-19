@@ -4,9 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ScanStatus, TrackFile } from "../shared/types.js";
 import { saveCatalog } from "./catalog.js";
+import { buildDuplicateKey } from "./matching.js";
 import { targetForTrack } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
-import { cleanDisplayValue, normalizeForMatch, sha1, titleFromFilename, toPosixRelative } from "./utils.js";
+import { cleanDisplayValue, sha1, titleFromFilename, toPosixRelative } from "./utils.js";
 
 type ProgressHandler = (status: Partial<ScanStatus>) => void;
 
@@ -102,6 +103,8 @@ async function collectAudioFiles(root: string, extensions: Set<string>, recycleR
 async function readTrack(filePath: string, root: string, settings: PrivateSettings): Promise<TrackFile> {
   const stat = await fs.stat(filePath);
   const extension = path.extname(filePath).toLowerCase();
+  const relativePath = toPosixRelative(root, filePath);
+  const inferred = inferMetadataFromPath(relativePath);
   const issues: string[] = [];
   let metadata: Awaited<ReturnType<typeof parseFile>> | null = null;
 
@@ -112,16 +115,21 @@ async function readTrack(filePath: string, root: string, settings: PrivateSettin
   }
 
   const common = metadata?.common;
+  const commonRecord = common as Record<string, unknown> | undefined;
   const format = metadata?.format;
-  const artist = cleanDisplayValue(common?.artist || common?.artists?.[0], "Unknown Artist");
-  const albumArtist = cleanDisplayValue(common?.albumartist || common?.artist || common?.artists?.[0], artist);
-  const album = cleanDisplayValue(common?.album, "Unknown Album");
-  const title = cleanDisplayValue(common?.title, titleFromFilename(filePath));
-  const trackNumber = common?.track?.no || null;
+  const artist = cleanDisplayValue(common?.artist || common?.artists?.[0] || inferred.artist, "Unknown Artist");
+  const albumArtist = cleanDisplayValue(
+    common?.albumartist || common?.artist || common?.artists?.[0] || inferred.albumArtist || inferred.artist,
+    artist
+  );
+  const album = cleanDisplayValue(common?.album || inferred.album, "Unknown Album");
+  const title = cleanDisplayValue(common?.title || inferred.title, titleFromFilename(filePath));
+  const trackNumber = common?.track?.no || inferred.trackNumber || null;
   const trackTotal = common?.track?.of || null;
-  const discNumber = common?.disk?.no || null;
+  const discNumber = common?.disk?.no || inferred.discNumber || null;
   const discTotal = common?.disk?.of || null;
-  const year = typeof common?.year === "number" ? common.year : null;
+  const year = typeof common?.year === "number" ? common.year : parseYear(firstCommonString(commonRecord, ["date", "originaldate", "releasedate"])) ?? inferred.year ?? null;
+  const albumType = normalizeAlbumType(firstCommonString(commonRecord, ["albumtype", "releasetype", "release_type"]) || inferred.albumType, trackTotal);
   const duration = typeof format?.duration === "number" ? format.duration : null;
   const bitrate = typeof format?.bitrate === "number" ? Math.round(format.bitrate) : null;
   const sampleRate = typeof format?.sampleRate === "number" ? format.sampleRate : null;
@@ -143,13 +151,14 @@ async function readTrack(filePath: string, root: string, settings: PrivateSettin
   const partialTrack = {
     id: fileId(filePath, stat.size, stat.mtimeMs),
     absolutePath: filePath,
-    relativePath: toPosixRelative(root, filePath),
+    relativePath,
     extension,
     size: stat.size,
     mtimeMs: stat.mtimeMs,
     artist,
     albumArtist,
     album,
+    albumType,
     title,
     trackNumber,
     trackTotal,
@@ -163,9 +172,14 @@ async function readTrack(filePath: string, root: string, settings: PrivateSettin
     codec,
     container,
     lossless,
-    duplicateKey: duplicateKey({
+    duplicateKey: buildDuplicateKey({
       artist: albumArtist || artist,
+      album,
+      albumType,
       title,
+      trackNumber,
+      discNumber,
+      year,
       duration,
       isrc: common?.isrc?.[0] || null
     }),
@@ -183,15 +197,6 @@ async function readTrack(filePath: string, root: string, settings: PrivateSettin
   };
 }
 
-function duplicateKey(values: { artist: string; title: string; duration: number | null; isrc: string | null }) {
-  if (values.isrc) {
-    return `isrc:${normalizeForMatch(values.isrc)}`;
-  }
-
-  const durationBucket = values.duration ? Math.round(values.duration / 2) * 2 : "unknown-duration";
-  return [normalizeForMatch(values.artist), normalizeForMatch(values.title), durationBucket].join("|");
-}
-
 function qualityScore(extension: string, bitrate: number | null, bitsPerSample: number | null, lossless: boolean) {
   const base = extensionQuality[extension] || 100;
   const bitrateBonus = bitrate ? Math.min(240, Math.round(bitrate / 1000)) : 0;
@@ -205,4 +210,212 @@ function fileId(filePath: string, size: number, mtimeMs: number) {
 
 function cleanNullable(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+type InferredMetadata = {
+  album?: string;
+  albumArtist?: string;
+  albumType?: string;
+  artist?: string;
+  discNumber?: number;
+  title?: string;
+  trackNumber?: number;
+  year?: number;
+};
+
+function inferMetadataFromPath(relativePath: string): InferredMetadata {
+  const parsedPath = path.posix.parse(relativePath);
+  const folderSegments = parsedPath.dir.split("/").filter(Boolean);
+  const folderName = folderSegments.at(-1);
+  const parentArtistFolderName = folderSegments.at(-2);
+  const lidarrFolder = parseLidarrAlbumDirectory(parsedPath.dir);
+  const artistAlbumFolder = folderName?.match(/^(?<artist>.+?)\s+-\s+(?<album>.+)$/);
+  const hasFolderIdentity = Boolean(lidarrFolder || artistAlbumFolder || (folderName && parentArtistFolderName));
+  const filename = inferMetadataFromFilename(parsedPath.name, !hasFolderIdentity);
+  const albumArtist =
+    lidarrFolder?.artist ??
+    artistAlbumFolder?.groups?.artist?.trim() ??
+    (folderName && parentArtistFolderName ? parentArtistFolderName : undefined) ??
+    filename.artist;
+  const album =
+    lidarrFolder?.album ??
+    artistAlbumFolder?.groups?.album?.trim() ??
+    (folderName && parentArtistFolderName ? folderName : undefined) ??
+    filename.album;
+
+  return {
+    album,
+    albumArtist,
+    albumType: lidarrFolder?.albumType,
+    artist: filename.artist ?? albumArtist,
+    discNumber: filename.discNumber,
+    title: filename.title,
+    trackNumber: filename.trackNumber,
+    year: lidarrFolder?.year ?? undefined
+  };
+}
+
+function inferMetadataFromFilename(value: string, allowIdentityFromName: boolean): InferredMetadata {
+  const trackNumbers = inferTrackNumbersFromFileName(value);
+  const cleaned = cleanTrackFileName(value);
+
+  if (!allowIdentityFromName) {
+    return {
+      title: cleaned,
+      ...trackNumbers
+    };
+  }
+
+  const artistAlbumTitleMatch = cleaned.match(/^(?<artist>.+?)\s+-\s+(?<album>.+?)\s+-\s+(?<title>.+)$/);
+
+  if (artistAlbumTitleMatch?.groups) {
+    return {
+      artist: artistAlbumTitleMatch.groups.artist.trim(),
+      album: artistAlbumTitleMatch.groups.album.trim(),
+      title: artistAlbumTitleMatch.groups.title.trim(),
+      ...trackNumbers
+    };
+  }
+
+  const artistTitleMatch = cleaned.match(/^(?<artist>.+?)\s+-\s+(?<title>.+)$/);
+
+  if (artistTitleMatch?.groups) {
+    return {
+      artist: artistTitleMatch.groups.artist.trim(),
+      title: artistTitleMatch.groups.title.trim(),
+      ...trackNumbers
+    };
+  }
+
+  return {
+    title: cleaned,
+    ...trackNumbers
+  };
+}
+
+function cleanTrackFileName(value: string) {
+  return (
+    value
+      .replace(/^\s*\d{4}\s*[-_. ]+\s*/, "")
+      .replace(/^\s*\d{1,2}[-_.]\d{1,2}\s*[-_. ]+\s*/, "")
+      .replace(/^\s*\d{1,3}\s*[-_. ]+\s*/, "")
+      .replace(/\s+/g, " ")
+      .trim() || value
+  );
+}
+
+function inferTrackNumbersFromFileName(value: string) {
+  const lidarrMatch = value.match(/^\s*(?<medium>\d{2})(?<track>\d{2})\s*[-_. ]+/);
+
+  if (lidarrMatch?.groups) {
+    return {
+      discNumber: parsePositiveInteger(lidarrMatch.groups.medium),
+      trackNumber: parsePositiveInteger(lidarrMatch.groups.track)
+    };
+  }
+
+  const multiDiscMatch = value.match(/^\s*(?<medium>\d{1,2})[-_.](?<track>\d{1,2})\s*[-_. ]+/);
+
+  if (multiDiscMatch?.groups) {
+    return {
+      discNumber: parsePositiveInteger(multiDiscMatch.groups.medium),
+      trackNumber: parsePositiveInteger(multiDiscMatch.groups.track)
+    };
+  }
+
+  const trackMatch = value.match(/^\s*(?<track>\d{1,3})\s*[-_. ]+/);
+
+  return {
+    discNumber: undefined,
+    trackNumber: parsePositiveInteger(trackMatch?.groups?.track)
+  };
+}
+
+function parseLidarrAlbumDirectory(relativeDirectory: string) {
+  const segments = relativeDirectory.split("/").filter(Boolean);
+  const albumFolderName = segments.at(-1);
+  const parentArtistFolderName = segments.at(-2);
+
+  if (!albumFolderName || !parentArtistFolderName) {
+    return null;
+  }
+
+  const prefix = `${parentArtistFolderName} - `;
+
+  if (!albumFolderName.toLowerCase().startsWith(prefix.toLowerCase())) {
+    return null;
+  }
+
+  const remainder = albumFolderName.slice(prefix.length);
+  const match = remainder.match(/^(?<albumType>.+?) - (?<year>\d{4}|Unknown Year) - (?<album>.+)$/);
+
+  if (!match?.groups) {
+    return null;
+  }
+
+  return {
+    album: match.groups.album.trim(),
+    albumType: normalizeAlbumType(match.groups.albumType),
+    artist: parentArtistFolderName.trim(),
+    year: parseYear(match.groups.year)
+  };
+}
+
+function firstCommonString(common: Record<string, unknown> | undefined, keys: string[]) {
+  for (const key of keys) {
+    const value = common?.[key];
+
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+
+    if (Array.isArray(value)) {
+      const first = value.find((item) => typeof item === "string" && item.trim());
+      if (typeof first === "string") {
+        return first.trim();
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function parseYear(value: string | undefined) {
+  const match = value?.match(/\b(\d{4})\b/);
+  return match ? Number(match[1]) : null;
+}
+
+function parsePositiveInteger(value?: string) {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(value.split("/")[0], 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function normalizeAlbumType(value?: string, trackTotal?: number | null) {
+  const albumType = (value || "").trim().toLowerCase();
+
+  if (albumType === "compilation") {
+    return "Compilation";
+  }
+
+  if (albumType === "single") {
+    return typeof trackTotal === "number" && trackTotal >= 4 && trackTotal <= 7 ? "EP" : "Single";
+  }
+
+  if (albumType === "ep") {
+    return "EP";
+  }
+
+  return albumType ? titleCaseAlbumType(albumType) : "Album";
+}
+
+function titleCaseAlbumType(value: string) {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
 }

@@ -8,15 +8,25 @@ export function sha1(value: string) {
   return crypto.createHash("sha1").update(value).digest("hex");
 }
 
-export function normalizeForMatch(value: string) {
-  return value
+type NormalizeForMatchOptions = {
+  removeBracketedText?: boolean;
+};
+
+export function normalizeForMatch(value: string, options: NormalizeForMatchOptions = {}) {
+  const removeBracketedText = options.removeBracketedText ?? true;
+  let normalized = value
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/&/g, " and ")
-    .replace(/\b(feat|ft|featuring)\.?\b.*$/g, "")
-    .replace(/\([^)]*\)|\[[^\]]*]/g, " ")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(feat|ft|featuring)\.?\b.*$/g, "");
+
+  if (removeBracketedText) {
+    normalized = normalized.replace(/\([^)]*\)|\[[^\]]*]/g, " ");
+  }
+
+  return normalized
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim()
     .replace(/\s+/g, " ");
 }
@@ -40,7 +50,7 @@ export function titleFromFilename(filePath: string) {
 }
 
 export function sanitizePathSegment(value: string, replaceIllegalCharacters: boolean) {
-  let segment = value.trim().replace(/\s+/g, " ");
+  let segment = value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " ");
 
   if (replaceIllegalCharacters) {
     segment = segment.replace(illegalFilenameChars, " - ");
@@ -59,7 +69,7 @@ export function sanitizePathSegment(value: string, replaceIllegalCharacters: boo
     segment = `_${segment}`;
   }
 
-  return segment.slice(0, 180);
+  return segment.slice(0, 120);
 }
 
 export function isInsidePath(parent: string, child: string) {

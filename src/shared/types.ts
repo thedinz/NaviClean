@@ -58,6 +58,7 @@ export type TrackFile = {
   artist: string;
   albumArtist: string;
   album: string;
+  albumType: string;
   title: string;
   trackNumber: number | null;
   trackTotal: number | null;
@@ -76,6 +77,19 @@ export type TrackFile = {
   targetPath: string;
   targetRelativePath: string;
   issues: string[];
+};
+
+export type WorkflowStage = "scan" | "organize" | "duplicates";
+
+export type WorkflowState = {
+  stage: WorkflowStage;
+  duplicateScanReady: boolean;
+  scanned: boolean;
+  pendingMoves: number;
+  organizationConflicts: number;
+  missingFiles: number;
+  message: string;
+  warnings: string[];
 };
 
 export type DuplicateGroup = {
@@ -101,6 +115,7 @@ export type LibraryStats = {
   pendingMoves: number;
   missingMetadata: number;
   lastScanFinishedAt: string | null;
+  workflow: WorkflowState;
 };
 
 export type OrganizePlanItem = {

@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { LibraryStats, TrackFile } from "../shared/types.js";
+import type { LibraryStats, TrackFile, WorkflowState } from "../shared/types.js";
 import { getDataDir } from "./settings.js";
-import { trackNeedsMove } from "./organizer.js";
 
 export type Catalog = {
   updatedAt: string | null;
@@ -17,7 +16,7 @@ export async function loadCatalog(): Promise<Catalog> {
     const parsed = JSON.parse(raw) as Catalog;
     return {
       updatedAt: parsed.updatedAt || null,
-      tracks: Array.isArray(parsed.tracks) ? parsed.tracks : []
+      tracks: Array.isArray(parsed.tracks) ? parsed.tracks.map(normalizeCatalogTrack) : []
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -45,14 +44,28 @@ export async function removeTracksFromCatalog(ids: Set<string>) {
   return saveCatalog(next);
 }
 
-export function createStats(tracks: TrackFile[], duplicateGroups: number, duplicateTracks: number, lastScanFinishedAt: string | null): LibraryStats {
+export function createStats(
+  tracks: TrackFile[],
+  duplicateGroups: number,
+  duplicateTracks: number,
+  lastScanFinishedAt: string | null,
+  workflow: WorkflowState
+): LibraryStats {
   return {
     totalTracks: tracks.length,
     duplicateGroups,
     duplicateTracks,
-    pendingMoves: tracks.filter(trackNeedsMove).length,
+    pendingMoves: workflow.pendingMoves,
     missingMetadata: tracks.filter((track) => track.issues.length > 0).length,
-    lastScanFinishedAt
+    lastScanFinishedAt,
+    workflow
+  };
+}
+
+function normalizeCatalogTrack(track: TrackFile) {
+  return {
+    ...track,
+    albumType: typeof track.albumType === "string" && track.albumType.trim() ? track.albumType : "Album"
   };
 }
 

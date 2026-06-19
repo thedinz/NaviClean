@@ -40,6 +40,19 @@ const defaultExtensions = [
   ".alac",
   ".wma"
 ];
+const legacyDefaultNaming = {
+  artistFolderFormat: "{Artist Name}",
+  standardTrackFormat: "{Album Title}/{track:00} {Track Title}",
+  multiDiscTrackFormat: "{Album Title}/{medium:00}-{track:00} {Track Title}"
+};
+const defaultNaming = {
+  libraryPath: process.env.NAVICLEAN_MUSIC_DIR || "/music",
+  recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash"),
+  artistFolderFormat: "{Album Artist Name}",
+  standardTrackFormat: "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
+  multiDiscTrackFormat: "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
+  replaceIllegalCharacters: true
+};
 
 const dataDir = process.env.NAVICLEAN_DATA_DIR || path.resolve(process.cwd(), ".data");
 const settingsPath = path.join(dataDir, "settings.json");
@@ -148,14 +161,7 @@ async function createDefaultSettings(): Promise<PrivateSettings> {
       username: "",
       password: ""
     },
-    naming: {
-      libraryPath: process.env.NAVICLEAN_MUSIC_DIR || "/music",
-      recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash"),
-      artistFolderFormat: "{Artist Name}",
-      standardTrackFormat: "{Album Title}/{track:00} {Track Title}",
-      multiDiscTrackFormat: "{Album Title}/{medium:00}-{track:00} {Track Title}",
-      replaceIllegalCharacters: true
-    },
+    naming: defaultNaming,
     scan: {
       extensions: defaultExtensions
     }
@@ -174,14 +180,7 @@ function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
       username: "",
       password: ""
     },
-    naming: {
-      libraryPath: process.env.NAVICLEAN_MUSIC_DIR || "/music",
-      recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash"),
-      artistFolderFormat: "{Artist Name}",
-      standardTrackFormat: "{Album Title}/{track:00} {Track Title}",
-      multiDiscTrackFormat: "{Album Title}/{medium:00}-{track:00} {Track Title}",
-      replaceIllegalCharacters: true
-    },
+    naming: defaultNaming,
     scan: {
       extensions: defaultExtensions
     }
@@ -198,14 +197,40 @@ function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
       username: partial.navidrome?.username || fallback.navidrome.username,
       password: partial.navidrome?.password || fallback.navidrome.password
     },
-    naming: {
-      ...fallback.naming,
-      ...partial.naming
-    },
+    naming: normalizeNamingSettings(fallback.naming, partial.naming),
     scan: {
       extensions: normalizeExtensions(partial.scan?.extensions || fallback.scan.extensions)
     }
   };
+}
+
+function normalizeNamingSettings(
+  fallback: PrivateSettings["naming"],
+  partial: Partial<PrivateSettings["naming"]> | undefined
+) {
+  const merged = {
+    ...fallback,
+    ...partial
+  };
+
+  if (isLegacyDefaultNaming(partial)) {
+    return {
+      ...merged,
+      artistFolderFormat: fallback.artistFolderFormat,
+      standardTrackFormat: fallback.standardTrackFormat,
+      multiDiscTrackFormat: fallback.multiDiscTrackFormat
+    };
+  }
+
+  return merged;
+}
+
+function isLegacyDefaultNaming(partial: Partial<PrivateSettings["naming"]> | undefined) {
+  return (
+    partial?.artistFolderFormat === legacyDefaultNaming.artistFolderFormat &&
+    partial.standardTrackFormat === legacyDefaultNaming.standardTrackFormat &&
+    partial.multiDiscTrackFormat === legacyDefaultNaming.multiDiscTrackFormat
+  );
 }
 
 function normalizeExtensions(extensions: string[]) {
