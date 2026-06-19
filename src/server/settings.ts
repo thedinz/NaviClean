@@ -40,11 +40,6 @@ const defaultExtensions = [
   ".alac",
   ".wma"
 ];
-const legacyDefaultNaming = {
-  artistFolderFormat: "{Artist Name}",
-  standardTrackFormat: "{Album Title}/{track:00} {Track Title}",
-  multiDiscTrackFormat: "{Album Title}/{medium:00}-{track:00} {Track Title}"
-};
 const defaultNaming = {
   libraryPath: process.env.NAVICLEAN_MUSIC_DIR || "/music",
   recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash"),
@@ -135,10 +130,10 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
   }
 
   if (update.naming) {
-    next.naming = {
+    next.naming = normalizeNamingSettings(defaultNaming, {
       ...next.naming,
       ...compactStringValues(update.naming)
-    };
+    });
   }
 
   if (update.scan?.extensions) {
@@ -213,24 +208,13 @@ function normalizeNamingSettings(
     ...partial
   };
 
-  if (isLegacyDefaultNaming(partial)) {
-    return {
-      ...merged,
-      artistFolderFormat: fallback.artistFolderFormat,
-      standardTrackFormat: fallback.standardTrackFormat,
-      multiDiscTrackFormat: fallback.multiDiscTrackFormat
-    };
-  }
-
-  return merged;
-}
-
-function isLegacyDefaultNaming(partial: Partial<PrivateSettings["naming"]> | undefined) {
-  return (
-    partial?.artistFolderFormat === legacyDefaultNaming.artistFolderFormat &&
-    partial.standardTrackFormat === legacyDefaultNaming.standardTrackFormat &&
-    partial.multiDiscTrackFormat === legacyDefaultNaming.multiDiscTrackFormat
-  );
+  return {
+    ...merged,
+    artistFolderFormat: fallback.artistFolderFormat,
+    standardTrackFormat: fallback.standardTrackFormat,
+    multiDiscTrackFormat: fallback.multiDiscTrackFormat,
+    replaceIllegalCharacters: fallback.replaceIllegalCharacters
+  };
 }
 
 function normalizeExtensions(extensions: string[]) {
