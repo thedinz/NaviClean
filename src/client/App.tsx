@@ -575,7 +575,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
         <table>
           <thead>
             <tr>
-              <th>Status</th>
+              <th>Change</th>
               <th>Source</th>
               <th>Target</th>
             </tr>
@@ -584,10 +584,18 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
             {(plan?.items || []).slice(0, 150).map((item) => (
               <tr key={item.id}>
                 <td>
-                  <StatusPill active={item.status === "ready"} label={item.status} />
+                  <StatusPill active={item.status === "ready"} label={organizeChangeLabel(item)} />
                 </td>
-                <td>{item.sourceRelativePath}</td>
-                <td>{item.targetRelativePath || item.message}</td>
+                <td>
+                  <PathDiff value={item.sourceRelativePath} compareTo={item.targetRelativePath} />
+                </td>
+                <td>
+                  {item.targetRelativePath ? (
+                    <PathDiff value={item.targetRelativePath} compareTo={item.sourceRelativePath} />
+                  ) : (
+                    item.message
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -1039,6 +1047,20 @@ function TrackTable({ tracks }: { tracks: TrackFile[] }) {
   );
 }
 
+function PathDiff({ value, compareTo }: { value: string; compareTo: string }) {
+  return (
+    <span className="path-diff">
+      {diffText(value, compareTo).map((part, index) =>
+        part.changed ? (
+          <mark key={`${index}-${part.text}`}>{part.text}</mark>
+        ) : (
+          <span key={`${index}-${part.text}`}>{part.text}</span>
+        )
+      )}
+    </span>
+  );
+}
+
 function ActionProgress({ label }: { label: string }) {
   return (
     <div className="action-progress" role="status" aria-live="polite">
@@ -1087,8 +1109,79 @@ function StatusPill({ active, label }: { active: boolean; label: string }) {
   return <span className={active ? "status-pill active" : "status-pill"}>{label}</span>;
 }
 
+function organizeChangeLabel(item: OrganizePlan["items"][number]) {
+  if (item.status === "same") {
+    return "Already organized";
+  }
+
+  if (item.status === "conflict") {
+    return "Conflict";
+  }
+
+  if (item.status === "outside-library") {
+    return "Blocked";
+  }
+
+  if (item.status === "missing-source") {
+    return "Missing source";
+  }
+
+  if (item.sourceRelativePath === item.targetRelativePath) {
+    return "Ready";
+  }
+
+  const sourceDir = pathDirectory(item.sourceRelativePath);
+  const targetDir = pathDirectory(item.targetRelativePath);
+  const sourceName = pathFilename(item.sourceRelativePath);
+  const targetName = pathFilename(item.targetRelativePath);
+
+  if (sourceDir === targetDir && sourceName !== targetName) {
+    return "Rename file";
+  }
+
+  if (sourceDir !== targetDir && sourceName === targetName) {
+    return "Move folder";
+  }
+
+  return "Move + rename";
+}
+
 function StagePill({ active, complete, label }: { active: boolean; complete: boolean; label: string }) {
   return <span className={complete ? "stage-pill complete" : active ? "stage-pill active" : "stage-pill"}>{label}</span>;
+}
+
+function pathDirectory(value: string) {
+  const index = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
+  return index >= 0 ? value.slice(0, index) : "";
+}
+
+function pathFilename(value: string) {
+  const index = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
+  return index >= 0 ? value.slice(index + 1) : value;
+}
+
+function diffText(value: string, compareTo: string) {
+  if (!compareTo || value === compareTo) {
+    return [{ text: value, changed: false }];
+  }
+
+  let start = 0;
+  while (start < value.length && start < compareTo.length && value[start] === compareTo[start]) {
+    start += 1;
+  }
+
+  let valueEnd = value.length - 1;
+  let compareEnd = compareTo.length - 1;
+  while (valueEnd >= start && compareEnd >= start && value[valueEnd] === compareTo[compareEnd]) {
+    valueEnd -= 1;
+    compareEnd -= 1;
+  }
+
+  return [
+    { text: value.slice(0, start), changed: false },
+    { text: value.slice(start, valueEnd + 1), changed: true },
+    { text: value.slice(valueEnd + 1), changed: false }
+  ].filter((part) => part.text.length > 0);
 }
 
 function formatDate(value: string) {
