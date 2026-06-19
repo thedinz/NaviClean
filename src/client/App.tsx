@@ -89,14 +89,26 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
   const [scan, setScan] = useState<ScanStatus | null>(null);
   const [stats, setStats] = useState<LibraryStats | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [scanBusy, setScanBusy] = useState(false);
+
+  const loadScanStatus = async () => {
+    const nextScan = await api<ScanStatus>("/scan/status");
+    setScan(nextScan);
+    return nextScan;
+  };
+
+  const loadStats = async () => {
+    const nextStats = await api<LibraryStats>("/stats");
+    setStats(nextStats);
+    return nextStats;
+  };
 
   const refreshStats = async () => {
-    const [nextScan, nextStats] = await Promise.all([
-      api<ScanStatus>("/scan/status"),
-      api<LibraryStats>("/stats")
-    ]);
-    setScan(nextScan);
-    setStats(nextStats);
+    const nextScan = await loadScanStatus();
+
+    if (!nextScan.running) {
+      await loadStats();
+    }
   };
 
   useEffect(() => {
@@ -109,15 +121,34 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
     }
 
     const interval = window.setInterval(() => {
-      refreshStats().catch((caught) => setNotice((caught as Error).message));
+      loadScanStatus()
+        .then((nextScan) => {
+          if (!nextScan.running) {
+            return loadStats();
+          }
+          return null;
+        })
+        .catch((caught) => setNotice((caught as Error).message));
     }, 1500);
     return () => window.clearInterval(interval);
   }, [scan?.running]);
 
   const startScan = async () => {
     setNotice(null);
-    const next = await api<ScanStatus>("/scan/start", { method: "POST" });
-    setScan(next);
+    setScanBusy(true);
+
+    try {
+      const next = await api<ScanStatus>("/scan/start", { method: "POST" });
+      setScan(next);
+
+      if (!next.running) {
+        await loadStats();
+      }
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setScanBusy(false);
+    }
   };
 
   const signOut = async () => {
@@ -170,9 +201,9 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
           </div>
           <div className="topbar-actions">
             {notice && <span className="notice">{notice}</span>}
-            <button className="primary-button" type="button" onClick={startScan} disabled={scan?.running} title="Scan library">
-              {scan?.running ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
-              <span>{scan?.running ? "Scanning" : "Scan"}</span>
+            <button className="primary-button" type="button" onClick={startScan} disabled={scanBusy || scan?.running} title="Scan library">
+              {scanBusy || scan?.running ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+              <span>{scanBusy || scan?.running ? "Scanning" : "Scan"}</span>
             </button>
           </div>
         </header>
