@@ -683,18 +683,14 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
             Artist folder
             <input
               value={settings.naming.artistFolderFormat}
-              onChange={(event) =>
-                setSettings({ ...settings, naming: { ...settings.naming, artistFolderFormat: event.target.value } })
-              }
+              readOnly
             />
           </label>
           <label>
             Standard track
             <input
               value={settings.naming.standardTrackFormat}
-              onChange={(event) =>
-                setSettings({ ...settings, naming: { ...settings.naming, standardTrackFormat: event.target.value } })
-              }
+              readOnly
             />
           </label>
         </div>
@@ -702,9 +698,7 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
           Multi-disc track
           <input
             value={settings.naming.multiDiscTrackFormat}
-            onChange={(event) =>
-              setSettings({ ...settings, naming: { ...settings.naming, multiDiscTrackFormat: event.target.value } })
-            }
+            readOnly
           />
         </label>
         <label className="toggle-row">
@@ -712,12 +706,8 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
           <input
             type="checkbox"
             checked={settings.naming.replaceIllegalCharacters}
-            onChange={(event) =>
-              setSettings({
-                ...settings,
-                naming: { ...settings.naming, replaceIllegalCharacters: event.target.checked }
-              })
-            }
+            disabled
+            readOnly
           />
         </label>
       </fieldset>
