@@ -5,7 +5,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     headers.set("content-type", "application/json");
   }
 
-  const response = await fetch(`/api${path}`, {
+  const response = await fetch(apiUrl(path), {
     ...options,
     headers,
     credentials: "include"
@@ -23,5 +23,10 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   }
 
   return response.json() as Promise<T>;
+}
+
+function apiUrl(path: string) {
+  const base = document.baseURI.endsWith("/") ? document.baseURI : `${document.baseURI}/`;
+  return new URL(`api/${path.replace(/^\/+/, "")}`, base).toString();
 }
 

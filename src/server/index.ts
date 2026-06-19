@@ -14,6 +14,7 @@ import { fetchLidarrNamingConfig, testLidarrConnection } from "./lidarr.js";
 const app = express();
 const port = Number(process.env.PORT || 8080);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+app.set("trust proxy", trustProxySetting());
 
 const scanStatus: ScanStatus = {
   running: false,
@@ -38,7 +39,7 @@ app.post("/api/auth/login", asyncHandler(async (req, res) => {
     return;
   }
 
-  setSessionCookie(res, token);
+  setSessionCookie(req, res, token);
   res.json({
     authEnabled: true,
     authenticated: true,
@@ -48,7 +49,7 @@ app.post("/api/auth/login", asyncHandler(async (req, res) => {
 
 app.post("/api/auth/logout", asyncHandler(async (req, res) => {
   logout(req);
-  clearSessionCookie(res);
+  clearSessionCookie(req, res);
   res.json({ ok: true });
 }));
 
@@ -103,7 +104,7 @@ app.get("/api/scan/status", (_req, res) => {
 
 app.post("/api/scan/start", asyncHandler(async (_req, res) => {
   if (scanStatus.running) {
-    res.status(409).json(scanStatus);
+    res.status(202).json(scanStatus);
     return;
   }
 
@@ -154,6 +155,13 @@ app.get("/api/duplicates", asyncHandler(async (_req, res) => {
 
 app.get("/api/stats", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
+
+  if (scanStatus.running) {
+    const workflow = workflowStateDuringScan(catalog.updatedAt);
+    res.json(createStats(catalog.tracks, 0, 0, catalog.updatedAt, workflow));
+    return;
+  }
+
   const settings = await loadSettings();
   const workflow = await buildWorkflowState(catalog, settings);
   const groups = workflow.duplicateScanReady ? buildDuplicateGroups(catalog.tracks) : [];
@@ -230,6 +238,21 @@ app.use((error: Error, _req: express.Request, res: express.Response, _next: expr
 app.listen(port, () => {
   console.log(`NaviClean listening on ${port}`);
 });
+
+function trustProxySetting() {
+  const value = (process.env.NAVICLEAN_TRUST_PROXY || "1").trim().toLowerCase();
+
+  if (value === "false" || value === "0") {
+    return false;
+  }
+
+  if (value === "true") {
+    return true;
+  }
+
+  const hops = Number.parseInt(value, 10);
+  return Number.isFinite(hops) && hops > 0 ? hops : 1;
+}
 
 async function runScan() {
   try {
@@ -324,5 +347,21 @@ function workflowStateFromPlan(
     missingFiles,
     message: "Stage 3: duplicate cleanup is available for same-release track matches only.",
     warnings
+  };
+}
+
+function workflowStateDuringScan(lastScanFinishedAt: string | null): WorkflowState {
+  return {
+    stage: "scan",
+    duplicateScanReady: false,
+    scanned: Boolean(lastScanFinishedAt),
+    pendingMoves: 0,
+    organizationConflicts: 0,
+    missingFiles: 0,
+    message: "Stage 1: scan is running. Organization and duplicate cleanup unlock after the scan finishes.",
+    warnings: [
+      "Duplicate cleanup is intentionally conservative and only unlocks after organization is complete.",
+      "Different albums, compilations, live versions, acoustic versions, and best-of releases should remain separate."
+    ]
   };
 }

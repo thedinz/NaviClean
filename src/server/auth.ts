@@ -69,18 +69,22 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   res.status(401).json({ error: "Authentication required" });
 }
 
-export function setSessionCookie(res: Response, token: string) {
+export function setSessionCookie(req: Request, res: Response, token: string) {
   res.cookie(cookieName, token, {
     httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NAVICLEAN_SECURE_COOKIES === "true",
+    sameSite: sameSiteCookieMode(),
+    secure: secureCookieMode(req),
     maxAge: sessionTtlMs,
     path: "/"
   });
 }
 
-export function clearSessionCookie(res: Response) {
-  res.clearCookie(cookieName, { path: "/" });
+export function clearSessionCookie(req: Request, res: Response) {
+  res.clearCookie(cookieName, {
+    path: "/",
+    sameSite: sameSiteCookieMode(),
+    secure: secureCookieMode(req)
+  });
 }
 
 function readSession(req: Request) {
@@ -117,4 +121,35 @@ function readSessionCookie(req: Request) {
   );
 
   return cookies[cookieName] || null;
+}
+
+function sameSiteCookieMode() {
+  const value = (process.env.NAVICLEAN_COOKIE_SAMESITE || "lax").toLowerCase();
+
+  if (value === "none" || value === "strict" || value === "lax") {
+    return value;
+  }
+
+  return "lax";
+}
+
+function secureCookieMode(req: Request) {
+  const value = (process.env.NAVICLEAN_SECURE_COOKIES || "auto").toLowerCase();
+
+  if (value === "true") {
+    return true;
+  }
+
+  if (value === "false") {
+    return false;
+  }
+
+  return req.secure || forwardedProto(req) === "https" || sameSiteCookieMode() === "none";
+}
+
+function forwardedProto(req: Request) {
+  return String(req.headers["x-forwarded-proto"] || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
 }
