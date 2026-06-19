@@ -90,6 +90,7 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
   const [stats, setStats] = useState<LibraryStats | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [scanBusy, setScanBusy] = useState(false);
+  const [signOutBusy, setSignOutBusy] = useState(false);
 
   const loadScanStatus = async () => {
     const nextScan = await api<ScanStatus>("/scan/status");
@@ -152,8 +153,17 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
   };
 
   const signOut = async () => {
-    await api<{ ok: boolean }>("/auth/logout", { method: "POST" });
-    onAuthChange({ authEnabled: true, authenticated: false, username: null });
+    setSignOutBusy(true);
+    setNotice(null);
+
+    try {
+      await api<{ ok: boolean }>("/auth/logout", { method: "POST" });
+      onAuthChange({ authEnabled: true, authenticated: false, username: null });
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setSignOutBusy(false);
+    }
   };
 
   const active = navItems.find((item) => item.id === page) || navItems[0];
@@ -187,9 +197,9 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
           })}
         </nav>
 
-        <button className="ghost-button" type="button" onClick={signOut} title="Sign out">
-          <LogOut size={18} />
-          <span>Sign out</span>
+        <button className="ghost-button" type="button" onClick={signOut} disabled={signOutBusy} title="Sign out">
+          {signOutBusy ? <Loader2 className="spin" size={18} /> : <LogOut size={18} />}
+          <span>{signOutBusy ? "Signing out" : "Sign out"}</span>
         </button>
       </aside>
 
@@ -305,6 +315,7 @@ function Dashboard({ stats, scan }: { stats: LibraryStats | null; scan: ScanStat
           <span>{scan?.scannedFiles.toLocaleString() || 0} scanned files</span>
           <span>{stats?.lastScanFinishedAt ? formatDate(stats.lastScanFinishedAt) : "No completed scan"}</span>
         </div>
+        {scan?.running && <ActionProgress label="Scanning library" />}
         {scan?.errors.length ? (
           <div className="error-list">
             {scan.errors.slice(0, 5).map((item) => (
@@ -335,8 +346,10 @@ function LibraryPage() {
   const [tracks, setTracks] = useState<TrackFile[]>([]);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setLoading(true);
     const handle = window.setTimeout(() => {
       api<{ tracks: TrackFile[]; total: number }>(`/tracks?limit=150&search=${encodeURIComponent(search)}`)
         .then((body) => {
@@ -344,7 +357,8 @@ function LibraryPage() {
           setTotal(body.total);
           setError(null);
         })
-        .catch((caught) => setError((caught as Error).message));
+        .catch((caught) => setError((caught as Error).message))
+        .finally(() => setLoading(false));
     }, 180);
 
     return () => window.clearTimeout(handle);
@@ -357,10 +371,11 @@ function LibraryPage() {
           <Search size={17} />
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search" />
         </div>
-        <span className="muted">{total.toLocaleString()} tracks</span>
+        <span className="muted">{loading ? "Loading tracks" : `${total.toLocaleString()} tracks`}</span>
       </div>
+      {loading && <ActionProgress label="Loading tracks" />}
       {error && <p className="form-error">{error}</p>}
-      <TrackTable tracks={tracks} />
+      {!loading && <TrackTable tracks={tracks} />}
     </section>
   );
 }
@@ -369,17 +384,25 @@ function DuplicatesPage({ stats, onChanged }: { stats: LibraryStats | null; onCh
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
   const [keepIds, setKeepIds] = useState<Record<string, string>>({});
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   const load = async () => {
-    const body = await api<{ groups: DuplicateGroup[] }>("/duplicates");
-    setGroups(body.groups);
-    setKeepIds(Object.fromEntries(body.groups.map((group) => [group.key, group.suggestedKeepId])));
+    setLoading(true);
+
+    try {
+      const body = await api<{ groups: DuplicateGroup[] }>("/duplicates");
+      setGroups(body.groups);
+      setKeepIds(Object.fromEntries(body.groups.map((group) => [group.key, group.suggestedKeepId])));
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
     if (!stats?.workflow.duplicateScanReady) {
       setGroups([]);
+      setLoading(false);
       return;
     }
 
@@ -436,7 +459,9 @@ function DuplicatesPage({ stats, onChanged }: { stats: LibraryStats | null; onCh
         <span>Only same organized album, disc/track, title/version, and duration matches are shown.</span>
       </div>
       {notice && <div className="notice-bar">{notice}</div>}
-      {groups.length === 0 && <EmptyState icon={Check} title="No duplicate groups" />}
+      {busyKey && <ActionProgress label="Moving duplicates to recycle bin" />}
+      {loading && <ActionProgress label="Loading duplicate groups" />}
+      {!loading && groups.length === 0 && <EmptyState icon={Check} title="No duplicate groups" />}
       {groups.map((group) => (
         <article className="panel duplicate-group" key={group.key}>
           <div className="panel-title split">
@@ -476,14 +501,26 @@ function DuplicatesPage({ stats, onChanged }: { stats: LibraryStats | null; onCh
 function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
   const [plan, setPlan] = useState<OrganizePlan | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [applyBusy, setApplyBusy] = useState(false);
 
-  const load = async () => {
-    setPlan(await api<OrganizePlan>("/organize/preview", { method: "POST" }));
+  const load = async ({ clearNotice = true }: { clearNotice?: boolean } = {}) => {
+    setPreviewBusy(true);
+    if (clearNotice) {
+      setNotice(null);
+    }
+
+    try {
+      setPlan(await api<OrganizePlan>("/organize/preview", { method: "POST" }));
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setPreviewBusy(false);
+    }
   };
 
   useEffect(() => {
-    load().catch((caught) => setNotice((caught as Error).message));
+    void load();
   }, []);
 
   const apply = async () => {
@@ -491,17 +528,17 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
       return;
     }
 
-    setBusy(true);
+    setApplyBusy(true);
     setNotice(null);
     try {
       const result = await api<{ moved: number; skipped: number; errors: string[] }>("/organize/apply", { method: "POST" });
       setNotice(`${result.moved} moved, ${result.skipped} skipped`);
-      await load();
+      await load({ clearNotice: false });
       await onChanged();
     } catch (caught) {
       setNotice((caught as Error).message);
     } finally {
-      setBusy(false);
+      setApplyBusy(false);
     }
   };
 
@@ -519,18 +556,22 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
           <span>{plan?.summary.missing || 0} missing</span>
         </div>
         <div className="button-row">
-          <button className="secondary-button" type="button" onClick={load}>
-            <RefreshCw size={18} />
-            <span>Preview</span>
+          <button className="secondary-button" type="button" onClick={() => load()} disabled={previewBusy || applyBusy}>
+            {previewBusy ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+            <span>{previewBusy ? "Previewing" : "Preview"}</span>
           </button>
-          <button className="primary-button" type="button" onClick={apply} disabled={busy || !plan?.summary.ready}>
-            {busy ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
-            <span>Apply</span>
+          <button className="primary-button" type="button" onClick={apply} disabled={previewBusy || applyBusy || !plan?.summary.ready}>
+            {applyBusy ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
+            <span>{applyBusy ? "Applying" : "Apply"}</span>
           </button>
         </div>
       </div>
+      {(previewBusy || applyBusy) && (
+        <ActionProgress label={applyBusy ? "Applying organization plan" : "Building organization preview"} />
+      )}
       {notice && <div className="notice-bar">{notice}</div>}
-      <div className="table-wrap">
+      {!previewBusy && !plan && <EmptyState icon={FolderInput} title="No preview loaded" />}
+      {plan && <div className="table-wrap">
         <table>
           <thead>
             <tr>
@@ -551,7 +592,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </div>}
     </section>
   );
 }
@@ -563,6 +604,7 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
   const [lidarrApiKey, setLidarrApiKey] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [navidromeBusy, setNavidromeBusy] = useState(false);
   const [lidarrBusy, setLidarrBusy] = useState(false);
 
   useEffect(() => {
@@ -644,16 +686,25 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
     if (!settings) {
       return;
     }
+
+    setNavidromeBusy(true);
     setNotice(null);
-    const result = await api<{ ok: boolean; message: string }>("/navidrome/test", {
-      method: "POST",
-      body: JSON.stringify({
-        baseUrl: settings.navidrome.baseUrl,
-        username: settings.navidrome.username,
-        password: navidromePassword
-      })
-    });
-    setNotice(result.message);
+
+    try {
+      const result = await api<{ ok: boolean; message: string }>("/navidrome/test", {
+        method: "POST",
+        body: JSON.stringify({
+          baseUrl: settings.navidrome.baseUrl,
+          username: settings.navidrome.username,
+          password: navidromePassword
+        })
+      });
+      setNotice(result.message);
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setNavidromeBusy(false);
+    }
   };
 
   const updateNaming = (update: Partial<SettingsView["naming"]>) => {
@@ -727,6 +778,9 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
   return (
     <form className="settings-grid" onSubmit={save}>
       {notice && <div className="notice-bar settings-notice">{notice}</div>}
+      {busy && <ActionProgress label="Saving settings" />}
+      {navidromeBusy && <ActionProgress label="Testing Navidrome connection" />}
+      {lidarrBusy && <ActionProgress label="Contacting Lidarr" />}
 
       <fieldset className="panel">
         <legend>
@@ -791,9 +845,9 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
             placeholder={settings.navidrome.passwordSet ? "Saved" : ""}
           />
         </label>
-        <button className="secondary-button" type="button" onClick={testConnection}>
-          <Activity size={18} />
-          <span>Test</span>
+        <button className="secondary-button" type="button" onClick={testConnection} disabled={navidromeBusy}>
+          {navidromeBusy ? <Loader2 className="spin" size={18} /> : <Activity size={18} />}
+          <span>{navidromeBusy ? "Testing" : "Test"}</span>
         </button>
       </fieldset>
 
@@ -985,6 +1039,20 @@ function TrackTable({ tracks }: { tracks: TrackFile[] }) {
   );
 }
 
+function ActionProgress({ label }: { label: string }) {
+  return (
+    <div className="action-progress" role="status" aria-live="polite">
+      <div className="action-progress-label">
+        <Loader2 className="spin" size={16} />
+        <span>{label}</span>
+      </div>
+      <div className="progress-track" role="progressbar" aria-label={label}>
+        <span />
+      </div>
+    </div>
+  );
+}
+
 function EmptyState({ icon: Icon, title }: { icon: typeof Database; title: string }) {
   return (
     <div className="empty-state">
@@ -995,9 +1063,11 @@ function EmptyState({ icon: Icon, title }: { icon: typeof Database; title: strin
 }
 
 function MessageScreen({ title, message }: { title: string; message: string }) {
+  const loading = message.toLowerCase().includes("loading");
+
   return (
     <main className="message-screen">
-      <CircleAlert size={24} />
+      {loading ? <Loader2 className="spin" size={24} /> : <CircleAlert size={24} />}
       <h1>{title}</h1>
       <p>{message}</p>
     </main>
