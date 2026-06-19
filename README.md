@@ -1,7 +1,7 @@
 # NaviClean
 
 NaviClean is a Docker-first cleaner and organizer for Navidrome music libraries.
-It scans a mounted music library, previews Lidarr-compatible artist/album/track paths, detects likely duplicate tracks across file names and extensions, and gives you a web UI for applying changes.
+It scans a mounted music library, previews SpotifyBU-compatible Lidarr artist/album/track paths, and only unlocks duplicate cleanup after organization is complete.
 
 ## Current defaults
 
@@ -36,13 +36,14 @@ For Unraid, set `PUID=99` and `PGID=100` so NaviClean can write to `/mnt/user/ap
 
 ## Naming model
 
-The default naming templates follow Lidarr's documented shape:
+The default naming templates match SpotifyBU's Lidarr-compatible Navidrome layout:
 
-- Artist folder: `{Artist Name}`
-- Standard track: `{Album Title}/{track:00} {Track Title}`
-- Multi-disc track: `{Album Title}/{medium:00}-{track:00} {Track Title}`
+- Artist folder: `{Album Artist Name}`
+- Standard track: `{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}`
+- Multi-disc track: `{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}`
 
 NaviClean appends the original extension and replaces illegal filesystem characters before planning moves.
+Missing release years are written as `Unknown Year`, and missing disc numbers default to disc `01` for the filename prefix.
 
 ## Local development
 
@@ -55,7 +56,7 @@ The Vite UI runs on `5173` and proxies API requests to the server on `8080`.
 
 ## Safety
 
-Organization starts as a preview. Duplicate resolution moves removed files into the configured recycle bin path by default, preserving their relative path under a timestamped folder.
+Cleanup is staged: scan first, organize second, then review duplicates. Duplicate cleanup stays locked while organization has pending moves, conflicts, or missing files. Duplicate groups require the same organized album identity, disc/track number, title/version text, and duration or ISRC. Removed files are moved into the configured recycle bin path, preserving their relative path under a timestamped folder.
 
 ## References
 

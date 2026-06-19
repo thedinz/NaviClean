@@ -1,7 +1,7 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ScanStatus, SettingsUpdate } from "../shared/types.js";
+import type { OrganizePlan, ScanStatus, SettingsUpdate, WorkflowState } from "../shared/types.js";
 import { clearSessionCookie, getAuthInfo, login, logout, requireAuth, setSessionCookie } from "./auth.js";
 import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
 import { buildDuplicateGroups, resolveDuplicates } from "./duplicates.js";
@@ -111,14 +111,24 @@ app.get("/api/tracks", asyncHandler(async (req, res) => {
 
 app.get("/api/duplicates", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
+  const settings = await loadSettings();
+  const workflow = await buildWorkflowState(catalog, settings);
+
+  if (!workflow.duplicateScanReady) {
+    res.status(409).json({ error: workflow.message, workflow });
+    return;
+  }
+
   res.json({ groups: buildDuplicateGroups(catalog.tracks) });
 }));
 
 app.get("/api/stats", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
-  const groups = buildDuplicateGroups(catalog.tracks);
+  const settings = await loadSettings();
+  const workflow = await buildWorkflowState(catalog, settings);
+  const groups = workflow.duplicateScanReady ? buildDuplicateGroups(catalog.tracks) : [];
   const duplicateTracks = groups.reduce((total, group) => total + group.tracks.length, 0);
-  res.json(createStats(catalog.tracks, groups.length, duplicateTracks, catalog.updatedAt));
+  res.json(createStats(catalog.tracks, groups.length, duplicateTracks, catalog.updatedAt, workflow));
 }));
 
 app.post("/api/organize/preview", asyncHandler(async (_req, res) => {
@@ -143,7 +153,9 @@ app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
       return {
         ...track,
         absolutePath: moved.targetPath,
-        relativePath: moved.targetRelativePath
+        relativePath: moved.targetRelativePath,
+        targetPath: moved.targetPath,
+        targetRelativePath: moved.targetRelativePath
       };
     });
     await saveCatalog(tracks);
@@ -163,6 +175,13 @@ app.post("/api/duplicates/resolve", asyncHandler(async (req, res) => {
 
   const catalog = await loadCatalog();
   const settings = await loadSettings();
+  const workflow = await buildWorkflowState(catalog, settings);
+
+  if (!workflow.duplicateScanReady) {
+    res.status(409).json({ error: workflow.message, workflow });
+    return;
+  }
+
   res.json(await resolveDuplicates(settings, catalog.tracks, keepId, removeIds));
 }));
 
@@ -202,5 +221,78 @@ function asyncHandler(
 ) {
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
     handler(req, res, next).catch(next);
+  };
+}
+
+async function buildWorkflowState(
+  catalog: Awaited<ReturnType<typeof loadCatalog>>,
+  settings: Awaited<ReturnType<typeof loadSettings>>
+): Promise<WorkflowState> {
+  const plan = await buildOrganizePlan(catalog.tracks, settings);
+  return workflowStateFromPlan(catalog.updatedAt, catalog.tracks.length, plan);
+}
+
+function workflowStateFromPlan(
+  lastScanFinishedAt: string | null,
+  totalTracks: number,
+  plan: OrganizePlan
+): WorkflowState {
+  const pendingMoves = plan.summary.ready;
+  const organizationConflicts = plan.summary.conflicts;
+  const missingFiles = plan.summary.missing;
+  const scanned = Boolean(lastScanFinishedAt);
+  const warnings = [
+    "Duplicate cleanup is intentionally conservative and only unlocks after organization is complete.",
+    "Different albums, compilations, live versions, acoustic versions, and best-of releases should remain separate."
+  ];
+
+  if (!scanned) {
+    return {
+      stage: "scan",
+      duplicateScanReady: false,
+      scanned,
+      pendingMoves,
+      organizationConflicts,
+      missingFiles,
+      message: "Stage 1: scan the mounted Navidrome library before organizing or finding duplicates.",
+      warnings
+    };
+  }
+
+  if (totalTracks === 0) {
+    return {
+      stage: "scan",
+      duplicateScanReady: false,
+      scanned,
+      pendingMoves,
+      organizationConflicts,
+      missingFiles,
+      message: "No audio files are in the current catalog. Check the library path and scan again.",
+      warnings
+    };
+  }
+
+  if (pendingMoves > 0 || organizationConflicts > 0 || missingFiles > 0) {
+    return {
+      stage: "organize",
+      duplicateScanReady: false,
+      scanned,
+      pendingMoves,
+      organizationConflicts,
+      missingFiles,
+      message: `Stage 2: finish organizing first (${pendingMoves} moves, ${organizationConflicts} conflicts, ${missingFiles} missing files).`,
+      warnings
+    };
+  }
+
+  return {
+    stage: "duplicates",
+    duplicateScanReady: true,
+    scanned,
+    pendingMoves,
+    organizationConflicts,
+    missingFiles,
+    message: "Stage 3: duplicate cleanup is available for same-release track matches only.",
+    warnings
   };
 }

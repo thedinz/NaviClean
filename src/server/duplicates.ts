@@ -3,18 +3,21 @@ import path from "node:path";
 import type { DuplicateGroup, DuplicateResolveResult, TrackFile } from "../shared/types.js";
 import type { PrivateSettings } from "./settings.js";
 import { removeTracksFromCatalog } from "./catalog.js";
+import { duplicateKeyForTrack } from "./matching.js";
 import { toPosixRelative } from "./utils.js";
 
 export function buildDuplicateGroups(tracks: TrackFile[]): DuplicateGroup[] {
   const groups = new Map<string, TrackFile[]>();
 
   for (const track of tracks) {
-    if (!track.duplicateKey || track.duplicateKey.includes("unknown track")) {
+    const duplicateKey = duplicateKeyForTrack(track);
+
+    if (!duplicateKey) {
       continue;
     }
-    const group = groups.get(track.duplicateKey) || [];
+    const group = groups.get(duplicateKey) || [];
     group.push(track);
-    groups.set(track.duplicateKey, group);
+    groups.set(duplicateKey, group);
   }
 
   return Array.from(groups.entries())
@@ -42,6 +45,18 @@ export async function resolveDuplicates(
   keepId: string,
   removeIds: string[]
 ): Promise<DuplicateResolveResult> {
+  const duplicateGroup = buildDuplicateGroups(tracks).find((group) => group.tracks.some((track) => track.id === keepId));
+
+  if (!duplicateGroup) {
+    throw new Error("Duplicate selection is no longer valid. Scan and review the group again.");
+  }
+
+  const groupTrackIds = new Set(duplicateGroup.tracks.map((track) => track.id));
+
+  if (removeIds.some((id) => !groupTrackIds.has(id))) {
+    throw new Error("Duplicate cleanup can only recycle files from the reviewed group.");
+  }
+
   const removeSet = new Set(removeIds.filter((id) => id !== keepId));
   const result: DuplicateResolveResult = {
     keptId: keepId,
@@ -77,6 +92,6 @@ function duplicateReason(tracks: TrackFile[]) {
   const extensions = Array.from(new Set(tracks.map((track) => track.extension.toUpperCase().replace(".", ""))));
   const best = tracks[0];
   const pathPreview = toPosixRelative(path.dirname(best.absolutePath), best.absolutePath);
-  return `${extensions.join(" / ")} match; suggested keep is ${best.extension.toUpperCase().replace(".", "")} (${pathPreview})`;
+  return `${extensions.join(" / ")} same organized album, disc/track, title/version, and duration; suggested keep is ${best.extension.toUpperCase().replace(".", "")} (${pathPreview})`;
 }
 
