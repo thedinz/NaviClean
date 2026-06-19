@@ -8,6 +8,7 @@ type TokenValues = {
   artistName: string;
   albumArtistName: string;
   albumTitle: string;
+  albumType: string;
   trackTitle: string;
   trackNumber: number | null;
   mediumNumber: number | null;
@@ -127,6 +128,7 @@ function toTokens(track: TrackFile): TokenValues {
     artistName: track.albumArtist || track.artist || "Unknown Artist",
     albumArtistName: track.albumArtist || track.artist || "Unknown Artist",
     albumTitle: track.album || "Unknown Album",
+    albumType: track.albumType || "Album",
     trackTitle: track.title || "Unknown Track",
     trackNumber: track.trackNumber,
     mediumNumber: track.discNumber,
@@ -139,12 +141,13 @@ function applyTokens(template: string, tokens: TokenValues) {
     .replaceAll("{Artist Name}", tokens.artistName)
     .replaceAll("{Album Artist Name}", tokens.albumArtistName)
     .replaceAll("{Album Title}", tokens.albumTitle)
+    .replaceAll("{Album Type}", tokens.albumType)
     .replaceAll("{Track Title}", tokens.trackTitle)
-    .replaceAll("{Release Year}", tokens.releaseYear ? String(tokens.releaseYear) : "")
+    .replaceAll("{Release Year}", tokens.releaseYear ? String(tokens.releaseYear) : "Unknown Year")
     .replaceAll("{track:00}", padNumber(tokens.trackNumber))
     .replaceAll("{track}", tokens.trackNumber ? String(tokens.trackNumber) : "")
-    .replaceAll("{medium:00}", padNumber(tokens.mediumNumber))
-    .replaceAll("{medium}", tokens.mediumNumber ? String(tokens.mediumNumber) : "");
+    .replaceAll("{medium:00}", padNumber(tokens.mediumNumber ?? 1))
+    .replaceAll("{medium}", String(tokens.mediumNumber ?? 1));
 }
 
 function padNumber(value: number | null) {

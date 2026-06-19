@@ -275,7 +275,8 @@ legend {
 }
 
 .status-row,
-.summary-chips {
+.summary-chips,
+.stage-row {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -284,7 +285,8 @@ legend {
 }
 
 .status-pill,
-.quality-pill {
+.quality-pill,
+.stage-pill {
   display: inline-flex;
   align-items: center;
   min-height: 26px;
@@ -299,6 +301,21 @@ legend {
 .status-pill.active {
   background: #dff4ef;
   color: #126f66;
+}
+
+.stage-pill.active {
+  background: #fff0d5;
+  color: #85570f;
+}
+
+.stage-pill.complete {
+  background: #dff4ef;
+  color: #126f66;
+}
+
+.stage-message {
+  margin: 12px 0 0;
+  color: #53615d;
 }
 
 .summary-chips span {
@@ -451,6 +468,16 @@ td span {
 
 .notice-bar {
   margin: 0 0 12px;
+}
+
+.notice-bar.safety {
+  background: #fff8e8;
+  color: #66440f;
+}
+
+.notice-bar strong,
+.notice-bar span {
+  display: block;
 }
 
 .settings-grid {

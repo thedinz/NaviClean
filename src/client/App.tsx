@@ -6,7 +6,9 @@ import {
   Database,
   FolderInput,
   Gauge,
+  ListChecks,
   Loader2,
+  LockKeyhole,
   LogOut,
   Play,
   RefreshCw,
@@ -35,8 +37,8 @@ type Page = "dashboard" | "library" | "duplicates" | "organize" | "settings";
 const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
   { id: "library", label: "Library", icon: Database },
-  { id: "duplicates", label: "Duplicates", icon: CopyX },
   { id: "organize", label: "Organize", icon: FolderInput },
+  { id: "duplicates", label: "Duplicates", icon: CopyX },
   { id: "settings", label: "Settings", icon: Settings }
 ];
 
@@ -160,7 +162,7 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
 
         {page === "dashboard" && <Dashboard stats={stats} scan={scan} />}
         {page === "library" && <LibraryPage />}
-        {page === "duplicates" && <DuplicatesPage onChanged={refreshStats} />}
+        {page === "duplicates" && <DuplicatesPage stats={stats} onChanged={refreshStats} />}
         {page === "organize" && <OrganizePage onChanged={refreshStats} />}
         {page === "settings" && <SettingsPage onAuthChange={onAuthChange} />}
         <VersionFooter />
@@ -263,6 +265,19 @@ function Dashboard({ stats, scan }: { stats: LibraryStats | null; scan: ScanStat
           </div>
         ) : null}
       </article>
+
+      <article className="panel wide">
+        <div className="panel-title">
+          <ListChecks size={18} />
+          <h2>Cleanup Stages</h2>
+        </div>
+        <div className="stage-row">
+          <StagePill label="1 Scan" active={stats?.workflow.stage === "scan"} complete={Boolean(stats?.workflow.scanned)} />
+          <StagePill label="2 Organize" active={stats?.workflow.stage === "organize"} complete={Boolean(stats?.workflow.duplicateScanReady)} />
+          <StagePill label="3 Duplicates" active={stats?.workflow.stage === "duplicates"} complete={Boolean(stats?.workflow.duplicateScanReady)} />
+        </div>
+        <p className="stage-message">{stats?.workflow.message || "Scan the library to start cleanup."}</p>
+      </article>
     </section>
   );
 }
@@ -302,7 +317,7 @@ function LibraryPage() {
   );
 }
 
-function DuplicatesPage({ onChanged }: { onChanged: () => Promise<void> }) {
+function DuplicatesPage({ stats, onChanged }: { stats: LibraryStats | null; onChanged: () => Promise<void> }) {
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
   const [keepIds, setKeepIds] = useState<Record<string, string>>({});
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -315,12 +330,22 @@ function DuplicatesPage({ onChanged }: { onChanged: () => Promise<void> }) {
   };
 
   useEffect(() => {
+    if (!stats?.workflow.duplicateScanReady) {
+      setGroups([]);
+      return;
+    }
+
     load().catch((caught) => setNotice((caught as Error).message));
-  }, []);
+  }, [stats?.workflow.duplicateScanReady]);
 
   const resolve = async (group: DuplicateGroup) => {
     const keepId = keepIds[group.key] || group.suggestedKeepId;
     const removeIds = group.tracks.filter((track) => track.id !== keepId).map((track) => track.id);
+
+    if (!window.confirm(`Move ${removeIds.length} duplicate file(s) to the recycle bin? Review every path before continuing.`)) {
+      return;
+    }
+
     setBusyKey(group.key);
     setNotice(null);
 
@@ -339,8 +364,29 @@ function DuplicatesPage({ onChanged }: { onChanged: () => Promise<void> }) {
     }
   };
 
+  if (!stats?.workflow.duplicateScanReady) {
+    return (
+      <section className="stack">
+        <div className="notice-bar safety">
+          <strong>Duplicates locked</strong>
+          <span>{stats?.workflow.message || "Scan and organize the library before duplicate cleanup."}</span>
+          {stats?.workflow && (
+            <span>
+              {stats.workflow.pendingMoves} moves, {stats.workflow.organizationConflicts} conflicts, {stats.workflow.missingFiles} missing files
+            </span>
+          )}
+        </div>
+        <EmptyState icon={LockKeyhole} title="Finish organization first" />
+      </section>
+    );
+  }
+
   return (
     <section className="stack">
+      <div className="notice-bar safety">
+        <strong>Review before recycling</strong>
+        <span>Only same organized album, disc/track, title/version, and duration matches are shown.</span>
+      </div>
       {notice && <div className="notice-bar">{notice}</div>}
       {groups.length === 0 && <EmptyState icon={Check} title="No duplicate groups" />}
       {groups.map((group) => (
@@ -365,7 +411,8 @@ function DuplicatesPage({ onChanged }: { onChanged: () => Promise<void> }) {
                   onChange={() => setKeepIds((current) => ({ ...current, [group.key]: track.id }))}
                 />
                 <div>
-                  <strong>{track.extension.toUpperCase().replace(".", "")}</strong>
+                  <strong>{track.extension.toUpperCase().replace(".", "")} · {track.title}</strong>
+                  <span>{track.albumType} · {track.year || "Unknown Year"} · {track.album}</span>
                   <span>{track.relativePath}</span>
                 </div>
                 <em>{formatBytes(track.size)}</em>
@@ -412,6 +459,10 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
 
   return (
     <section className="panel">
+      <div className="notice-bar safety">
+        <strong>Stage 2: organize first</strong>
+        <span>Files move into the SpotifyBU/Lidarr album layout before duplicate cleanup unlocks.</span>
+      </div>
       <div className="toolbar">
         <div className="summary-chips">
           <span>{plan?.summary.ready || 0} ready</span>
@@ -751,6 +802,10 @@ function VersionFooter() {
 
 function StatusPill({ active, label }: { active: boolean; label: string }) {
   return <span className={active ? "status-pill active" : "status-pill"}>{label}</span>;
+}
+
+function StagePill({ active, complete, label }: { active: boolean; complete: boolean; label: string }) {
+  return <span className={complete ? "stage-pill complete" : active ? "stage-pill active" : "stage-pill"}>{label}</span>;
 }
 
 function formatDate(value: string) {
