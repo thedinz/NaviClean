@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { SettingsUpdate, SettingsView } from "../shared/types.js";
+import type { NamingMode, SettingsUpdate, SettingsView } from "../shared/types.js";
 
 export type PrivateSettings = {
   auth: {
@@ -15,12 +15,18 @@ export type PrivateSettings = {
     password: string;
   };
   naming: {
+    mode: NamingMode;
     libraryPath: string;
     recycleBinPath: string;
     artistFolderFormat: string;
     standardTrackFormat: string;
     multiDiscTrackFormat: string;
     replaceIllegalCharacters: boolean;
+    colonReplacementFormat: number;
+    lidarr: {
+      baseUrl: string;
+      apiKey: string;
+    };
   };
   scan: {
     extensions: string[];
@@ -41,12 +47,18 @@ const defaultExtensions = [
   ".wma"
 ];
 const defaultNaming = {
+  mode: "spotifybu" as const,
   libraryPath: process.env.NAVICLEAN_MUSIC_DIR || "/music",
   recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash"),
   artistFolderFormat: "{Album Artist Name}",
   standardTrackFormat: "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
   multiDiscTrackFormat: "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
-  replaceIllegalCharacters: true
+  replaceIllegalCharacters: true,
+  colonReplacementFormat: 4,
+  lidarr: {
+    baseUrl: "",
+    apiKey: ""
+  }
 };
 
 const dataDir = process.env.NAVICLEAN_DATA_DIR || path.resolve(process.cwd(), ".data");
@@ -91,7 +103,20 @@ export function toSettingsView(settings: PrivateSettings): SettingsView {
       username: settings.navidrome.username,
       passwordSet: settings.navidrome.password.length > 0
     },
-    naming: settings.naming,
+    naming: {
+      mode: settings.naming.mode,
+      libraryPath: settings.naming.libraryPath,
+      recycleBinPath: settings.naming.recycleBinPath,
+      artistFolderFormat: settings.naming.artistFolderFormat,
+      standardTrackFormat: settings.naming.standardTrackFormat,
+      multiDiscTrackFormat: settings.naming.multiDiscTrackFormat,
+      replaceIllegalCharacters: settings.naming.replaceIllegalCharacters,
+      colonReplacementFormat: settings.naming.colonReplacementFormat,
+      lidarr: {
+        baseUrl: settings.naming.lidarr.baseUrl,
+        apiKeySet: settings.naming.lidarr.apiKey.length > 0
+      }
+    },
     scan: settings.scan
   };
 }
@@ -130,10 +155,7 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
   }
 
   if (update.naming) {
-    next.naming = normalizeNamingSettings(defaultNaming, {
-      ...next.naming,
-      ...compactStringValues(update.naming)
-    });
+    next.naming = normalizeNamingSettings(next.naming, update.naming);
   }
 
   if (update.scan?.extensions) {
@@ -201,20 +223,50 @@ function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
 
 function normalizeNamingSettings(
   fallback: PrivateSettings["naming"],
-  partial: Partial<PrivateSettings["naming"]> | undefined
+  partial:
+    | Partial<Omit<PrivateSettings["naming"], "lidarr">> & {
+        lidarr?: Partial<PrivateSettings["naming"]["lidarr"]>;
+      }
+    | undefined
 ) {
-  const merged = {
+  const compacted = compactStringValues(partial ?? {});
+  const mode = normalizeNamingMode(compacted.mode, fallback.mode);
+  const colonReplacementFormat = normalizeColonReplacementFormat(
+    compacted.colonReplacementFormat,
+    fallback.colonReplacementFormat
+  );
+  const merged: PrivateSettings["naming"] = {
     ...fallback,
-    ...partial
+    ...compacted,
+    mode,
+    colonReplacementFormat,
+    lidarr: {
+      ...fallback.lidarr,
+      ...compactStringValues(partial?.lidarr ?? {})
+    }
   };
 
-  return {
-    ...merged,
-    artistFolderFormat: fallback.artistFolderFormat,
-    standardTrackFormat: fallback.standardTrackFormat,
-    multiDiscTrackFormat: fallback.multiDiscTrackFormat,
-    replaceIllegalCharacters: fallback.replaceIllegalCharacters
-  };
+  if (mode === "spotifybu") {
+    return {
+      ...merged,
+      artistFolderFormat: defaultNaming.artistFolderFormat,
+      standardTrackFormat: defaultNaming.standardTrackFormat,
+      multiDiscTrackFormat: defaultNaming.multiDiscTrackFormat,
+      replaceIllegalCharacters: defaultNaming.replaceIllegalCharacters,
+      colonReplacementFormat: defaultNaming.colonReplacementFormat
+    };
+  }
+
+  return merged;
+}
+
+function normalizeNamingMode(value: unknown, fallback: NamingMode): NamingMode {
+  return value === "manual" || value === "lidarr" || value === "spotifybu" ? value : fallback;
+}
+
+function normalizeColonReplacementFormat(value: unknown, fallback: number) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 4 ? parsed : fallback;
 }
 
 function normalizeExtensions(extensions: string[]) {

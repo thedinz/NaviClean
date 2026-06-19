@@ -5,13 +5,20 @@ import type { PrivateSettings } from "./settings.js";
 import { isInsidePath, toPosixRelative } from "./utils.js";
 
 const unknownLidarrReleaseYear = "Unknown Year";
+const controlCharacters = /[\u0000-\u001f]/g;
+const combiningMarks = /[\u0300-\u036f]/g;
+const reservedWindowsNames = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+const lidarrBadCharacters = ["\\", "/", "<", ">", "?", "*", "|", "\""];
+const lidarrReplacementCharacters = ["+", "+", "", "", "!", "-", "", ""];
 
 export function targetForTrack(track: TrackFile, settings: PrivateSettings) {
   const root = path.resolve(settings.naming.libraryPath);
   const extension = track.extension.startsWith(".") ? track.extension : `.${track.extension}`;
-  const artistFolderName = buildLidarrArtistFolderName(track);
-  const albumFolderName = buildLidarrAlbumFolderName(track, artistFolderName);
-  const target = path.resolve(root, artistFolderName, albumFolderName, `${buildNavidromeTrackFileBase(track)}${extension}`);
+  const targetRelativePath =
+    settings.naming.mode === "spotifybu"
+      ? spotifyBuRelativePath(track, extension)
+      : templateRelativePath(track, settings, extension);
+  const target = path.resolve(root, ...targetRelativePath.split("/").filter(Boolean));
 
   if (!isInsidePath(root, target)) {
     return {
@@ -135,6 +142,219 @@ function cleanLidarrToken(value: string, fallback: string) {
       .trim()
       .slice(0, 120) || fallback
   );
+}
+
+function spotifyBuRelativePath(track: TrackFile, extension: string) {
+  const artistFolderName = buildLidarrArtistFolderName(track);
+  const albumFolderName = buildLidarrAlbumFolderName(track, artistFolderName);
+  return path.posix.join(artistFolderName, albumFolderName, `${buildNavidromeTrackFileBase(track)}${extension}`);
+}
+
+function templateRelativePath(track: TrackFile, settings: PrivateSettings, extension: string) {
+  const tokens = toTemplateTokens(track);
+  const artistFormat = settings.naming.artistFolderFormat || "{Artist Name}";
+  const trackFormat = selectTrackFormat(track, settings);
+  const renderedArtist = renderTemplate(artistFormat, tokens);
+  const renderedTrack = renderTemplate(trackFormat, tokens);
+  const segments = [
+    ...pathSegmentsFromTemplate(renderedArtist, settings.naming),
+    ...pathSegmentsFromTemplate(renderedTrack, settings.naming)
+  ];
+  const filename = segments.pop() || "Unknown Track";
+  return path.posix.join(...segments, `${filename}${extension}`);
+}
+
+function selectTrackFormat(track: TrackFile, settings: PrivateSettings) {
+  const isMultiDisc =
+    (typeof track.discTotal === "number" && track.discTotal > 1) ||
+    (typeof track.discNumber === "number" && track.discNumber > 1);
+
+  if (isMultiDisc && settings.naming.multiDiscTrackFormat) {
+    return settings.naming.multiDiscTrackFormat;
+  }
+
+  return settings.naming.standardTrackFormat || "{track:00} - {Track Title}";
+}
+
+function toTemplateTokens(track: TrackFile) {
+  const artist = track.artist || track.albumArtist || "Unknown Artist";
+  const albumArtist = track.albumArtist || artist;
+  const album = track.album || "Unknown Album";
+  const title = track.title || "Unknown Track";
+  const trackNumber = track.trackNumber ?? 0;
+  const mediumNumber = track.discNumber ?? 1;
+  const qualityTitle = qualityTitleForTrack(track);
+  const originalFilename = path.parse(track.relativePath || track.absolutePath).name;
+
+  return {
+    "albumartistname": albumArtist,
+    "artistname": albumArtist,
+    "artistcleanname": cleanTitleToken(albumArtist),
+    "artistnamethe": titleThe(albumArtist),
+    "artistcleannamethe": cleanTitleToken(titleThe(albumArtist)),
+    "albumtitle": album,
+    "albumcleantitle": cleanTitleToken(album),
+    "albumtitlethe": titleThe(album),
+    "albumcleantitlethe": cleanTitleToken(titleThe(album)),
+    "albumtype": lidarrAlbumType(track),
+    "tracktitle": title,
+    "trackcleantitle": cleanTitleToken(title),
+    "trackartistname": artist,
+    "trackartistmbid": "",
+    "track": String(trackNumber),
+    "medium": String(mediumNumber),
+    "mediumformat": "CD",
+    "releaseyear": releaseYear(track),
+    "originaltitle": title,
+    "originalfilename": originalFilename,
+    "qualitytitle": qualityTitle,
+    "qualityfull": qualityTitle,
+    "qualityproper": "",
+    "customformats": "",
+    "preferredwords": "",
+    "releasegroup": "",
+    "mediainfoaudiocodec": track.codec || track.container || "",
+    "mediainfoaudiobitrate": track.bitrate ? `${Math.round(track.bitrate / 1000)}kbps` : "",
+    "mediainfoaudiochannels": "",
+    "mediainfoaudiobitspersample": track.bitsPerSample ? String(track.bitsPerSample) : "",
+    "mediainfoaudiosamplerate": track.sampleRate ? String(track.sampleRate) : ""
+  } satisfies Record<string, string>;
+}
+
+function renderTemplate(template: string, tokens: Record<string, string>) {
+  return template.replace(/\{([^{}]+)}/g, (_match, rawToken: string) => {
+    const { key, format, prefix, suffix } = parseTemplateToken(rawToken);
+    const value = formatTokenValue(tokens[key] ?? "", format);
+
+    if (!value) {
+      return "";
+    }
+
+    return `${prefix}${tokenValueForPath(value)}${suffix}`;
+  });
+}
+
+function parseTemplateToken(rawToken: string) {
+  const trimmed = rawToken.trim();
+  const optional = trimmed.match(/^([([_])(.+?)([)\]_])$/);
+  const prefix = optional?.[1] || "";
+  const suffix = optional?.[3] || "";
+  const body = optional?.[2] || trimmed;
+  const separator = body.indexOf(":");
+  const name = separator >= 0 ? body.slice(0, separator) : body;
+  const format = separator >= 0 ? body.slice(separator + 1) : "";
+
+  return {
+    key: normalizeTemplateTokenName(name),
+    format,
+    prefix,
+    suffix
+  };
+}
+
+function normalizeTemplateTokenName(value: string) {
+  return value.toLowerCase().replace(/[\s._-]+/g, "");
+}
+
+function formatTokenValue(value: string, format: string) {
+  if (!format) {
+    return value;
+  }
+
+  if (/^0+$/.test(format) && /^\d+$/.test(value)) {
+    return value.padStart(format.length, "0");
+  }
+
+  const truncate = Number.parseInt(format, 10);
+  if (Number.isFinite(truncate) && truncate !== 0) {
+    return truncate > 0 ? value.slice(0, truncate) : value.slice(truncate);
+  }
+
+  return value;
+}
+
+function tokenValueForPath(value: string) {
+  return value.replace(/[\\/]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function pathSegmentsFromTemplate(value: string, naming: PrivateSettings["naming"]) {
+  return value
+    .split(/[\\/]+/)
+    .map((segment) => sanitizeTemplateSegment(segment, naming))
+    .filter(Boolean);
+}
+
+function sanitizeTemplateSegment(value: string, naming: PrivateSettings["naming"]) {
+  let segment = value.normalize("NFKD").replace(combiningMarks, "").replace(/\s+/g, " ").trim();
+  segment = replaceLidarrColon(segment, naming);
+
+  for (let index = 0; index < lidarrBadCharacters.length; index += 1) {
+    segment = segment.replaceAll(
+      lidarrBadCharacters[index],
+      naming.replaceIllegalCharacters ? lidarrReplacementCharacters[index] : ""
+    );
+  }
+
+  segment = segment.replace(controlCharacters, "").replace(/\s+/g, " ").replace(/\.+$/g, "").trim();
+
+  if (!segment || segment === "." || segment === "..") {
+    return "";
+  }
+
+  if (reservedWindowsNames.test(segment)) {
+    segment = `_${segment}`;
+  }
+
+  return segment.slice(0, 180).trim();
+}
+
+function replaceLidarrColon(value: string, naming: PrivateSettings["naming"]) {
+  if (!naming.replaceIllegalCharacters) {
+    return value.replaceAll(":", "");
+  }
+
+  if (naming.colonReplacementFormat === 1) {
+    return value.replaceAll(":", "-");
+  }
+
+  if (naming.colonReplacementFormat === 2) {
+    return value.replaceAll(":", " -");
+  }
+
+  if (naming.colonReplacementFormat === 3) {
+    return value.replaceAll(":", " - ");
+  }
+
+  if (naming.colonReplacementFormat === 4) {
+    return value.replaceAll(": ", " - ").replaceAll(":", "-");
+  }
+
+  return value.replaceAll(":", "");
+}
+
+function cleanTitleToken(value: string) {
+  return (
+    value
+      .normalize("NFKD")
+      .replace(combiningMarks, "")
+      .replace(/&/g, " and ")
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim() || value
+  );
+}
+
+function titleThe(value: string) {
+  const match = value.match(/^(the)\s+(.+)$/i);
+  return match ? `${match[2]}, ${match[1]}` : value;
+}
+
+function qualityTitleForTrack(track: TrackFile) {
+  const codec = (track.codec || track.container || track.extension.replace(".", "")).toUpperCase();
+  const bitrate = track.bitrate ? ` ${Math.round(track.bitrate / 1000)}kbps` : "";
+  const depth = track.bitsPerSample ? ` ${track.bitsPerSample}bit` : "";
+  const sampleRate = track.sampleRate ? ` ${Math.round(track.sampleRate / 1000)}kHz` : "";
+  return `${codec}${bitrate}${depth}${sampleRate}`.trim();
 }
 
 function lidarrAlbumType(track: TrackFile) {
