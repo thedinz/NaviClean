@@ -422,6 +422,25 @@ td span {
   color: #66736f;
 }
 
+.path-diff,
+.path-diff span,
+.path-diff mark {
+  display: inline;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.path-diff {
+  color: #24302d;
+}
+
+.path-diff mark {
+  padding: 1px 3px;
+  border-radius: 4px;
+  background: #fff0b8;
+  color: #17211f;
+}
+
 .duplicate-list {
   display: grid;
   gap: 8px;
