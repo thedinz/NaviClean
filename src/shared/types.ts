@@ -11,12 +11,22 @@ export type NavidromeSettingsView = {
 };
 
 export type NamingSettings = {
+  mode: NamingMode;
   libraryPath: string;
   recycleBinPath: string;
   artistFolderFormat: string;
   standardTrackFormat: string;
   multiDiscTrackFormat: string;
   replaceIllegalCharacters: boolean;
+  colonReplacementFormat: number;
+  lidarr: LidarrSettingsView;
+};
+
+export type NamingMode = "manual" | "lidarr" | "spotifybu";
+
+export type LidarrSettingsView = {
+  baseUrl: string;
+  apiKeySet: boolean;
 };
 
 export type ScanSettings = {
@@ -44,7 +54,12 @@ export type SettingsUpdate = {
     username?: string;
     password?: string;
   };
-  naming?: Partial<NamingSettings>;
+  naming?: Partial<Omit<NamingSettings, "lidarr">> & {
+    lidarr?: {
+      baseUrl?: string;
+      apiKey?: string;
+    };
+  };
   scan?: Partial<ScanSettings>;
 };
 
