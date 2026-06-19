@@ -13,7 +13,10 @@ ENV NODE_ENV=production \
     PUID=1000 \
     PGID=1000 \
     NAVICLEAN_DATA_DIR=/data \
-    NAVICLEAN_MUSIC_DIR=/music
+    NAVICLEAN_MUSIC_DIR=/music \
+    NAVICLEAN_TRUST_PROXY=1 \
+    NAVICLEAN_SECURE_COOKIES=auto \
+    NAVICLEAN_COOKIE_SAMESITE=lax
 
 WORKDIR /app
 COPY package*.json ./
