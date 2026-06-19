@@ -10,6 +10,7 @@ It scans a mounted music library, previews SpotifyBU-compatible Lidarr artist/al
 - Config volume: `/data`
 - Music volume: `/music`
 - Runtime user: `PUID=1000`, `PGID=1000`
+- Reverse proxy: `NAVICLEAN_TRUST_PROXY=1`, `NAVICLEAN_SECURE_COOKIES=auto`, `NAVICLEAN_COOKIE_SAMESITE=lax`
 - Image: `ghcr.io/thedinz/naviclean:latest`
 
 ## Docker Compose
@@ -27,6 +28,9 @@ services:
       PGID: ${PGID:-1000}
       NAVICLEAN_DATA_DIR: /data
       NAVICLEAN_MUSIC_DIR: /music
+      NAVICLEAN_TRUST_PROXY: ${NAVICLEAN_TRUST_PROXY:-1}
+      NAVICLEAN_SECURE_COOKIES: ${NAVICLEAN_SECURE_COOKIES:-auto}
+      NAVICLEAN_COOKIE_SAMESITE: ${NAVICLEAN_COOKIE_SAMESITE:-lax}
     volumes:
       - ${NAVICLEAN_DATA_PATH:-./data}:/data
       - ${NAVICLEAN_MUSIC_PATH:-./music}:/music
