@@ -18,7 +18,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -504,7 +505,8 @@ label {
   font-weight: 760;
 }
 
-input {
+input,
+select {
   width: 100%;
   min-height: 39px;
   padding: 8px 10px;
@@ -515,7 +517,8 @@ input {
 }
 
 input:read-only,
-input:disabled {
+input:disabled,
+select:disabled {
   background: #f5f6f2;
   color: #53615d;
 }
@@ -540,6 +543,43 @@ input:disabled {
 .settings-actions {
   display: flex;
   justify-content: flex-end;
+}
+
+.settings-subsection {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.subsection-label {
+  color: #46534f;
+  font-size: 0.88rem;
+  font-weight: 760;
+}
+
+.segmented-control {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: min(520px, 100%);
+  padding: 3px;
+  border: 1px solid #d8d7cf;
+  border-radius: 8px;
+  background: #f1f2ee;
+}
+
+.segmented-control button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #53615d;
+  font-weight: 800;
+}
+
+.segmented-control button.active {
+  background: #16877c;
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(23, 33, 31, 0.12);
 }
 
 .form-grid.two {

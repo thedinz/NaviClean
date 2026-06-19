@@ -7,8 +7,9 @@ import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
 import { buildDuplicateGroups, resolveDuplicates } from "./duplicates.js";
 import { applyOrganizePlan, buildOrganizePlan } from "./organizer.js";
 import { scanLibrary } from "./scanner.js";
-import { loadSettings, toSettingsView, updateSettings } from "./settings.js";
+import { loadSettings, saveSettings, toSettingsView, updateSettings } from "./settings.js";
 import { testNavidromeConnection } from "./navidrome.js";
+import { fetchLidarrNamingConfig, testLidarrConnection } from "./lidarr.js";
 
 const app = express();
 const port = Number(process.env.PORT || 8080);
@@ -65,6 +66,35 @@ app.put("/api/settings", asyncHandler(async (req, res) => {
 app.post("/api/navidrome/test", asyncHandler(async (req, res) => {
   const settings = await loadSettings();
   res.json(await testNavidromeConnection(settings, req.body));
+}));
+
+app.post("/api/lidarr/test", asyncHandler(async (req, res) => {
+  const settings = await loadSettings();
+  res.json(await testLidarrConnection(settings, req.body));
+}));
+
+app.post("/api/lidarr/naming/sync", asyncHandler(async (req, res) => {
+  const settings = await loadSettings();
+  const naming = await fetchLidarrNamingConfig(settings, req.body);
+  const next = {
+    ...settings,
+    naming: {
+      ...settings.naming,
+      mode: "lidarr" as const,
+      artistFolderFormat: naming.artistFolderFormat,
+      standardTrackFormat: naming.standardTrackFormat,
+      multiDiscTrackFormat: naming.multiDiscTrackFormat,
+      replaceIllegalCharacters: naming.replaceIllegalCharacters,
+      colonReplacementFormat: naming.colonReplacementFormat,
+      lidarr: {
+        baseUrl: String(req.body?.baseUrl || settings.naming.lidarr.baseUrl).trim().replace(/\/+$/, ""),
+        apiKey: String(req.body?.apiKey || settings.naming.lidarr.apiKey)
+      }
+    }
+  };
+
+  await saveSettings(next);
+  res.json(toSettingsView(next));
 }));
 
 app.get("/api/scan/status", (_req, res) => {
