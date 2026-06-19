@@ -1,9 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
 
-const illegalFilenameChars = /[<>:"/\\|?*\u0000-\u001f]/g;
-const reservedWindowsNames = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
-
 export function sha1(value: string) {
   return crypto.createHash("sha1").update(value).digest("hex");
 }
@@ -47,29 +44,6 @@ export function titleFromFilename(filePath: string) {
     .replace(/[._]+/g, " ")
     .replace(/\s+/g, " ")
     .trim() || parsed.name;
-}
-
-export function sanitizePathSegment(value: string, replaceIllegalCharacters: boolean) {
-  let segment = value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " ");
-
-  if (replaceIllegalCharacters) {
-    segment = segment.replace(illegalFilenameChars, " - ");
-  }
-
-  segment = segment
-    .replace(/\s+-\s+/g, " - ")
-    .replace(/\.+$/g, "")
-    .trim();
-
-  if (!segment) {
-    segment = "Unknown";
-  }
-
-  if (reservedWindowsNames.test(segment)) {
-    segment = `_${segment}`;
-  }
-
-  return segment.slice(0, 120);
 }
 
 export function isInsidePath(parent: string, child: string) {
