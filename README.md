@@ -36,13 +36,13 @@ For Unraid, set `PUID=99` and `PGID=100` so NaviClean can write to `/mnt/user/ap
 
 ## Naming model
 
-The default naming templates match SpotifyBU's Lidarr-compatible Navidrome layout:
+NaviClean uses the same fixed SpotifyBU/Lidarr-compatible Navidrome layout:
 
 - Artist folder: `{Album Artist Name}`
 - Standard track: `{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}`
 - Multi-disc track: `{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}`
 
-NaviClean appends the original extension and replaces illegal filesystem characters before planning moves.
+NaviClean appends the original extension and uses the same token cleaning behavior as SpotifyBU before planning moves.
 Missing release years are written as `Unknown Year`, and missing disc numbers default to disc `01` for the filename prefix.
 
 ## Local development
