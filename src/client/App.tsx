@@ -52,9 +52,9 @@ const namingModes: Array<{ id: NamingMode; label: string }> = [
 const spotifyBuNamingDefaults = {
   artistFolderFormat: "{Album Artist Name}",
   standardTrackFormat:
-    "{Album Artist Name} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
+    "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
   multiDiscTrackFormat:
-    "{Album Artist Name} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
+    "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
   replaceIllegalCharacters: true,
   colonReplacementFormat: 4
 };
@@ -485,7 +485,7 @@ function DuplicatesPage({ stats, onChanged }: { stats: LibraryStats | null; onCh
                 />
                 <div>
                   <strong>{track.extension.toUpperCase().replace(".", "")} - {track.title}</strong>
-                  <span>{track.albumType} - {track.year || "Unknown Year"} - {track.album}</span>
+                  <span>{albumReleaseLabel(track)}</span>
                   <span>{track.relativePath}</span>
                 </div>
                 <em>{formatBytes(track.size)}</em>
@@ -1158,6 +1158,10 @@ function pathDirectory(value: string) {
 function pathFilename(value: string) {
   const index = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
   return index >= 0 ? value.slice(index + 1) : value;
+}
+
+function albumReleaseLabel(track: TrackFile) {
+  return [track.albumType, track.year || "Unknown Year", track.album].filter(Boolean).join(" - ");
 }
 
 function diffText(value: string, compareTo: string) {
