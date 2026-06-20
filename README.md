@@ -46,7 +46,7 @@ NaviClean uses one selected naming source at a time:
   - Artist folder: `{Album Artist Name}`
   - Standard track: `{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}`
   - Multi-disc track: `{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}`
-- `Lidarr` stores a Lidarr URL and API key, then loads `artistFolderFormat`, `standardTrackFormat`, `multiDiscTrackFormat`, `replaceIllegalCharacters`, and `colonReplacementFormat` from Lidarr's `/api/v1/config/naming` endpoint.
+- `Lidarr` stores a Lidarr URL and API key, then loads `artistFolderFormat`, `standardTrackFormat`, `multiDiscTrackFormat`, `replaceIllegalCharacters`, and `colonReplacementFormat` from Lidarr's `/api/v1/config/naming` endpoint. NaviClean refreshes the cached Lidarr naming before settings display, scans, organization previews, organization applies, and duplicate-unlock workflow checks. If Lidarr is temporarily unavailable, NaviClean keeps using the last cached naming config.
 - `Manual` keeps the editable NaviClean templates for users who want to define their own folder and file layout.
 
 NaviClean appends the original extension before planning moves. A normal SpotifyBU target path with a known album type looks like `Artist/Artist - Album - 2026 - Album Name/0103 - Track`. If album type cannot be detected from tags or an existing Lidarr-shaped folder, NaviClean omits that segment, for example `Artist/Artist - 2026 - Album Name/0103 - Track`. Missing release years are written as `Unknown Year`, and missing disc numbers default to disc `01` for the SpotifyBU filename prefix.
