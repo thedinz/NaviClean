@@ -51,8 +51,8 @@ const defaultNaming = {
   libraryPath: process.env.NAVICLEAN_MUSIC_DIR || "/music",
   recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash"),
   artistFolderFormat: "{Album Artist Name}",
-  standardTrackFormat: "{Album Artist Name} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
-  multiDiscTrackFormat: "{Album Artist Name} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
+  standardTrackFormat: "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
+  multiDiscTrackFormat: "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
   replaceIllegalCharacters: true,
   colonReplacementFormat: 4,
   lidarr: {
