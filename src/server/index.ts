@@ -10,6 +10,7 @@ import { scanLibrary } from "./scanner.js";
 import { loadSettings, saveSettings, toSettingsView, updateSettings } from "./settings.js";
 import { testNavidromeConnection } from "./navidrome.js";
 import { fetchLidarrNamingConfig, testLidarrConnection } from "./lidarr.js";
+import { applyLidarrNamingConfig, refreshLidarrNamingSettings } from "./lidarr-sync.js";
 
 const app = express();
 const port = Number(process.env.PORT || 8080);
@@ -56,7 +57,7 @@ app.post("/api/auth/logout", asyncHandler(async (req, res) => {
 app.use("/api", requireAuth);
 
 app.get("/api/settings", asyncHandler(async (_req, res) => {
-  res.json(toSettingsView(await loadSettings()));
+  res.json(toSettingsView(await loadSettingsForPlanning()));
 }));
 
 app.put("/api/settings", asyncHandler(async (req, res) => {
@@ -77,22 +78,17 @@ app.post("/api/lidarr/test", asyncHandler(async (req, res) => {
 app.post("/api/lidarr/naming/sync", asyncHandler(async (req, res) => {
   const settings = await loadSettings();
   const naming = await fetchLidarrNamingConfig(settings, req.body);
-  const next = {
+  const next = applyLidarrNamingConfig({
     ...settings,
     naming: {
       ...settings.naming,
       mode: "lidarr" as const,
-      artistFolderFormat: naming.artistFolderFormat,
-      standardTrackFormat: naming.standardTrackFormat,
-      multiDiscTrackFormat: naming.multiDiscTrackFormat,
-      replaceIllegalCharacters: naming.replaceIllegalCharacters,
-      colonReplacementFormat: naming.colonReplacementFormat,
       lidarr: {
         baseUrl: String(req.body?.baseUrl || settings.naming.lidarr.baseUrl).trim().replace(/\/+$/, ""),
         apiKey: String(req.body?.apiKey || settings.naming.lidarr.apiKey)
       }
     }
-  };
+  }, naming);
 
   await saveSettings(next);
   res.json(toSettingsView(next));
@@ -142,7 +138,7 @@ app.get("/api/tracks", asyncHandler(async (req, res) => {
 
 app.get("/api/duplicates", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
-  const settings = await loadSettings();
+  const settings = await loadSettingsForPlanning();
   const workflow = await buildWorkflowState(catalog, settings);
 
   if (!workflow.duplicateScanReady) {
@@ -162,7 +158,7 @@ app.get("/api/stats", asyncHandler(async (_req, res) => {
     return;
   }
 
-  const settings = await loadSettings();
+  const settings = await loadSettingsForPlanning();
   const workflow = await buildWorkflowState(catalog, settings);
   const groups = workflow.duplicateScanReady ? buildDuplicateGroups(catalog.tracks) : [];
   const duplicateTracks = groups.reduce((total, group) => total + group.tracks.length, 0);
@@ -171,13 +167,13 @@ app.get("/api/stats", asyncHandler(async (_req, res) => {
 
 app.post("/api/organize/preview", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
-  const settings = await loadSettings();
+  const settings = await loadSettingsForPlanning();
   res.json(await buildOrganizePlan(catalog.tracks, settings));
 }));
 
 app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
-  const settings = await loadSettings();
+  const settings = await loadSettingsForPlanning();
   const plan = await buildOrganizePlan(catalog.tracks, settings);
   const result = await applyOrganizePlan(plan);
 
@@ -212,7 +208,7 @@ app.post("/api/duplicates/resolve", asyncHandler(async (req, res) => {
   }
 
   const catalog = await loadCatalog();
-  const settings = await loadSettings();
+  const settings = await loadSettingsForPlanning();
   const workflow = await buildWorkflowState(catalog, settings);
 
   if (!workflow.duplicateScanReady) {
@@ -256,7 +252,7 @@ function trustProxySetting() {
 
 async function runScan() {
   try {
-    const settings = await loadSettings();
+    const settings = await loadSettingsForPlanning();
     const result = await scanLibrary(settings, (update) => {
       Object.assign(scanStatus, update);
     });
@@ -267,6 +263,10 @@ async function runScan() {
     scanStatus.running = false;
     scanStatus.finishedAt = new Date().toISOString();
   }
+}
+
+async function loadSettingsForPlanning() {
+  return refreshLidarrNamingSettings(await loadSettings());
 }
 
 function asyncHandler(
