@@ -116,8 +116,10 @@ function buildLidarrArtistFolderName(track: TrackFile) {
 }
 
 function buildLidarrAlbumFolderName(track: TrackFile, artistFolderName = buildLidarrArtistFolderName(track)) {
+  const albumType = lidarrAlbumType(track);
   return [
     artistFolderName,
+    ...(albumType ? [albumType] : []),
     releaseYear(track),
     cleanLidarrToken(track.album || "Unknown Album", "Unknown Album")
   ].join(" - ");
@@ -144,6 +146,12 @@ function cleanLidarrToken(value: string, fallback: string) {
 }
 
 function spotifyBuRelativePath(track: TrackFile, extension: string) {
+  const compatibleExistingPath = compatibleExistingSpotifyBuRelativePath(track, extension);
+
+  if (compatibleExistingPath) {
+    return compatibleExistingPath;
+  }
+
   const artistFolderName = buildLidarrArtistFolderName(track);
   const albumFolderName = buildLidarrAlbumFolderName(track, artistFolderName);
   return path.posix.join(artistFolderName, albumFolderName, `${buildNavidromeTrackFileBase(track)}${extension}`);
@@ -396,7 +404,113 @@ function lidarrAlbumType(track: TrackFile) {
     return "EP";
   }
 
-  return albumType ? titleCaseAlbumType(albumType) : "Album";
+  return albumType ? titleCaseAlbumType(albumType) : "";
+}
+
+function compatibleExistingSpotifyBuRelativePath(track: TrackFile, extension: string) {
+  const parsedPath = path.posix.parse(track.relativePath);
+
+  if (parsedPath.ext.toLowerCase() !== extension.toLowerCase()) {
+    return null;
+  }
+
+  if (!currentTrackFilenameMatches(track, parsedPath.name)) {
+    return null;
+  }
+
+  return currentAlbumDirectoryIsCompatible(track, parsedPath.dir) ? track.relativePath : null;
+}
+
+function currentTrackFilenameMatches(track: TrackFile, filename: string) {
+  const match = filename.match(/^\s*(?<medium>\d{2})(?<track>\d{2})\s*[-_. ]+(?<title>.+)$/);
+
+  if (!match?.groups) {
+    return false;
+  }
+
+  const mediumNumber = Number.parseInt(match.groups.medium, 10);
+  const trackNumber = Number.parseInt(match.groups.track, 10);
+  const expectedMedium = track.discNumber ?? 1;
+  const expectedTrack = track.trackNumber ?? 0;
+
+  return (
+    mediumNumber === expectedMedium &&
+    trackNumber === expectedTrack &&
+    lidarrTokenKey(match.groups.title) === lidarrTokenKey(track.title || "Unknown Track")
+  );
+}
+
+function currentAlbumDirectoryIsCompatible(track: TrackFile, relativeDirectory: string) {
+  const segments = relativeDirectory.split("/").filter(Boolean);
+  const albumFolderName = segments.at(-1);
+  const parentArtistFolderName = segments.at(-2);
+
+  if (!albumFolderName || !parentArtistFolderName) {
+    return false;
+  }
+
+  const expectedArtist = buildLidarrArtistFolderName(track);
+
+  if (lidarrTokenKey(parentArtistFolderName) !== lidarrTokenKey(expectedArtist)) {
+    return false;
+  }
+
+  const prefix = `${parentArtistFolderName} - `;
+
+  if (!albumFolderName.toLowerCase().startsWith(prefix.toLowerCase())) {
+    return false;
+  }
+
+  const parsedAlbumFolder = parseExistingAlbumFolder(albumFolderName.slice(prefix.length));
+
+  if (!parsedAlbumFolder) {
+    return false;
+  }
+
+  const expectedAlbum = cleanLidarrToken(track.album || "Unknown Album", "Unknown Album");
+  const expectedYear = releaseYear(track);
+  const expectedAlbumType = lidarrAlbumType(track);
+
+  if (
+    parsedAlbumFolder.year !== expectedYear ||
+    lidarrTokenKey(parsedAlbumFolder.album) !== lidarrTokenKey(expectedAlbum)
+  ) {
+    return false;
+  }
+
+  if (!parsedAlbumFolder.albumType) {
+    return !expectedAlbumType;
+  }
+
+  return !expectedAlbumType || lidarrTokenKey(parsedAlbumFolder.albumType) === lidarrTokenKey(expectedAlbumType);
+}
+
+function parseExistingAlbumFolder(value: string) {
+  const withoutType = value.match(/^(?<year>\d{4}|Unknown Year) - (?<album>.+)$/);
+
+  if (withoutType?.groups) {
+    return {
+      album: withoutType.groups.album.trim(),
+      albumType: "",
+      year: withoutType.groups.year
+    };
+  }
+
+  const withType = value.match(/^(?<albumType>.+?) - (?<year>\d{4}|Unknown Year) - (?<album>.+)$/);
+
+  if (!withType?.groups) {
+    return null;
+  }
+
+  return {
+    album: withType.groups.album.trim(),
+    albumType: withType.groups.albumType.trim(),
+    year: withType.groups.year
+  };
+}
+
+function lidarrTokenKey(value: string) {
+  return cleanTitleToken(value).toLowerCase();
 }
 
 function titleCaseAlbumType(value: string) {

@@ -19,6 +19,15 @@ test("imported Lidarr album type token is honored for normal albums", () => {
   assert.equal(target.targetRelativePath, "Artist/Artist - Album - 2026 - Album Name/0103 - Track.mp3");
 });
 
+test("imported Lidarr album type token is omitted when unknown", () => {
+  const target = targetForTrack(
+    track({ albumType: "" }),
+    settings({ mode: "lidarr", standardTrackFormat: lidarrTrackFormat })
+  );
+
+  assert.equal(target.targetRelativePath, "Artist/Artist - 2026 - Album Name/0103 - Track.mp3");
+});
+
 test("imported Lidarr album type token keeps meaningful album types", () => {
   const target = targetForTrack(
     track({ albumType: "single", trackTotal: 5 }),
@@ -28,8 +37,14 @@ test("imported Lidarr album type token keeps meaningful album types", () => {
   assert.equal(target.targetRelativePath, "Artist/Artist - EP - 2026 - Album Name/0103 - Track.mp3");
 });
 
-test("SpotifyBU fixed mode omits normal album type", () => {
+test("SpotifyBU fixed mode includes known normal album type", () => {
   const target = targetForTrack(track({ albumType: "Album" }), settings({ mode: "spotifybu" }));
+
+  assert.equal(target.targetRelativePath, "Artist/Artist - Album - 2026 - Album Name/0103 - Track.mp3");
+});
+
+test("SpotifyBU fixed mode omits unknown album type", () => {
+  const target = targetForTrack(track({ albumType: "" }), settings({ mode: "spotifybu" }));
 
   assert.equal(target.targetRelativePath, "Artist/Artist - 2026 - Album Name/0103 - Track.mp3");
 });
@@ -67,6 +82,38 @@ test("existing literal Album folder is already organized when Lidarr template as
   }
 });
 
+test("compatible Lidarr album type folder is already organized in SpotifyBU mode when local tags are missing type", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const lidarrRelativePath = "Artist/Artist - Album - 2026 - Album Name/0103 - Track.mp3";
+    const sourcePath = path.join(root, ...lidarrRelativePath.split("/"));
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "audio");
+
+    const plan = await buildOrganizePlan(
+      [
+        track({
+          absolutePath: sourcePath,
+          relativePath: lidarrRelativePath,
+          albumType: ""
+        })
+      ],
+      settings({
+        libraryPath: root,
+        mode: "spotifybu"
+      })
+    );
+
+    assert.equal(plan.summary.ready, 0);
+    assert.equal(plan.summary.same, 1);
+    assert.equal(plan.items[0]?.status, "same");
+    assert.equal(plan.items[0]?.targetRelativePath, lidarrRelativePath);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 function settings(overrides: Partial<PrivateSettings["naming"]> = {}): PrivateSettings {
   const libraryPath = overrides.libraryPath ?? path.resolve("C:/music");
 
@@ -86,8 +133,8 @@ function settings(overrides: Partial<PrivateSettings["naming"]> = {}): PrivateSe
       libraryPath,
       recycleBinPath: path.join(libraryPath, ".naviclean-trash"),
       artistFolderFormat: "{Album Artist Name}",
-      standardTrackFormat: "{Album Artist Name} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
-      multiDiscTrackFormat: "{Album Artist Name} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
+      standardTrackFormat: "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
+      multiDiscTrackFormat: "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
       replaceIllegalCharacters: true,
       colonReplacementFormat: 4,
       lidarr: {

@@ -419,7 +419,7 @@ function normalizeAlbumType(value?: string, trackTotal?: number | null) {
     return "EP";
   }
 
-  return albumType ? titleCaseAlbumType(albumType) : "Album";
+  return albumType ? titleCaseAlbumType(albumType) : "";
 }
 
 function titleCaseAlbumType(value: string) {
