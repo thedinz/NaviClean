@@ -8,6 +8,7 @@
     "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "tsx watch src/server/index.ts",
     "dev:client": "vite --host 0.0.0.0",
+    "test": "tsx --test tests/organizer.test.ts",
     "build": "tsc -p tsconfig.server.json && vite build",
     "start": "node dist/server/server/index.js",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit"
