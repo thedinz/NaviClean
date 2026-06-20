@@ -118,7 +118,6 @@ function buildLidarrArtistFolderName(track: TrackFile) {
 function buildLidarrAlbumFolderName(track: TrackFile, artistFolderName = buildLidarrArtistFolderName(track)) {
   return [
     artistFolderName,
-    lidarrAlbumType(track),
     releaseYear(track),
     cleanLidarrToken(track.album || "Unknown Album", "Unknown Album")
   ].join(" - ");

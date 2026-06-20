@@ -52,9 +52,9 @@ const namingModes: Array<{ id: NamingMode; label: string }> = [
 const spotifyBuNamingDefaults = {
   artistFolderFormat: "{Album Artist Name}",
   standardTrackFormat:
-    "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
+    "{Album Artist Name} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
   multiDiscTrackFormat:
-    "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
+    "{Album Artist Name} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
   replaceIllegalCharacters: true,
   colonReplacementFormat: 4
 };
