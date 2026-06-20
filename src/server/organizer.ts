@@ -384,10 +384,6 @@ function qualityTitleForTrack(track: TrackFile) {
 function lidarrAlbumType(track: TrackFile) {
   const albumType = (track.albumType ?? "").trim().toLowerCase();
 
-  if (!albumType || albumType === "album") {
-    return "";
-  }
-
   if (albumType === "compilation") {
     return "Compilation";
   }
@@ -400,7 +396,7 @@ function lidarrAlbumType(track: TrackFile) {
     return "EP";
   }
 
-  return titleCaseAlbumType(albumType);
+  return albumType ? titleCaseAlbumType(albumType) : "Album";
 }
 
 function titleCaseAlbumType(value: string) {
