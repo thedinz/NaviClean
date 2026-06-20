@@ -221,7 +221,7 @@ function toTemplateTokens(track: TrackFile) {
 }
 
 function renderTemplate(template: string, tokens: Record<string, string>) {
-  return template.replace(/\{([^{}]+)}/g, (_match, rawToken: string) => {
+  const rendered = template.replace(/\{([^{}]+)}/g, (_match, rawToken: string) => {
     const { key, format, prefix, suffix } = parseTemplateToken(rawToken);
     const value = formatTokenValue(tokens[key] ?? "", format);
 
@@ -231,6 +231,8 @@ function renderTemplate(template: string, tokens: Record<string, string>) {
 
     return `${prefix}${tokenValueForPath(value)}${suffix}`;
   });
+
+  return cleanupRenderedTemplate(rendered);
 }
 
 function parseTemplateToken(rawToken: string) {
@@ -274,6 +276,29 @@ function formatTokenValue(value: string, format: string) {
 
 function tokenValueForPath(value: string) {
   return value.replace(/[\\/]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function cleanupRenderedTemplate(value: string) {
+  return value
+    .split(/([\\/]+)/)
+    .map((part, index) => (index % 2 === 0 ? cleanupRenderedTemplateSegment(part) : part))
+    .join("");
+}
+
+function cleanupRenderedTemplateSegment(value: string) {
+  let segment = value;
+  let previous = "";
+
+  while (segment !== previous) {
+    previous = segment;
+    segment = segment.replace(/\s+-\s+-\s+/g, " - ");
+  }
+
+  return segment
+    .replace(/^\s*-\s+/, "")
+    .replace(/\s+-\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function pathSegmentsFromTemplate(value: string, naming: PrivateSettings["naming"]) {
@@ -359,6 +384,10 @@ function qualityTitleForTrack(track: TrackFile) {
 function lidarrAlbumType(track: TrackFile) {
   const albumType = (track.albumType ?? "").trim().toLowerCase();
 
+  if (!albumType || albumType === "album") {
+    return "";
+  }
+
   if (albumType === "compilation") {
     return "Compilation";
   }
@@ -371,7 +400,7 @@ function lidarrAlbumType(track: TrackFile) {
     return "EP";
   }
 
-  return albumType ? titleCaseAlbumType(albumType) : "Album";
+  return titleCaseAlbumType(albumType);
 }
 
 function titleCaseAlbumType(value: string) {
