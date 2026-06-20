@@ -347,6 +347,16 @@ function parseLidarrAlbumDirectory(relativeDirectory: string) {
   }
 
   const remainder = albumFolderName.slice(prefix.length);
+  const currentMatch = remainder.match(/^(?<year>\d{4}|Unknown Year) - (?<album>.+)$/);
+
+  if (currentMatch?.groups) {
+    return {
+      album: currentMatch.groups.album.trim(),
+      artist: parentArtistFolderName.trim(),
+      year: parseYear(currentMatch.groups.year)
+    };
+  }
+
   const match = remainder.match(/^(?<albumType>.+?) - (?<year>\d{4}|Unknown Year) - (?<album>.+)$/);
 
   if (!match?.groups) {
