@@ -10,13 +10,13 @@ import type { PrivateSettings } from "../src/server/settings.js";
 const lidarrTrackFormat =
   "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}";
 
-test("imported Lidarr album type token is empty for normal albums", () => {
+test("imported Lidarr album type token is honored for normal albums", () => {
   const target = targetForTrack(
     track({ albumType: "Album" }),
     settings({ mode: "lidarr", standardTrackFormat: lidarrTrackFormat })
   );
 
-  assert.equal(target.targetRelativePath, "Artist/Artist - 2026 - Album Name/0103 - Track.mp3");
+  assert.equal(target.targetRelativePath, "Artist/Artist - Album - 2026 - Album Name/0103 - Track.mp3");
 });
 
 test("imported Lidarr album type token keeps meaningful album types", () => {
@@ -28,7 +28,13 @@ test("imported Lidarr album type token keeps meaningful album types", () => {
   assert.equal(target.targetRelativePath, "Artist/Artist - EP - 2026 - Album Name/0103 - Track.mp3");
 });
 
-test("existing literal Album folder plans a move to the cleaned Lidarr path", async () => {
+test("SpotifyBU fixed mode omits normal album type", () => {
+  const target = targetForTrack(track({ albumType: "Album" }), settings({ mode: "spotifybu" }));
+
+  assert.equal(target.targetRelativePath, "Artist/Artist - 2026 - Album Name/0103 - Track.mp3");
+});
+
+test("existing literal Album folder is already organized when Lidarr template asks for album type", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
 
   try {
@@ -52,9 +58,10 @@ test("existing literal Album folder plans a move to the cleaned Lidarr path", as
       })
     );
 
-    assert.equal(plan.summary.ready, 1);
-    assert.equal(plan.items[0]?.status, "ready");
-    assert.equal(plan.items[0]?.targetRelativePath, "Artist/Artist - 2026 - Album Name/0103 - Track.mp3");
+    assert.equal(plan.summary.ready, 0);
+    assert.equal(plan.summary.same, 1);
+    assert.equal(plan.items[0]?.status, "same");
+    assert.equal(plan.items[0]?.targetRelativePath, oldRelativePath);
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }
