@@ -65,7 +65,7 @@ export function createStats(
 function normalizeCatalogTrack(track: TrackFile) {
   return {
     ...track,
-    albumType: typeof track.albumType === "string" && track.albumType.trim() ? track.albumType : "Album"
+    albumType: typeof track.albumType === "string" ? track.albumType.trim() : ""
   };
 }
 
