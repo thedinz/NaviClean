@@ -12,23 +12,46 @@ type LidarrNamingResponse = Partial<LidarrNamingConfig> & {
   renameTracks?: boolean;
 };
 
+type LidarrRequestOverride = {
+  baseUrl?: string;
+  apiKey?: string;
+  timeoutMs?: number;
+};
+
+const defaultLidarrTimeoutMs = 5000;
+
 export async function fetchLidarrNamingConfig(
   settings: PrivateSettings,
-  override?: { baseUrl?: string; apiKey?: string }
+  override?: LidarrRequestOverride
 ) {
   const baseUrl = trimTrailingSlash(override?.baseUrl || settings.naming.lidarr.baseUrl);
   const apiKey = override?.apiKey || settings.naming.lidarr.apiKey;
+  const timeoutMs = normalizeTimeoutMs(override?.timeoutMs ?? process.env.NAVICLEAN_LIDARR_TIMEOUT_MS);
 
   if (!baseUrl || !apiKey) {
     throw new Error("Lidarr URL and API key are required.");
   }
 
-  const response = await fetch(new URL("api/v1/config/naming", `${baseUrl}/`), {
-    headers: {
-      accept: "application/json",
-      "X-Api-Key": apiKey
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response;
+
+  try {
+    response = await fetch(new URL("api/v1/config/naming", `${baseUrl}/`), {
+      headers: {
+        accept: "application/json",
+        "X-Api-Key": apiKey
+      },
+      signal: controller.signal
+    });
+  } catch (error) {
+    if ((error as Error).name === "AbortError") {
+      throw new Error(`Timed out connecting to Lidarr after ${timeoutMs}ms.`);
     }
-  });
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     throw new Error(`HTTP ${response.status} from Lidarr.`);
@@ -51,7 +74,7 @@ export async function fetchLidarrNamingConfig(
 
 export async function testLidarrConnection(
   settings: PrivateSettings,
-  override?: { baseUrl?: string; apiKey?: string }
+  override?: LidarrRequestOverride
 ) {
   try {
     const naming = await fetchLidarrNamingConfig(settings, override);
@@ -74,4 +97,9 @@ function trimTrailingSlash(value: string) {
 function normalizeColonReplacementFormat(value: unknown) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= 0 && parsed <= 4 ? parsed : 4;
+}
+
+function normalizeTimeoutMs(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : defaultLidarrTimeoutMs;
 }

@@ -63,6 +63,7 @@ const defaultNaming = {
 
 const dataDir = process.env.NAVICLEAN_DATA_DIR || path.resolve(process.cwd(), ".data");
 const settingsPath = path.join(dataDir, "settings.json");
+let fallbackPasswordHash: string | null = null;
 
 export function getDataDir() {
   return dataDir;
@@ -189,8 +190,7 @@ function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
   const fallback = {
     auth: {
       enabled: true,
-      username: "admin",
-      passwordHash: bcrypt.hashSync("admin", 12)
+      username: "admin"
     },
     navidrome: {
       baseUrl: "",
@@ -207,7 +207,7 @@ function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
     auth: {
       enabled: partial.auth?.enabled ?? fallback.auth.enabled,
       username: partial.auth?.username || fallback.auth.username,
-      passwordHash: partial.auth?.passwordHash || fallback.auth.passwordHash
+      passwordHash: partial.auth?.passwordHash || getFallbackPasswordHash()
     },
     navidrome: {
       baseUrl: trimTrailingSlash(partial.navidrome?.baseUrl || fallback.navidrome.baseUrl),
@@ -291,4 +291,9 @@ function compactStringValues<T extends Record<string, unknown>>(values: T): Part
 
 function trimTrailingSlash(value: string) {
   return value.replace(/\/+$/, "");
+}
+
+function getFallbackPasswordHash() {
+  fallbackPasswordHash ??= bcrypt.hashSync("admin", 12);
+  return fallbackPasswordHash;
 }
