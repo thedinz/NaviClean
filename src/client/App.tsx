@@ -37,7 +37,7 @@ import { api } from "./api";
 import { appVersion } from "./version";
 
 type Page = "dashboard" | "library" | "duplicates" | "organize" | "settings";
-type OrganizePreviewFilter = "attention" | "ready" | "conflict" | "missing" | "same" | "all";
+type OrganizePreviewFilter = "attention" | "ready" | "duplicate-target" | "conflict" | "missing" | "same" | "all";
 type OrganizePreviewItem = OrganizePlan["items"][number];
 
 const organizePreviewPageSize = 150;
@@ -59,6 +59,7 @@ const namingModes: Array<{ id: NamingMode; label: string }> = [
 const organizePreviewFilters: Array<{ id: OrganizePreviewFilter; label: string }> = [
   { id: "attention", label: "Needs action" },
   { id: "ready", label: "Ready" },
+  { id: "duplicate-target", label: "Duplicates" },
   { id: "conflict", label: "Conflicts" },
   { id: "missing", label: "Missing" },
   { id: "same", label: "Organized" },
@@ -619,6 +620,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
         <div className="summary-chips">
           <span>{plan?.summary.ready || 0} ready</span>
           <span>{plan?.summary.same || 0} organized</span>
+          <span>{plan?.summary.duplicateTargets || 0} duplicates</span>
           <span>{plan?.summary.conflicts || 0} conflicts</span>
           <span>{plan?.summary.missing || 0} missing</span>
         </div>
@@ -1240,6 +1242,7 @@ function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {
   const counts: Record<OrganizePreviewFilter, number> = {
     attention: 0,
     ready: 0,
+    "duplicate-target": 0,
     conflict: 0,
     missing: 0,
     same: 0,
@@ -1251,6 +1254,8 @@ function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {
 
     if (item.status === "same") {
       counts.same += 1;
+    } else if (item.status === "duplicate-target") {
+      counts["duplicate-target"] += 1;
     } else {
       counts.attention += 1;
     }
@@ -1277,7 +1282,7 @@ function organizePreviewItemMatchesFilter(item: OrganizePreviewItem, filter: Org
   }
 
   if (filter === "attention") {
-    return item.status !== "same";
+    return item.status !== "same" && item.status !== "duplicate-target";
   }
 
   if (filter === "conflict") {
@@ -1312,6 +1317,10 @@ function organizeChangeLabel(item: OrganizePlan["items"][number]) {
 
   if (item.status === "conflict") {
     return "Conflict";
+  }
+
+  if (item.status === "duplicate-target") {
+    return "Duplicate target";
   }
 
   if (item.status === "outside-library") {

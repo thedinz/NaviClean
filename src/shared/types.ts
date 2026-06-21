@@ -139,7 +139,7 @@ export type OrganizePlanItem = {
   targetPath: string;
   sourceRelativePath: string;
   targetRelativePath: string;
-  status: "ready" | "same" | "conflict" | "outside-library" | "missing-source";
+  status: "ready" | "same" | "duplicate-target" | "conflict" | "outside-library" | "missing-source";
   message: string;
 };
 
@@ -148,6 +148,7 @@ export type OrganizePlan = {
   summary: {
     ready: number;
     same: number;
+    duplicateTargets: number;
     conflicts: number;
     missing: number;
   };
