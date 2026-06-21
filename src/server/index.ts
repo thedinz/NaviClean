@@ -5,7 +5,7 @@ import type { OrganizePlan, ScanStatus, SettingsUpdate, WorkflowState } from "..
 import { clearSessionCookie, getAuthInfo, login, logout, requireAuth, setSessionCookie } from "./auth.js";
 import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
 import { buildDuplicateGroups, resolveDuplicates } from "./duplicates.js";
-import { applyOrganizePlan, buildOrganizePlan } from "./organizer.js";
+import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate } from "./organizer.js";
 import { scanLibrary } from "./scanner.js";
 import { loadSettings, saveSettings, toSettingsView, updateSettings } from "./settings.js";
 import { testNavidromeConnection } from "./navidrome.js";
@@ -197,6 +197,27 @@ app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
   }
 
   res.json({ ...result, plan: await buildOrganizePlan(tracks, settings) });
+}));
+
+app.post("/api/organize/trash", asyncHandler(async (req, res) => {
+  const itemId = String(req.body.itemId || "");
+  const candidateId = String(req.body.candidateId || "");
+
+  if (!itemId || !candidateId) {
+    res.status(400).json({ error: "itemId and candidateId are required" });
+    return;
+  }
+
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+  const result = await trashOrganizeCandidate(settings, catalog.tracks, itemId, candidateId);
+
+  await saveCatalog(result.tracks);
+  res.json({
+    trashed: result.trashed,
+    removedTrackIds: result.removedTrackIds,
+    plan: result.plan
+  });
 }));
 
 app.post("/api/duplicates/resolve", asyncHandler(async (req, res) => {
