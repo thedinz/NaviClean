@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OrganizeApplyResult, OrganizePlan, OrganizePlanItem, TrackFile } from "../shared/types.js";
+import { duplicateKeyForTrack } from "./matching.js";
 import type { PrivateSettings } from "./settings.js";
 import { isInsidePath, toPosixRelative } from "./utils.js";
 
@@ -37,8 +38,7 @@ export function targetForTrack(track: TrackFile, settings: PrivateSettings) {
 
 export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSettings): Promise<OrganizePlan> {
   const items: OrganizePlanItem[] = [];
-
-  for (const track of tracks) {
+  const plannedItems = tracks.map((track) => {
     const target = targetForTrack(track, settings);
     const item: OrganizePlanItem = {
       id: track.id,
@@ -50,6 +50,26 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       message: "Ready"
     };
 
+    return {
+      item,
+      target,
+      targetKey: path.resolve(target.targetPath),
+      track
+    };
+  });
+  const tracksBySourcePath = new Map(tracks.map((track) => [path.resolve(track.absolutePath), track]));
+  const plannedItemsByTargetPath = new Map<string, typeof plannedItems>();
+
+  for (const planned of plannedItems) {
+    const targetGroup = plannedItemsByTargetPath.get(planned.targetKey) || [];
+    targetGroup.push(planned);
+    plannedItemsByTargetPath.set(planned.targetKey, targetGroup);
+  }
+
+  for (const planned of plannedItems) {
+    const { item, target, targetKey, track } = planned;
+    const targetGroup = plannedItemsByTargetPath.get(targetKey) || [];
+
     if (target.outsideLibrary) {
       item.status = "outside-library";
       item.message = "Target leaves library root";
@@ -59,9 +79,15 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     } else if (!(await pathExists(track.absolutePath))) {
       item.status = "missing-source";
       item.message = "Source file is missing";
+    } else if (isDuplicateTargetCollision(track, targetGroup, tracksBySourcePath.get(targetKey))) {
+      item.status = "duplicate-target";
+      item.message = "Target is shared by duplicate candidates";
     } else if ((await pathExists(target.targetPath)) && path.resolve(track.absolutePath) !== path.resolve(target.targetPath)) {
       item.status = "conflict";
       item.message = "Target already exists";
+    } else if (targetGroup.length > 1) {
+      item.status = "conflict";
+      item.message = "Multiple tracks resolve to this target";
     }
 
     items.push(item);
@@ -72,10 +98,41 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     summary: {
       ready: items.filter((item) => item.status === "ready").length,
       same: items.filter((item) => item.status === "same").length,
+      duplicateTargets: items.filter((item) => item.status === "duplicate-target").length,
       conflicts: items.filter((item) => item.status === "conflict" || item.status === "outside-library").length,
       missing: items.filter((item) => item.status === "missing-source").length
     }
   };
+}
+
+function isDuplicateTargetCollision(
+  track: TrackFile,
+  targetGroup: Array<{ track: TrackFile }>,
+  existingTargetTrack: TrackFile | undefined
+) {
+  const tracksSharingTarget = new Map<string, TrackFile>();
+
+  for (const planned of targetGroup) {
+    tracksSharingTarget.set(trackIdentity(planned.track), planned.track);
+  }
+
+  if (existingTargetTrack) {
+    tracksSharingTarget.set(trackIdentity(existingTargetTrack), existingTargetTrack);
+  }
+
+  if (tracksSharingTarget.size < 2) {
+    return false;
+  }
+
+  const duplicateKey = duplicateKeyForTrack(track);
+
+  return Boolean(duplicateKey) && Array.from(tracksSharingTarget.values()).every(
+    (candidate) => duplicateKeyForTrack(candidate) === duplicateKey
+  );
+}
+
+function trackIdentity(track: TrackFile) {
+  return `${track.id}:${path.resolve(track.absolutePath)}`;
 }
 
 export async function applyOrganizePlan(plan: OrganizePlan): Promise<OrganizeApplyResult> {

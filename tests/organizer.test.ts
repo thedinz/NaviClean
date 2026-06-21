@@ -114,6 +114,130 @@ test("compatible Lidarr album type folder is already organized in SpotifyBU mode
   }
 });
 
+test("duplicate source blocked by an existing organized target does not count as a conflict", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const targetRelativePath = "Artist/Artist - Album - 2026 - Album Name/0103 - Track.mp3";
+    const sourceRelativePath = "Unsorted/Track Copy.mp3";
+    const targetPath = path.join(root, ...targetRelativePath.split("/"));
+    const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(targetPath, "audio-one");
+    await fs.writeFile(sourcePath, "audio-two");
+
+    const plan = await buildOrganizePlan(
+      [
+        track({
+          id: "organized",
+          absolutePath: targetPath,
+          relativePath: targetRelativePath
+        }),
+        track({
+          id: "copy",
+          absolutePath: sourcePath,
+          relativePath: sourceRelativePath
+        })
+      ],
+      settings({
+        libraryPath: root,
+        mode: "spotifybu"
+      })
+    );
+
+    assert.equal(plan.summary.conflicts, 0);
+    assert.equal(plan.summary.duplicateTargets, 1);
+    assert.equal(plan.items.find((item) => item.id === "copy")?.status, "duplicate-target");
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("multiple duplicate sources for an empty target do not count as conflicts", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const firstRelativePath = "Unsorted/Track One.mp3";
+    const secondRelativePath = "More/Track Two.mp3";
+    const firstPath = path.join(root, ...firstRelativePath.split("/"));
+    const secondPath = path.join(root, ...secondRelativePath.split("/"));
+    await fs.mkdir(path.dirname(firstPath), { recursive: true });
+    await fs.mkdir(path.dirname(secondPath), { recursive: true });
+    await fs.writeFile(firstPath, "audio-one");
+    await fs.writeFile(secondPath, "audio-two");
+
+    const plan = await buildOrganizePlan(
+      [
+        track({
+          id: "first-copy",
+          absolutePath: firstPath,
+          relativePath: firstRelativePath
+        }),
+        track({
+          id: "second-copy",
+          absolutePath: secondPath,
+          relativePath: secondRelativePath
+        })
+      ],
+      settings({
+        libraryPath: root,
+        mode: "spotifybu"
+      })
+    );
+
+    assert.equal(plan.summary.ready, 0);
+    assert.equal(plan.summary.conflicts, 0);
+    assert.equal(plan.summary.duplicateTargets, 2);
+    assert.deepEqual(new Set(plan.items.map((item) => item.status)), new Set(["duplicate-target"]));
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("target collisions that duplicate cleanup cannot match still count as conflicts", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const firstRelativePath = "Unsorted/Track One.mp3";
+    const secondRelativePath = "More/Track Two.mp3";
+    const firstPath = path.join(root, ...firstRelativePath.split("/"));
+    const secondPath = path.join(root, ...secondRelativePath.split("/"));
+    await fs.mkdir(path.dirname(firstPath), { recursive: true });
+    await fs.mkdir(path.dirname(secondPath), { recursive: true });
+    await fs.writeFile(firstPath, "audio-one");
+    await fs.writeFile(secondPath, "audio-two");
+
+    const plan = await buildOrganizePlan(
+      [
+        track({
+          id: "short-copy",
+          absolutePath: firstPath,
+          relativePath: firstRelativePath,
+          duration: 180
+        }),
+        track({
+          id: "long-copy",
+          absolutePath: secondPath,
+          relativePath: secondRelativePath,
+          duration: 240
+        })
+      ],
+      settings({
+        libraryPath: root,
+        mode: "spotifybu"
+      })
+    );
+
+    assert.equal(plan.summary.ready, 0);
+    assert.equal(plan.summary.duplicateTargets, 0);
+    assert.equal(plan.summary.conflicts, 2);
+    assert.deepEqual(new Set(plan.items.map((item) => item.status)), new Set(["conflict"]));
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 function settings(overrides: Partial<PrivateSettings["naming"]> = {}): PrivateSettings {
   const libraryPath = overrides.libraryPath ?? path.resolve("C:/music");
 
