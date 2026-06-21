@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { TrackFile } from "../src/shared/types.js";
-import { buildOrganizePlan, targetForTrack } from "../src/server/organizer.js";
+import { buildOrganizePlan, targetForTrack, trashOrganizeCandidate } from "../src/server/organizer.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 
 const lidarrTrackFormat =
@@ -148,7 +148,10 @@ test("duplicate source blocked by an existing organized target does not count as
 
     assert.equal(plan.summary.conflicts, 0);
     assert.equal(plan.summary.duplicateTargets, 1);
-    assert.equal(plan.items.find((item) => item.id === "copy")?.status, "duplicate-target");
+    const duplicateItem = plan.items.find((item) => item.id === "copy");
+    assert.equal(duplicateItem?.status, "duplicate-target");
+    assert.equal(duplicateItem?.collision?.duplicateKeyMatches, true);
+    assert.equal(duplicateItem?.collision?.candidates.length, 2);
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }
@@ -233,6 +236,63 @@ test("target collisions that duplicate cleanup cannot match still count as confl
     assert.equal(plan.summary.duplicateTargets, 0);
     assert.equal(plan.summary.conflicts, 2);
     assert.deepEqual(new Set(plan.items.map((item) => item.status)), new Set(["conflict"]));
+    assert.equal(plan.items[0]?.collision?.duplicateKeyMatches, false);
+    assert.equal(plan.items[0]?.collision?.candidates.length, 2);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("trashing an organize collision candidate recycles the file and refreshes the plan", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const targetRelativePath = "Artist/Artist - Album - 2026 - Album Name/0103 - Track.mp3";
+    const sourceRelativePath = "Unsorted/Track Copy.mp3";
+    const targetPath = path.join(root, ...targetRelativePath.split("/"));
+    const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
+    const testSettings = settings({
+      libraryPath: root,
+      mode: "spotifybu"
+    });
+    const tracks = [
+      track({
+        id: "organized",
+        absolutePath: targetPath,
+        relativePath: targetRelativePath,
+        duration: 180,
+        size: 20
+      }),
+      track({
+        id: "copy",
+        absolutePath: sourcePath,
+        relativePath: sourceRelativePath,
+        duration: 240,
+        size: 10
+      })
+    ];
+
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(targetPath, "audio-one");
+    await fs.writeFile(sourcePath, "audio-two");
+
+    const plan = await buildOrganizePlan(tracks, testSettings);
+    const sourceItem = plan.items.find((item) => item.id === "copy");
+    const targetCandidate = sourceItem?.collision?.candidates.find((candidate) => candidate.trackId === "organized");
+
+    assert.equal(sourceItem?.status, "conflict");
+    assert.ok(targetCandidate);
+
+    const result = await trashOrganizeCandidate(testSettings, tracks, "copy", targetCandidate.id);
+
+    await assert.rejects(fs.access(targetPath), /ENOENT/);
+    await fs.access(sourcePath);
+    assert.equal(result.trashed, 1);
+    assert.deepEqual(result.removedTrackIds, ["organized"]);
+    assert.deepEqual(result.tracks.map((resultTrack) => resultTrack.id), ["copy"]);
+    assert.equal(result.plan.summary.conflicts, 0);
+    assert.equal(result.plan.summary.ready, 1);
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }

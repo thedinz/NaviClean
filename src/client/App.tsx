@@ -28,7 +28,9 @@ import type {
   LibraryStats,
   NamingMode,
   OrganizeApplyResult,
+  OrganizeCollisionCandidate,
   OrganizePlan,
+  OrganizeTrashResult,
   ScanStatus,
   SettingsView,
   TrackFile
@@ -521,7 +523,7 @@ function DuplicatesPage({
                   <span>{albumReleaseLabel(track)}</span>
                   <span>{track.relativePath}</span>
                 </div>
-                <em>{formatBytes(track.size)}</em>
+                <em>{qualitySummary(track)}</em>
               </label>
             ))}
           </div>
@@ -539,6 +541,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
   const [pageIndex, setPageIndex] = useState(0);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
+  const [trashBusyKey, setTrashBusyKey] = useState<string | null>(null);
   const organizeItems = plan?.items || [];
   const filterCounts = useMemo(() => countOrganizePreviewFilters(organizeItems), [organizeItems]);
   const filteredItems = useMemo(
@@ -610,6 +613,30 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
     }
   };
 
+  const trashCandidate = async (item: OrganizePreviewItem, candidate: OrganizeCollisionCandidate) => {
+    if (!window.confirm(`Move ${candidate.relativePath} to the recycle bin?`)) {
+      return;
+    }
+
+    setTrashBusyKey(`${item.id}:${candidate.id}`);
+    setNotice(null);
+    setApplyErrors([]);
+
+    try {
+      const result = await api<OrganizeTrashResult>("/organize/trash", {
+        method: "POST",
+        body: JSON.stringify({ itemId: item.id, candidateId: candidate.id })
+      });
+      setNotice(`${result.trashed} moved to recycle bin. Preview refreshed.`);
+      showPlan(result.plan);
+      await onChanged();
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setTrashBusyKey(null);
+    }
+  };
+
   return (
     <section className="panel">
       <div className="notice-bar safety">
@@ -635,8 +662,10 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
           </button>
         </div>
       </div>
-      {(previewBusy || applyBusy) && (
-        <ActionProgress label={applyBusy ? "Applying organization plan" : "Building organization preview"} />
+      {(previewBusy || applyBusy || trashBusyKey) && (
+        <ActionProgress
+          label={trashBusyKey ? "Moving file to recycle bin" : applyBusy ? "Applying organization plan" : "Building organization preview"}
+        />
       )}
       {notice && <div className="notice-bar">{notice}</div>}
       {applyErrors.length > 0 && (
@@ -701,6 +730,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
                     <th>Change</th>
                     <th>Source</th>
                     <th>Target</th>
+                    <th>Resolve</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -722,6 +752,17 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
                           item.message
                         )}
                       </td>
+                      <td>
+                        {item.collision ? (
+                          <CollisionCandidates
+                            item={item}
+                            busyKey={trashBusyKey}
+                            onTrash={trashCandidate}
+                          />
+                        ) : (
+                          <span className="muted">-</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -731,6 +772,47 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
         </>
       )}
     </section>
+  );
+}
+
+function CollisionCandidates({
+  item,
+  busyKey,
+  onTrash
+}: {
+  item: OrganizePreviewItem;
+  busyKey: string | null;
+  onTrash: (item: OrganizePreviewItem, candidate: OrganizeCollisionCandidate) => Promise<void>;
+}) {
+  const candidates = item.collision?.candidates || [];
+
+  return (
+    <div className="collision-candidates">
+      {candidates.map((candidate) => {
+        const candidateBusyKey = `${item.id}:${candidate.id}`;
+        const busy = busyKey === candidateBusyKey;
+
+        return (
+          <div className="collision-candidate" key={candidate.id}>
+            <div>
+              <strong>{collisionRoleLabel(candidate)}</strong>
+              <span>{candidate.relativePath}</span>
+              <span>{qualitySummary(candidate)}</span>
+            </div>
+            <button
+              className="danger-button compact"
+              type="button"
+              onClick={() => onTrash(item, candidate)}
+              disabled={Boolean(busyKey)}
+              title={`Move ${candidate.relativePath} to recycle bin`}
+            >
+              {busy ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
+              <span>{busy ? "Moving" : "Trash"}</span>
+            </button>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1165,7 +1247,7 @@ function TrackTable({ tracks }: { tracks: TrackFile[] }) {
               <td>{track.targetRelativePath}</td>
               <td>
                 <span className="quality-pill">
-                  {track.extension.replace(".", "").toUpperCase()} {track.bitrate ? `${Math.round(track.bitrate / 1000)}k` : ""}
+                  {qualitySummary(track)}
                 </span>
               </td>
             </tr>
@@ -1369,6 +1451,34 @@ function albumReleaseLabel(track: TrackFile) {
   return [track.albumType, track.year || "Unknown Year", track.album].filter(Boolean).join(" - ");
 }
 
+function collisionRoleLabel(candidate: OrganizeCollisionCandidate) {
+  if (candidate.role === "source") {
+    return "Source file";
+  }
+
+  if (candidate.role === "existing-target") {
+    return "Existing target";
+  }
+
+  return "Same target";
+}
+
+function qualitySummary(file: TrackFile | OrganizeCollisionCandidate) {
+  const extension = file.extension ? file.extension.replace(".", "").toUpperCase() : "FILE";
+  const qualityParts = [
+    extension,
+    file.lossless ? "lossless" : "",
+    file.bitrate ? `${Math.round(file.bitrate / 1000)}k` : "",
+    file.sampleRate ? `${Math.round(file.sampleRate / 1000)}kHz` : "",
+    file.bitsPerSample ? `${file.bitsPerSample}-bit` : "",
+    file.duration ? formatDuration(file.duration) : "",
+    typeof file.size === "number" ? formatBytes(file.size) : "",
+    typeof file.qualityScore === "number" ? `score ${Math.round(file.qualityScore)}` : ""
+  ];
+
+  return qualityParts.filter(Boolean).join(" / ");
+}
+
 function diffText(value: string, compareTo: string) {
   if (!compareTo || value === compareTo) {
     return [{ text: value, changed: false }];
@@ -1409,5 +1519,12 @@ function formatBytes(value: number) {
     unit += 1;
   }
   return `${size.toFixed(size >= 10 ? 0 : 1)} ${units[unit]}`;
+}
+
+function formatDuration(value: number) {
+  const seconds = Math.max(0, Math.round(value));
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 }
 

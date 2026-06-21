@@ -141,6 +141,37 @@ export type OrganizePlanItem = {
   targetRelativePath: string;
   status: "ready" | "same" | "duplicate-target" | "conflict" | "outside-library" | "missing-source";
   message: string;
+  collision?: OrganizeCollision;
+};
+
+export type OrganizeCollision = {
+  duplicateKeyMatches: boolean;
+  candidates: OrganizeCollisionCandidate[];
+};
+
+export type OrganizeCollisionCandidate = {
+  id: string;
+  trackId: string | null;
+  role: "source" | "same-target" | "existing-target";
+  absolutePath: string;
+  relativePath: string;
+  targetRelativePath: string;
+  artist: string;
+  albumArtist: string;
+  album: string;
+  albumType: string;
+  title: string;
+  extension: string;
+  size: number | null;
+  duration: number | null;
+  bitrate: number | null;
+  sampleRate: number | null;
+  bitsPerSample: number | null;
+  codec: string | null;
+  container: string | null;
+  lossless: boolean;
+  qualityScore: number | null;
+  duplicateKey: string;
 };
 
 export type OrganizePlan = {
@@ -160,6 +191,12 @@ export type OrganizeApplyResult = {
   errors: string[];
   items: Array<OrganizePlanItem & { applied: boolean }>;
   plan?: OrganizePlan;
+};
+
+export type OrganizeTrashResult = {
+  trashed: number;
+  removedTrackIds: string[];
+  plan: OrganizePlan;
 };
 
 export type DuplicateResolveResult = {
