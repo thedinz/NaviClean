@@ -1,6 +1,8 @@
 import {
   Activity,
   Check,
+  ChevronLeft,
+  ChevronRight,
   CircleAlert,
   CopyX,
   Database,
@@ -25,6 +27,7 @@ import type {
   DuplicateGroup,
   LibraryStats,
   NamingMode,
+  OrganizeApplyResult,
   OrganizePlan,
   ScanStatus,
   SettingsView,
@@ -34,6 +37,10 @@ import { api } from "./api";
 import { appVersion } from "./version";
 
 type Page = "dashboard" | "library" | "duplicates" | "organize" | "settings";
+type OrganizePreviewFilter = "attention" | "ready" | "conflict" | "missing" | "same" | "all";
+type OrganizePreviewItem = OrganizePlan["items"][number];
+
+const organizePreviewPageSize = 150;
 
 const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
@@ -47,6 +54,15 @@ const namingModes: Array<{ id: NamingMode; label: string }> = [
   { id: "spotifybu", label: "SpotifyBU" },
   { id: "lidarr", label: "Lidarr" },
   { id: "manual", label: "Manual" }
+];
+
+const organizePreviewFilters: Array<{ id: OrganizePreviewFilter; label: string }> = [
+  { id: "attention", label: "Needs action" },
+  { id: "ready", label: "Ready" },
+  { id: "conflict", label: "Conflicts" },
+  { id: "missing", label: "Missing" },
+  { id: "same", label: "Organized" },
+  { id: "all", label: "All" }
 ];
 
 const spotifyBuNamingDefaults = {
@@ -220,7 +236,9 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
 
         {page === "dashboard" && <Dashboard stats={stats} scan={scan} />}
         {page === "library" && <LibraryPage />}
-        {page === "duplicates" && <DuplicatesPage stats={stats} onChanged={refreshStats} />}
+        {page === "duplicates" && (
+          <DuplicatesPage stats={stats} onChanged={refreshStats} onOpenOrganize={() => setPage("organize")} />
+        )}
         {page === "organize" && <OrganizePage onChanged={refreshStats} />}
         {page === "settings" && <SettingsPage onAuthChange={onAuthChange} />}
         <VersionFooter />
@@ -380,7 +398,15 @@ function LibraryPage() {
   );
 }
 
-function DuplicatesPage({ stats, onChanged }: { stats: LibraryStats | null; onChanged: () => Promise<void> }) {
+function DuplicatesPage({
+  stats,
+  onChanged,
+  onOpenOrganize
+}: {
+  stats: LibraryStats | null;
+  onChanged: () => Promise<void>;
+  onOpenOrganize: () => void;
+}) {
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
   const [keepIds, setKeepIds] = useState<Record<string, string>>({});
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -447,6 +473,12 @@ function DuplicatesPage({ stats, onChanged }: { stats: LibraryStats | null; onCh
             </span>
           )}
         </div>
+        <div className="button-row">
+          <button className="secondary-button" type="button" onClick={onOpenOrganize}>
+            <FolderInput size={18} />
+            <span>Review blockers</span>
+          </button>
+        </div>
         <EmptyState icon={LockKeyhole} title="Finish organization first" />
       </section>
     );
@@ -501,17 +533,43 @@ function DuplicatesPage({ stats, onChanged }: { stats: LibraryStats | null; onCh
 function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
   const [plan, setPlan] = useState<OrganizePlan | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [applyErrors, setApplyErrors] = useState<string[]>([]);
+  const [organizeFilter, setOrganizeFilter] = useState<OrganizePreviewFilter>("attention");
+  const [pageIndex, setPageIndex] = useState(0);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
+  const organizeItems = plan?.items || [];
+  const filterCounts = useMemo(() => countOrganizePreviewFilters(organizeItems), [organizeItems]);
+  const filteredItems = useMemo(
+    () => organizeItems.filter((item) => organizePreviewItemMatchesFilter(item, organizeFilter)),
+    [organizeFilter, organizeItems]
+  );
+  const pageCount = Math.max(1, Math.ceil(filteredItems.length / organizePreviewPageSize));
+  const currentPage = Math.min(pageIndex, pageCount - 1);
+  const pageStart = currentPage * organizePreviewPageSize;
+  const pageItems = filteredItems.slice(pageStart, pageStart + organizePreviewPageSize);
+  const firstVisibleItem = filteredItems.length === 0 ? 0 : pageStart + 1;
+  const lastVisibleItem = Math.min(filteredItems.length, pageStart + pageItems.length);
+  const pageRangeLabel =
+    filteredItems.length === 0
+      ? "0 of 0"
+      : `${firstVisibleItem.toLocaleString()}-${lastVisibleItem.toLocaleString()} of ${filteredItems.length.toLocaleString()}`;
+
+  const showPlan = (nextPlan: OrganizePlan) => {
+    setPlan(nextPlan);
+    setPageIndex(0);
+    setOrganizeFilter((current) => selectOrganizeFilterAfterRefresh(current, nextPlan));
+  };
 
   const load = async ({ clearNotice = true }: { clearNotice?: boolean } = {}) => {
     setPreviewBusy(true);
     if (clearNotice) {
       setNotice(null);
+      setApplyErrors([]);
     }
 
     try {
-      setPlan(await api<OrganizePlan>("/organize/preview", { method: "POST" }));
+      showPlan(await api<OrganizePlan>("/organize/preview", { method: "POST" }));
     } catch (caught) {
       setNotice((caught as Error).message);
     } finally {
@@ -530,10 +588,19 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
 
     setApplyBusy(true);
     setNotice(null);
+    setApplyErrors([]);
     try {
-      const result = await api<{ moved: number; skipped: number; errors: string[] }>("/organize/apply", { method: "POST" });
-      setNotice(`${result.moved} moved, ${result.skipped} skipped`);
-      await load({ clearNotice: false });
+      const result = await api<OrganizeApplyResult>("/organize/apply", { method: "POST" });
+      const errorSuffix = result.errors.length ? `, ${result.errors.length} errors` : "";
+      setNotice(`${result.moved} moved, ${result.skipped} skipped${errorSuffix}. Preview refreshed.`);
+      setApplyErrors(result.errors);
+
+      if (result.plan) {
+        showPlan(result.plan);
+      } else {
+        await load({ clearNotice: false });
+      }
+
       await onChanged();
     } catch (caught) {
       setNotice((caught as Error).message);
@@ -570,37 +637,97 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
         <ActionProgress label={applyBusy ? "Applying organization plan" : "Building organization preview"} />
       )}
       {notice && <div className="notice-bar">{notice}</div>}
+      {applyErrors.length > 0 && (
+        <div className="error-list">
+          {applyErrors.slice(0, 8).map((error) => (
+            <span key={error}>{error}</span>
+          ))}
+          {applyErrors.length > 8 && <span>{applyErrors.length - 8} more errors</span>}
+        </div>
+      )}
       {!previewBusy && !plan && <EmptyState icon={FolderInput} title="No preview loaded" />}
-      {plan && <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Change</th>
-              <th>Source</th>
-              <th>Target</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(plan?.items || []).slice(0, 150).map((item) => (
-              <tr key={item.id}>
-                <td>
-                  <StatusPill active={item.status === "ready"} label={organizeChangeLabel(item)} />
-                </td>
-                <td>
-                  <PathDiff value={item.sourceRelativePath} compareTo={item.targetRelativePath} />
-                </td>
-                <td>
-                  {item.targetRelativePath ? (
-                    <PathDiff value={item.targetRelativePath} compareTo={item.sourceRelativePath} />
-                  ) : (
-                    item.message
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>}
+      {plan && (
+        <>
+          <div className="organize-preview-tools">
+            <div className="segmented-control organize-filter" role="radiogroup" aria-label="Preview status">
+              {organizePreviewFilters.map((filter) => (
+                <button
+                  key={filter.id}
+                  className={organizeFilter === filter.id ? "active" : ""}
+                  type="button"
+                  role="radio"
+                  aria-checked={organizeFilter === filter.id}
+                  onClick={() => {
+                    setOrganizeFilter(filter.id);
+                    setPageIndex(0);
+                  }}
+                >
+                  <span>{filter.label}</span>
+                  <strong>{filterCounts[filter.id].toLocaleString()}</strong>
+                </button>
+              ))}
+            </div>
+            <div className="pagination-controls" aria-label="Preview pages">
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => setPageIndex((current) => Math.max(0, current - 1))}
+                disabled={currentPage === 0}
+                title="Previous page"
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <span>{pageRangeLabel}</span>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => setPageIndex((current) => Math.min(pageCount - 1, current + 1))}
+                disabled={currentPage >= pageCount - 1}
+                title="Next page"
+              >
+                <ChevronRight size={18} />
+              </button>
+            </div>
+          </div>
+          {filteredItems.length === 0 ? (
+            <EmptyState icon={Check} title="No preview items" />
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Change</th>
+                    <th>Source</th>
+                    <th>Target</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageItems.map((item) => (
+                    <tr key={item.id}>
+                      <td>
+                        <StatusPill active={item.status === "ready"} label={organizeChangeLabel(item)} />
+                        {item.status !== "ready" && item.status !== "same" && (
+                          <span className="status-detail">{item.message}</span>
+                        )}
+                      </td>
+                      <td>
+                        <PathDiff value={item.sourceRelativePath} compareTo={item.targetRelativePath} />
+                      </td>
+                      <td>
+                        {item.targetRelativePath ? (
+                          <PathDiff value={item.targetRelativePath} compareTo={item.sourceRelativePath} />
+                        ) : (
+                          item.message
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
     </section>
   );
 }
@@ -1107,6 +1234,75 @@ function VersionFooter() {
 
 function StatusPill({ active, label }: { active: boolean; label: string }) {
   return <span className={active ? "status-pill active" : "status-pill"}>{label}</span>;
+}
+
+function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {
+  const counts: Record<OrganizePreviewFilter, number> = {
+    attention: 0,
+    ready: 0,
+    conflict: 0,
+    missing: 0,
+    same: 0,
+    all: 0
+  };
+
+  for (const item of items) {
+    counts.all += 1;
+
+    if (item.status === "same") {
+      counts.same += 1;
+    } else {
+      counts.attention += 1;
+    }
+
+    if (item.status === "ready") {
+      counts.ready += 1;
+    }
+
+    if (item.status === "conflict" || item.status === "outside-library") {
+      counts.conflict += 1;
+    }
+
+    if (item.status === "missing-source") {
+      counts.missing += 1;
+    }
+  }
+
+  return counts;
+}
+
+function organizePreviewItemMatchesFilter(item: OrganizePreviewItem, filter: OrganizePreviewFilter) {
+  if (filter === "all") {
+    return true;
+  }
+
+  if (filter === "attention") {
+    return item.status !== "same";
+  }
+
+  if (filter === "conflict") {
+    return item.status === "conflict" || item.status === "outside-library";
+  }
+
+  if (filter === "missing") {
+    return item.status === "missing-source";
+  }
+
+  return item.status === filter;
+}
+
+function selectOrganizeFilterAfterRefresh(current: OrganizePreviewFilter, plan: OrganizePlan) {
+  const counts = countOrganizePreviewFilters(plan.items);
+
+  if (counts[current] > 0) {
+    return current;
+  }
+
+  if (counts.attention > 0) {
+    return "attention";
+  }
+
+  return "all";
 }
 
 function organizeChangeLabel(item: OrganizePlan["items"][number]) {

@@ -158,6 +158,7 @@ export type OrganizeApplyResult = {
   skipped: number;
   errors: string[];
   items: Array<OrganizePlanItem & { applied: boolean }>;
+  plan?: OrganizePlan;
 };
 
 export type DuplicateResolveResult = {
