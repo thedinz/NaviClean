@@ -176,10 +176,11 @@ app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
   const settings = await loadSettingsForPlanning();
   const plan = await buildOrganizePlan(catalog.tracks, settings);
   const result = await applyOrganizePlan(plan);
+  let tracks = catalog.tracks;
 
   if (result.moved > 0) {
     const movedById = new Map(result.items.filter((item) => item.applied).map((item) => [item.id, item]));
-    const tracks = catalog.tracks.map((track) => {
+    tracks = catalog.tracks.map((track) => {
       const moved = movedById.get(track.id);
       if (!moved) {
         return track;
@@ -195,7 +196,7 @@ app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
     await saveCatalog(tracks);
   }
 
-  res.json(result);
+  res.json({ ...result, plan: await buildOrganizePlan(tracks, settings) });
 }));
 
 app.post("/api/duplicates/resolve", asyncHandler(async (req, res) => {
