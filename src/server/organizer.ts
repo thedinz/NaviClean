@@ -1,6 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OrganizeApplyResult, OrganizePlan, OrganizePlanItem, TrackFile } from "../shared/types.js";
+import type { Stats } from "node:fs";
+import type {
+  OrganizeApplyResult,
+  OrganizeCollision,
+  OrganizeCollisionCandidate,
+  OrganizePlan,
+  OrganizePlanItem,
+  OrganizeTrashResult,
+  TrackFile
+} from "../shared/types.js";
 import { duplicateKeyForTrack } from "./matching.js";
 import type { PrivateSettings } from "./settings.js";
 import { isInsidePath, toPosixRelative } from "./utils.js";
@@ -11,6 +20,13 @@ const combiningMarks = /[\u0300-\u036f]/g;
 const reservedWindowsNames = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 const lidarrBadCharacters = ["\\", "/", "<", ">", "?", "*", "|", "\""];
 const lidarrReplacementCharacters = ["+", "+", "", "", "!", "-", "", ""];
+
+type PlannedOrganizeItem = {
+  item: OrganizePlanItem;
+  target: ReturnType<typeof targetForTrack>;
+  targetKey: string;
+  track: TrackFile;
+};
 
 export function targetForTrack(track: TrackFile, settings: PrivateSettings) {
   const root = path.resolve(settings.naming.libraryPath);
@@ -38,7 +54,7 @@ export function targetForTrack(track: TrackFile, settings: PrivateSettings) {
 
 export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSettings): Promise<OrganizePlan> {
   const items: OrganizePlanItem[] = [];
-  const plannedItems = tracks.map((track) => {
+  const plannedItems: PlannedOrganizeItem[] = tracks.map((track) => {
     const target = targetForTrack(track, settings);
     const item: OrganizePlanItem = {
       id: track.id,
@@ -58,7 +74,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     };
   });
   const tracksBySourcePath = new Map(tracks.map((track) => [path.resolve(track.absolutePath), track]));
-  const plannedItemsByTargetPath = new Map<string, typeof plannedItems>();
+  const plannedItemsByTargetPath = new Map<string, PlannedOrganizeItem[]>();
 
   for (const planned of plannedItems) {
     const targetGroup = plannedItemsByTargetPath.get(planned.targetKey) || [];
@@ -69,6 +85,18 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
   for (const planned of plannedItems) {
     const { item, target, targetKey, track } = planned;
     const targetGroup = plannedItemsByTargetPath.get(targetKey) || [];
+    const targetStat = target.outsideLibrary ? null : await statIfExists(target.targetPath);
+    const collision = buildCollision(
+      track,
+      target,
+      targetGroup,
+      tracksBySourcePath.get(targetKey),
+      targetStat
+    );
+
+    if (collision) {
+      item.collision = collision;
+    }
 
     if (target.outsideLibrary) {
       item.status = "outside-library";
@@ -79,10 +107,10 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     } else if (!(await pathExists(track.absolutePath))) {
       item.status = "missing-source";
       item.message = "Source file is missing";
-    } else if (isDuplicateTargetCollision(track, targetGroup, tracksBySourcePath.get(targetKey))) {
+    } else if (collision?.duplicateKeyMatches) {
       item.status = "duplicate-target";
       item.message = "Target is shared by duplicate candidates";
-    } else if ((await pathExists(target.targetPath)) && path.resolve(track.absolutePath) !== path.resolve(target.targetPath)) {
+    } else if (targetStat && path.resolve(track.absolutePath) !== path.resolve(target.targetPath)) {
       item.status = "conflict";
       item.message = "Target already exists";
     } else if (targetGroup.length > 1) {
@@ -105,34 +133,127 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
   };
 }
 
-function isDuplicateTargetCollision(
+function buildCollision(
   track: TrackFile,
-  targetGroup: Array<{ track: TrackFile }>,
-  existingTargetTrack: TrackFile | undefined
-) {
-  const tracksSharingTarget = new Map<string, TrackFile>();
+  target: ReturnType<typeof targetForTrack>,
+  targetGroup: PlannedOrganizeItem[],
+  existingTargetTrack: TrackFile | undefined,
+  targetStat: Stats | null
+): OrganizeCollision | undefined {
+  const hasTargetCollision = Boolean(targetStat) && path.resolve(track.absolutePath) !== path.resolve(target.targetPath);
+  const hasPlannedCollision = targetGroup.length > 1;
+
+  if (!hasTargetCollision && !hasPlannedCollision) {
+    return undefined;
+  }
+
+  const candidates = new Map<string, OrganizeCollisionCandidate>();
 
   for (const planned of targetGroup) {
-    tracksSharingTarget.set(trackIdentity(planned.track), planned.track);
+    const role = planned.track.id === track.id ? "source" : "same-target";
+    candidates.set(trackIdentity(planned.track), trackToCollisionCandidate(planned.track, role));
   }
 
   if (existingTargetTrack) {
-    tracksSharingTarget.set(trackIdentity(existingTargetTrack), existingTargetTrack);
+    candidates.set(trackIdentity(existingTargetTrack), trackToCollisionCandidate(existingTargetTrack, "existing-target"));
+  } else if (targetStat && target.targetRelativePath) {
+    const fileCandidate = fileToCollisionCandidate(target, targetStat);
+    candidates.set(fileCandidate.id, fileCandidate);
   }
 
-  if (tracksSharingTarget.size < 2) {
-    return false;
+  if (candidates.size < 2) {
+    return undefined;
   }
 
-  const duplicateKey = duplicateKeyForTrack(track);
+  const candidateList = Array.from(candidates.values());
+  const duplicateKeys = new Set(candidateList.map((candidate) => candidate.duplicateKey).filter(Boolean));
+  const duplicateKeyMatches =
+    duplicateKeys.size === 1 &&
+    candidateList.every((candidate) => Boolean(candidate.trackId) && candidate.duplicateKey === duplicateKeyForTrack(track));
 
-  return Boolean(duplicateKey) && Array.from(tracksSharingTarget.values()).every(
-    (candidate) => duplicateKeyForTrack(candidate) === duplicateKey
-  );
+  return {
+    duplicateKeyMatches,
+    candidates: candidateList.sort(compareCollisionCandidates)
+  };
 }
 
 function trackIdentity(track: TrackFile) {
   return `${track.id}:${path.resolve(track.absolutePath)}`;
+}
+
+function trackToCollisionCandidate(track: TrackFile, role: OrganizeCollisionCandidate["role"]): OrganizeCollisionCandidate {
+  return {
+    id: `track:${track.id}`,
+    trackId: track.id,
+    role,
+    absolutePath: track.absolutePath,
+    relativePath: track.relativePath,
+    targetRelativePath: track.targetRelativePath,
+    artist: track.artist,
+    albumArtist: track.albumArtist,
+    album: track.album,
+    albumType: track.albumType,
+    title: track.title,
+    extension: track.extension,
+    size: track.size,
+    duration: track.duration,
+    bitrate: track.bitrate,
+    sampleRate: track.sampleRate,
+    bitsPerSample: track.bitsPerSample,
+    codec: track.codec,
+    container: track.container,
+    lossless: track.lossless,
+    qualityScore: track.qualityScore,
+    duplicateKey: duplicateKeyForTrack(track)
+  };
+}
+
+function fileToCollisionCandidate(target: ReturnType<typeof targetForTrack>, stat: Stats): OrganizeCollisionCandidate {
+  const parsed = path.parse(target.targetPath);
+
+  return {
+    id: `file:${target.targetRelativePath}`,
+    trackId: null,
+    role: "existing-target",
+    absolutePath: target.targetPath,
+    relativePath: target.targetRelativePath,
+    targetRelativePath: target.targetRelativePath,
+    artist: "",
+    albumArtist: "",
+    album: "",
+    albumType: "",
+    title: parsed.name,
+    extension: parsed.ext,
+    size: stat.size,
+    duration: null,
+    bitrate: null,
+    sampleRate: null,
+    bitsPerSample: null,
+    codec: null,
+    container: null,
+    lossless: false,
+    qualityScore: null,
+    duplicateKey: ""
+  };
+}
+
+function compareCollisionCandidates(left: OrganizeCollisionCandidate, right: OrganizeCollisionCandidate) {
+  const roleOrder: Record<OrganizeCollisionCandidate["role"], number> = {
+    source: 0,
+    "existing-target": 1,
+    "same-target": 2
+  };
+  const roleDifference = roleOrder[left.role] - roleOrder[right.role];
+
+  if (roleDifference !== 0) {
+    return roleDifference;
+  }
+
+  if ((right.qualityScore ?? -1) !== (left.qualityScore ?? -1)) {
+    return (right.qualityScore ?? -1) - (left.qualityScore ?? -1);
+  }
+
+  return (right.size ?? 0) - (left.size ?? 0);
 }
 
 export async function applyOrganizePlan(plan: OrganizePlan): Promise<OrganizeApplyResult> {
@@ -162,6 +283,63 @@ export async function applyOrganizePlan(plan: OrganizePlan): Promise<OrganizeApp
   }
 
   return result;
+}
+
+export async function trashOrganizeCandidate(
+  settings: PrivateSettings,
+  tracks: TrackFile[],
+  itemId: string,
+  candidateId: string
+): Promise<OrganizeTrashResult & { tracks: TrackFile[] }> {
+  const plan = await buildOrganizePlan(tracks, settings);
+  const item = plan.items.find((candidateItem) => candidateItem.id === itemId);
+  const candidate = item?.collision?.candidates.find((collisionCandidate) => collisionCandidate.id === candidateId);
+
+  if (!item || !candidate) {
+    throw new Error("This organize blocker is no longer valid. Refresh the preview and try again.");
+  }
+
+  const sourcePath = path.resolve(candidate.absolutePath);
+  const libraryRoot = path.resolve(settings.naming.libraryPath);
+
+  if (!isInsidePath(libraryRoot, sourcePath)) {
+    throw new Error("Only files inside the configured library can be recycled from organize.");
+  }
+
+  if (!(await pathExists(sourcePath))) {
+    throw new Error(`${candidate.relativePath} is already missing. Scan or refresh before continuing.`);
+  }
+
+  const trashRoot = path.resolve(settings.naming.recycleBinPath);
+  const trashPath = path.join(trashRoot, new Date().toISOString().replace(/[:.]/g, "-"), candidate.relativePath);
+  await fs.mkdir(path.dirname(trashPath), { recursive: true });
+  await moveFile(sourcePath, trashPath);
+
+  const removedTrackIds = new Set<string>();
+
+  if (candidate.trackId) {
+    removedTrackIds.add(candidate.trackId);
+  }
+
+  const nextTracks = tracks.filter((track) => {
+    if (removedTrackIds.has(track.id)) {
+      return false;
+    }
+
+    if (path.resolve(track.absolutePath) === sourcePath) {
+      removedTrackIds.add(track.id);
+      return false;
+    }
+
+    return true;
+  });
+
+  return {
+    trashed: 1,
+    removedTrackIds: Array.from(removedTrackIds),
+    tracks: nextTracks,
+    plan: await buildOrganizePlan(nextTracks, settings)
+  };
 }
 
 export function trackNeedsMove(track: TrackFile) {
@@ -592,6 +770,18 @@ async function pathExists(filePath: string) {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function statIfExists(filePath: string) {
+  try {
+    return await fs.stat(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+
+    throw error;
   }
 }
 

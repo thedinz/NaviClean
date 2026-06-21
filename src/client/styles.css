@@ -359,8 +359,8 @@ legend {
 }
 
 .segmented-control.organize-filter {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  width: min(760px, 100%);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  width: min(880px, 100%);
 }
 
 .segmented-control.organize-filter button {
@@ -535,6 +535,37 @@ td span {
   color: #52605c;
   font-style: normal;
   font-weight: 760;
+}
+
+.collision-candidates {
+  display: grid;
+  gap: 8px;
+  min-width: 280px;
+}
+
+.collision-candidate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px;
+  border: 1px solid #ebe9e2;
+  border-radius: 8px;
+  background: #fbfaf5;
+}
+
+.collision-candidate strong,
+.collision-candidate span {
+  display: block;
+}
+
+.collision-candidate span {
+  overflow-wrap: anywhere;
+}
+
+.danger-button.compact {
+  min-height: 32px;
+  padding: 0 10px;
 }
 
 .error-list,
