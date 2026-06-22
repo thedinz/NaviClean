@@ -126,6 +126,7 @@ export type LibraryArtistSummary = {
   id: string;
   name: string;
   thumbnailLabel: string;
+  artworkUrl: string | null;
   albumCount: number;
   trackCount: number;
   totalSize: number;
@@ -141,6 +142,7 @@ export type LibraryAlbumSummary = {
   albumType: string;
   yearLabel: string;
   thumbnailLabel: string;
+  artworkUrl: string | null;
   trackCount: number;
   totalSize: number;
   duration: number | null;

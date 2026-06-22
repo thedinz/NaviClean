@@ -16,7 +16,7 @@ import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate, trashOrga
 import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin } from "./recycle-bin.js";
 import { scanLibrary } from "./scanner.js";
 import { loadSettings, toSettingsView, updateSettings } from "./settings.js";
-import { testNavidromeConnection } from "./navidrome.js";
+import { fetchNavidromeArtwork, testNavidromeConnection } from "./navidrome.js";
 
 const app = express();
 const port = Number(process.env.PORT || 8080);
@@ -124,6 +124,39 @@ app.get("/api/library/artists", asyncHandler(async (req, res) => {
     artists: buildLibraryArtists(catalog.tracks, String(req.query.search || "")),
     total: catalog.tracks.length
   });
+}));
+
+app.get("/api/library/artwork/:type", asyncHandler(async (req, res) => {
+  const type = String(req.params.type || "");
+  const artist = String(req.query.artist || "").trim();
+  const album = String(req.query.album || "").trim();
+  const year = String(req.query.year || "").trim();
+  const size = clampArtworkSize(Number(req.query.size || 360));
+
+  if (type !== "artist" && type !== "album") {
+    res.status(400).json({ error: "Artwork type must be artist or album." });
+    return;
+  }
+
+  if (!artist || (type === "album" && !album)) {
+    res.status(400).json({ error: "Artwork lookup is missing artist or album metadata." });
+    return;
+  }
+
+  const artwork = await fetchNavidromeArtwork(
+    await loadSettingsForPlanning(),
+    type === "album" ? { type, artist, album, year } : { type, artist },
+    size
+  );
+
+  if (!artwork) {
+    res.status(404).end();
+    return;
+  }
+
+  res.setHeader("Cache-Control", "private, max-age=86400");
+  res.type(artwork.contentType);
+  res.send(artwork.data);
 }));
 
 app.get("/api/library/artists/:artistId/albums", asyncHandler(async (req, res) => {
@@ -428,6 +461,14 @@ function libraryTrashResponse(result: Awaited<ReturnType<typeof trashLibraryTrac
     removedTrackIds: result.removedTrackIds,
     errors: result.errors
   };
+}
+
+function clampArtworkSize(value: number) {
+  if (!Number.isFinite(value)) {
+    return 360;
+  }
+
+  return Math.max(96, Math.min(720, Math.round(value)));
 }
 
 async function runScan() {

@@ -630,10 +630,12 @@ function LibraryArtistGrid({
       {artists.map((artist) => (
         <article className="library-card" key={artist.id}>
           <button className="library-card-main" type="button" onClick={() => onOpen(artist)}>
-            <span className="library-thumb artist-thumb" aria-hidden="true">
-              <UserRound size={22} />
-              <strong>{artist.thumbnailLabel}</strong>
-            </span>
+            <LibraryArtwork
+              className="artist-thumb"
+              icon={UserRound}
+              label={artist.thumbnailLabel}
+              src={artist.artworkUrl}
+            />
             <span className="library-card-copy">
               <strong>{artist.name}</strong>
               <span>{artist.albumCount} {pluralize("album", artist.albumCount)} / {artist.trackCount} {pluralize("track", artist.trackCount)}</span>
@@ -677,10 +679,12 @@ function LibraryAlbumGrid({
       {albums.map((album) => (
         <article className="library-card album-card" key={album.id}>
           <button className="library-card-main" type="button" onClick={() => onOpen(album)}>
-            <span className="library-thumb album-thumb" aria-hidden="true">
-              <AlbumIcon size={22} />
-              <strong>{album.thumbnailLabel}</strong>
-            </span>
+            <LibraryArtwork
+              className="album-thumb"
+              icon={AlbumIcon}
+              label={album.thumbnailLabel}
+              src={album.artworkUrl}
+            />
             <span className="library-card-copy">
               <strong>{album.title}</strong>
               <span>{libraryMeta([album.albumType, album.yearLabel, `${album.trackCount} ${pluralize("track", album.trackCount)}`])}</span>
@@ -701,6 +705,34 @@ function LibraryAlbumGrid({
         </article>
       ))}
     </div>
+  );
+}
+
+function LibraryArtwork({
+  className,
+  icon: Icon,
+  label,
+  src
+}: {
+  className: string;
+  icon: typeof Database;
+  label: string;
+  src: string | null;
+}) {
+  const [failed, setFailed] = useState(false);
+  const showImage = Boolean(src) && !failed;
+
+  return (
+    <span className={`library-thumb ${className}${showImage ? " has-art" : ""}`} aria-hidden="true">
+      {showImage ? (
+        <img src={src || ""} alt="" loading="lazy" onError={() => setFailed(true)} />
+      ) : (
+        <>
+          <Icon size={22} />
+          <strong>{label}</strong>
+        </>
+      )}
+    </span>
   );
 }
 

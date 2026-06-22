@@ -50,6 +50,10 @@ NaviClean uses one selected naming mode at a time:
 
 NaviClean appends the original extension before planning moves. A normal standard target path looks like `Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track`. Missing release years are written as `Unknown Year`. In standard mode, folders that already match the same artist, album, track number, and title are treated as organized even if the year token came from different metadata, keeping NaviClean aligned with SpotifyBU instead of moving files back and forth.
 
+## Library artwork
+
+When Navidrome connection settings are saved, NaviClean uses the local Navidrome Subsonic API to resolve artist and album artwork for Library cards. Artwork is proxied through NaviClean so browser image requests use the existing NaviClean session instead of exposing Navidrome tokens. Cards fall back to generated identity tiles when Navidrome is not configured or does not return artwork.
+
 ## Local development
 
 ```bash
