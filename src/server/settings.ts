@@ -23,10 +23,6 @@ export type PrivateSettings = {
     multiDiscTrackFormat: string;
     replaceIllegalCharacters: boolean;
     colonReplacementFormat: number;
-    lidarr: {
-      baseUrl: string;
-      apiKey: string;
-    };
   };
   scan: {
     extensions: string[];
@@ -47,18 +43,14 @@ const defaultExtensions = [
   ".wma"
 ];
 const defaultNaming = {
-  mode: "spotifybu" as const,
+  mode: "standard" as const,
   libraryPath: process.env.NAVICLEAN_MUSIC_DIR || "/music",
   recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash"),
   artistFolderFormat: "{Album Artist Name}",
-  standardTrackFormat: "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
-  multiDiscTrackFormat: "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
+  standardTrackFormat: "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}",
+  multiDiscTrackFormat: "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}",
   replaceIllegalCharacters: true,
-  colonReplacementFormat: 4,
-  lidarr: {
-    baseUrl: "",
-    apiKey: ""
-  }
+  colonReplacementFormat: 4
 };
 
 const dataDir = process.env.NAVICLEAN_DATA_DIR || path.resolve(process.cwd(), ".data");
@@ -112,11 +104,7 @@ export function toSettingsView(settings: PrivateSettings): SettingsView {
       standardTrackFormat: settings.naming.standardTrackFormat,
       multiDiscTrackFormat: settings.naming.multiDiscTrackFormat,
       replaceIllegalCharacters: settings.naming.replaceIllegalCharacters,
-      colonReplacementFormat: settings.naming.colonReplacementFormat,
-      lidarr: {
-        baseUrl: settings.naming.lidarr.baseUrl,
-        apiKeySet: settings.naming.lidarr.apiKey.length > 0
-      }
+      colonReplacementFormat: settings.naming.colonReplacementFormat
     },
     scan: settings.scan
   };
@@ -223,11 +211,7 @@ function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
 
 function normalizeNamingSettings(
   fallback: PrivateSettings["naming"],
-  partial:
-    | Partial<Omit<PrivateSettings["naming"], "lidarr">> & {
-        lidarr?: Partial<PrivateSettings["naming"]["lidarr"]>;
-      }
-    | undefined
+  partial: Partial<PrivateSettings["naming"]> | undefined
 ) {
   const compacted = compactStringValues(partial ?? {});
   const mode = normalizeNamingMode(compacted.mode, fallback.mode);
@@ -239,14 +223,10 @@ function normalizeNamingSettings(
     ...fallback,
     ...compacted,
     mode,
-    colonReplacementFormat,
-    lidarr: {
-      ...fallback.lidarr,
-      ...compactStringValues(partial?.lidarr ?? {})
-    }
+    colonReplacementFormat
   };
 
-  if (mode === "spotifybu") {
+  if (mode === "standard") {
     return {
       ...merged,
       artistFolderFormat: defaultNaming.artistFolderFormat,
@@ -261,7 +241,19 @@ function normalizeNamingSettings(
 }
 
 function normalizeNamingMode(value: unknown, fallback: NamingMode): NamingMode {
-  return value === "manual" || value === "lidarr" || value === "spotifybu" ? value : fallback;
+  if (value === "standard" || value === "manual") {
+    return value;
+  }
+
+  if (value === "spotifybu") {
+    return "standard";
+  }
+
+  if (value === "lidarr") {
+    return "manual";
+  }
+
+  return fallback;
 }
 
 function normalizeColonReplacementFormat(value: unknown, fallback: number) {

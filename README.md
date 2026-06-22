@@ -1,7 +1,7 @@
 # NaviClean
 
 NaviClean is a Docker-first cleaner and organizer for Navidrome music libraries.
-It scans a mounted music library, previews SpotifyBU-compatible Lidarr artist/album/track paths, and only unlocks duplicate cleanup after organization is complete.
+It scans a mounted music library, previews clean artist/album/track paths, and only unlocks duplicate cleanup after organization is complete.
 
 ## Current defaults
 
@@ -40,16 +40,15 @@ For Unraid, set `PUID=99` and `PGID=100` so NaviClean can write to `/mnt/user/ap
 
 ## Naming model
 
-NaviClean uses one selected naming source at a time:
+NaviClean uses one selected naming mode at a time:
 
-- `SpotifyBU` is the default for fresh installs and uses the same fixed artist/album layout as SpotifyBU:
+- `Standard` is the default for fresh installs and matches SpotifyBU's built-in organizer layout:
   - Artist folder: `{Album Artist Name}`
-  - Standard track: `{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}`
-  - Multi-disc track: `{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}`
-- `Lidarr` stores a Lidarr URL and API key, then loads `artistFolderFormat`, `standardTrackFormat`, `multiDiscTrackFormat`, `replaceIllegalCharacters`, and `colonReplacementFormat` from Lidarr's `/api/v1/config/naming` endpoint. NaviClean refreshes the cached Lidarr naming before settings display, scans, organization previews, organization applies, and duplicate-unlock workflow checks. If Lidarr is temporarily unavailable, NaviClean keeps using the last cached naming config.
-- `Manual` keeps the editable NaviClean templates for users who want to define their own folder and file layout.
+  - Standard track: `{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}`
+  - Multi-disc track: `{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}`
+- `Manual` keeps the editable templates for users who want to define their own folder and file layout.
 
-NaviClean appends the original extension before planning moves. A normal SpotifyBU target path with a known album type looks like `Artist/Artist - Album - 2026 - Album Name/0103 - Track`. If album type cannot be detected from tags or an existing Lidarr-shaped folder, NaviClean omits that segment, for example `Artist/Artist - 2026 - Album Name/0103 - Track`. Missing release years are written as `Unknown Year`, and missing disc numbers default to disc `01` for the SpotifyBU filename prefix.
+NaviClean appends the original extension before planning moves. A normal standard target path looks like `Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track`. Missing release years are written as `Unknown Year`. In standard mode, folders that already match the same artist, album, track number, and title are treated as organized even if the year token came from different metadata, keeping NaviClean aligned with SpotifyBU instead of moving files back and forth.
 
 ## Local development
 
@@ -66,5 +65,4 @@ Cleanup is staged: scan first, organize second, then review duplicates. Duplicat
 
 ## References
 
-- Lidarr naming settings: <https://wiki.servarr.com/lidarr/settings>
 - Navidrome Subsonic API compatibility: <https://www.navidrome.org/docs/developers/subsonic-api/>

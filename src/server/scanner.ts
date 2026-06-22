@@ -228,17 +228,17 @@ function inferMetadataFromPath(relativePath: string): InferredMetadata {
   const folderSegments = parsedPath.dir.split("/").filter(Boolean);
   const folderName = folderSegments.at(-1);
   const parentArtistFolderName = folderSegments.at(-2);
-  const lidarrFolder = parseLidarrAlbumDirectory(parsedPath.dir);
+  const structuredFolder = parseStructuredAlbumDirectory(parsedPath.dir);
   const artistAlbumFolder = folderName?.match(/^(?<artist>.+?)\s+-\s+(?<album>.+)$/);
-  const hasFolderIdentity = Boolean(lidarrFolder || artistAlbumFolder || (folderName && parentArtistFolderName));
+  const hasFolderIdentity = Boolean(structuredFolder || artistAlbumFolder || (folderName && parentArtistFolderName));
   const filename = inferMetadataFromFilename(parsedPath.name, !hasFolderIdentity);
   const albumArtist =
-    lidarrFolder?.artist ??
+    structuredFolder?.artist ??
     artistAlbumFolder?.groups?.artist?.trim() ??
     (folderName && parentArtistFolderName ? parentArtistFolderName : undefined) ??
     filename.artist;
   const album =
-    lidarrFolder?.album ??
+    structuredFolder?.album ??
     artistAlbumFolder?.groups?.album?.trim() ??
     (folderName && parentArtistFolderName ? folderName : undefined) ??
     filename.album;
@@ -246,12 +246,12 @@ function inferMetadataFromPath(relativePath: string): InferredMetadata {
   return {
     album,
     albumArtist,
-    albumType: lidarrFolder?.albumType,
+    albumType: structuredFolder?.albumType,
     artist: filename.artist ?? albumArtist,
     discNumber: filename.discNumber,
     title: filename.title,
     trackNumber: filename.trackNumber,
-    year: lidarrFolder?.year ?? undefined
+    year: structuredFolder?.year ?? undefined
   };
 }
 
@@ -305,12 +305,12 @@ function cleanTrackFileName(value: string) {
 }
 
 function inferTrackNumbersFromFileName(value: string) {
-  const lidarrMatch = value.match(/^\s*(?<medium>\d{2})(?<track>\d{2})\s*[-_. ]+/);
+  const combinedDiscTrackMatch = value.match(/^\s*(?<medium>\d{2})(?<track>\d{2})\s*[-_. ]+/);
 
-  if (lidarrMatch?.groups) {
+  if (combinedDiscTrackMatch?.groups) {
     return {
-      discNumber: parsePositiveInteger(lidarrMatch.groups.medium),
-      trackNumber: parsePositiveInteger(lidarrMatch.groups.track)
+      discNumber: parsePositiveInteger(combinedDiscTrackMatch.groups.medium),
+      trackNumber: parsePositiveInteger(combinedDiscTrackMatch.groups.track)
     };
   }
 
@@ -331,7 +331,7 @@ function inferTrackNumbersFromFileName(value: string) {
   };
 }
 
-function parseLidarrAlbumDirectory(relativeDirectory: string) {
+function parseStructuredAlbumDirectory(relativeDirectory: string) {
   const segments = relativeDirectory.split("/").filter(Boolean);
   const albumFolderName = segments.at(-1);
   const parentArtistFolderName = segments.at(-2);
@@ -347,13 +347,23 @@ function parseLidarrAlbumDirectory(relativeDirectory: string) {
   }
 
   const remainder = albumFolderName.slice(prefix.length);
-  const currentMatch = remainder.match(/^(?<year>\d{4}|Unknown Year) - (?<album>.+)$/);
+  const standardMatch = remainder.match(/^(?<album>.+?)\s+\((?<year>\d{4}|Unknown Year)\)$/);
 
-  if (currentMatch?.groups) {
+  if (standardMatch?.groups) {
     return {
-      album: currentMatch.groups.album.trim(),
+      album: standardMatch.groups.album.trim(),
       artist: parentArtistFolderName.trim(),
-      year: parseYear(currentMatch.groups.year)
+      year: parseYear(standardMatch.groups.year)
+    };
+  }
+
+  const yearAlbumMatch = remainder.match(/^(?<year>\d{4}|Unknown Year) - (?<album>.+)$/);
+
+  if (yearAlbumMatch?.groups) {
+    return {
+      album: yearAlbumMatch.groups.album.trim(),
+      artist: parentArtistFolderName.trim(),
+      year: parseYear(yearAlbumMatch.groups.year)
     };
   }
 
