@@ -711,7 +711,7 @@ function currentStandardAlbumDirectoryIsCompatible(track: TrackFile, relativeDir
     return false;
   }
 
-  const parsedAlbumFolder = parseStandardAlbumFolder(albumFolderName, parentArtistFolderName);
+  const parsedAlbumFolder = parseStandardAlbumFolder(albumFolderName, [expectedArtist, parentArtistFolderName]);
 
   if (!parsedAlbumFolder) {
     return false;
@@ -721,14 +721,25 @@ function currentStandardAlbumDirectoryIsCompatible(track: TrackFile, relativeDir
   return normalizedPathKey(parsedAlbumFolder.album) === normalizedPathKey(expectedAlbum);
 }
 
-function parseStandardAlbumFolder(value: string, artistFolderName: string) {
-  const prefix = `${artistFolderName} - `;
+function parseStandardAlbumFolder(value: string, artistFolderNames: string[]) {
+  for (const artistFolderName of artistFolderNames) {
+    const prefix = `${artistFolderName} - `;
 
-  if (!value.toLowerCase().startsWith(prefix.toLowerCase())) {
-    return null;
+    if (!value.toLowerCase().startsWith(prefix.toLowerCase())) {
+      continue;
+    }
+
+    const parsed = parseStandardAlbumFolderRemainder(value.slice(prefix.length));
+
+    if (parsed) {
+      return parsed;
+    }
   }
 
-  const remainder = value.slice(prefix.length);
+  return parseStandardAlbumFolderWithArtist(value, artistFolderNames);
+}
+
+function parseStandardAlbumFolderRemainder(remainder: string) {
   const standard = remainder.match(/^(?<album>.+?)\s+\((?<year>\d{4}|Unknown Year)\)$/);
 
   if (standard?.groups) {
@@ -748,6 +759,36 @@ function parseStandardAlbumFolder(value: string, artistFolderName: string) {
     album: legacy.groups.album.trim(),
     year: legacy.groups.year
   };
+}
+
+function parseStandardAlbumFolderWithArtist(value: string, artistFolderNames: string[]) {
+  const standard = value.match(/^(?<artist>.+?)\s+-\s+(?<album>.+?)\s+\((?<year>\d{4}|Unknown Year)\)$/);
+  const standardGroups = standard?.groups;
+
+  if (standardGroups && artistFolderNames.some((artist) => sameNormalizedPathKey(artist, standardGroups.artist))) {
+    return {
+      album: standardGroups.album.trim(),
+      year: standardGroups.year
+    };
+  }
+
+  const legacy = value.match(
+    /^(?<artist>.+?)\s+-\s+(?:(?<albumType>.+?)\s+-\s+)?(?<year>\d{4}|Unknown Year)\s+-\s+(?<album>.+)$/
+  );
+  const legacyGroups = legacy?.groups;
+
+  if (!legacyGroups || !artistFolderNames.some((artist) => sameNormalizedPathKey(artist, legacyGroups.artist))) {
+    return null;
+  }
+
+  return {
+    album: legacyGroups.album.trim(),
+    year: legacyGroups.year
+  };
+}
+
+function sameNormalizedPathKey(left: string, right: string) {
+  return normalizedPathKey(left) === normalizedPathKey(right);
 }
 
 function normalizedPathKey(value: string) {

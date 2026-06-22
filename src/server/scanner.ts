@@ -128,7 +128,8 @@ async function readTrack(filePath: string, root: string, settings: PrivateSettin
   const trackTotal = common?.track?.of || null;
   const discNumber = common?.disk?.no || inferred.discNumber || null;
   const discTotal = common?.disk?.of || null;
-  const year = typeof common?.year === "number" ? common.year : parseYear(firstCommonString(commonRecord, ["date", "originaldate", "releasedate"])) ?? inferred.year ?? null;
+  const metadataYear = typeof common?.year === "number" && Number.isFinite(common.year) ? common.year : null;
+  const year = metadataYear ?? parseYear(firstCommonString(commonRecord, ["date", "originaldate", "releasedate"])) ?? inferred.year ?? null;
   const albumType = normalizeAlbumType(firstCommonString(commonRecord, ["albumtype", "releasetype", "release_type"]) || inferred.albumType, trackTotal);
   const duration = typeof format?.duration === "number" ? format.duration : null;
   const bitrate = typeof format?.bitrate === "number" ? Math.round(format.bitrate) : null;
@@ -343,7 +344,7 @@ function parseStructuredAlbumDirectory(relativeDirectory: string) {
   const prefix = `${parentArtistFolderName} - `;
 
   if (!albumFolderName.toLowerCase().startsWith(prefix.toLowerCase())) {
-    return null;
+    return parseStructuredAlbumFolderWithArtist(albumFolderName, parentArtistFolderName);
   }
 
   const remainder = albumFolderName.slice(prefix.length);
@@ -379,6 +380,47 @@ function parseStructuredAlbumDirectory(relativeDirectory: string) {
     artist: parentArtistFolderName.trim(),
     year: parseYear(match.groups.year)
   };
+}
+
+function parseStructuredAlbumFolderWithArtist(albumFolderName: string, parentArtistFolderName: string) {
+  const standardMatch = albumFolderName.match(
+    /^(?<artist>.+?)\s+-\s+(?<album>.+?)\s+\((?<year>\d{4}|Unknown Year)\)$/
+  );
+
+  if (standardMatch?.groups && samePathToken(standardMatch.groups.artist, parentArtistFolderName)) {
+    return {
+      album: standardMatch.groups.album.trim(),
+      artist: standardMatch.groups.artist.trim(),
+      year: parseYear(standardMatch.groups.year)
+    };
+  }
+
+  const legacyMatch = albumFolderName.match(
+    /^(?<artist>.+?)\s+-\s+(?:(?<albumType>.+?)\s+-\s+)?(?<year>\d{4}|Unknown Year)\s+-\s+(?<album>.+)$/
+  );
+
+  if (!legacyMatch?.groups || !samePathToken(legacyMatch.groups.artist, parentArtistFolderName)) {
+    return null;
+  }
+
+  return {
+    album: legacyMatch.groups.album.trim(),
+    albumType: normalizeAlbumType(legacyMatch.groups.albumType),
+    artist: legacyMatch.groups.artist.trim(),
+    year: parseYear(legacyMatch.groups.year)
+  };
+}
+
+function samePathToken(left: string, right: string) {
+  return pathTokenKey(left) === pathTokenKey(right);
+}
+
+function pathTokenKey(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .toLowerCase();
 }
 
 function firstCommonString(common: Record<string, unknown> | undefined, keys: string[]) {

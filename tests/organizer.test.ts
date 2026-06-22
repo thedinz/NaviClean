@@ -74,6 +74,44 @@ test("compatible standard folder is already organized when local year differs", 
   }
 });
 
+test("compatible standard folder is already organized when parent artist stripped trailing punctuation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const standardRelativePath =
+      "Journey Worship Co/Journey Worship Co. - Come to the Lord (2021)/Journey Worship Co. - Come to the Lord (2021) - 01 - Come to the Lord.mp3";
+    const sourcePath = path.join(root, ...standardRelativePath.split("/"));
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "audio");
+
+    const plan = await buildOrganizePlan(
+      [
+        track({
+          absolutePath: sourcePath,
+          relativePath: standardRelativePath,
+          artist: "Journey Worship Co.",
+          albumArtist: "Journey Worship Co.",
+          album: "Come to the Lord",
+          title: "Come to the Lord",
+          trackNumber: 1,
+          year: null
+        })
+      ],
+      settings({
+        libraryPath: root,
+        mode: "standard"
+      })
+    );
+
+    assert.equal(plan.summary.ready, 0);
+    assert.equal(plan.summary.same, 1);
+    assert.equal(plan.items[0]?.status, "same");
+    assert.equal(plan.items[0]?.targetRelativePath, standardRelativePath);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("duplicate source blocked by an existing organized target does not count as a conflict", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
 
