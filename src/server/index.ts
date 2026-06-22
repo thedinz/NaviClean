@@ -8,10 +8,8 @@ import { buildDuplicateGroups, resolveDuplicates, resolveSelectedDuplicates } fr
 import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate, trashOrganizeCandidates } from "./organizer.js";
 import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin } from "./recycle-bin.js";
 import { scanLibrary } from "./scanner.js";
-import { loadSettings, saveSettings, toSettingsView, updateSettings } from "./settings.js";
+import { loadSettings, toSettingsView, updateSettings } from "./settings.js";
 import { testNavidromeConnection } from "./navidrome.js";
-import { fetchLidarrNamingConfig, testLidarrConnection } from "./lidarr.js";
-import { applyLidarrNamingConfig, refreshLidarrNamingSettings } from "./lidarr-sync.js";
 
 const app = express();
 const port = Number(process.env.PORT || 8080);
@@ -69,30 +67,6 @@ app.put("/api/settings", asyncHandler(async (req, res) => {
 app.post("/api/navidrome/test", asyncHandler(async (req, res) => {
   const settings = await loadSettings();
   res.json(await testNavidromeConnection(settings, req.body));
-}));
-
-app.post("/api/lidarr/test", asyncHandler(async (req, res) => {
-  const settings = await loadSettings();
-  res.json(await testLidarrConnection(settings, req.body));
-}));
-
-app.post("/api/lidarr/naming/sync", asyncHandler(async (req, res) => {
-  const settings = await loadSettings();
-  const naming = await fetchLidarrNamingConfig(settings, req.body);
-  const next = applyLidarrNamingConfig({
-    ...settings,
-    naming: {
-      ...settings.naming,
-      mode: "lidarr" as const,
-      lidarr: {
-        baseUrl: String(req.body?.baseUrl || settings.naming.lidarr.baseUrl).trim().replace(/\/+$/, ""),
-        apiKey: String(req.body?.apiKey || settings.naming.lidarr.apiKey)
-      }
-    }
-  }, naming);
-
-  await saveSettings(next);
-  res.json(toSettingsView(next));
 }));
 
 app.get("/api/scan/status", (_req, res) => {
@@ -373,7 +347,7 @@ async function runScan() {
 }
 
 async function loadSettingsForPlanning() {
-  return refreshLidarrNamingSettings(await loadSettings());
+  return loadSettings();
 }
 
 function asyncHandler(
