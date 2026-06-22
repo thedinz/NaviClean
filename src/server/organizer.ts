@@ -8,6 +8,7 @@ import type {
   OrganizePlan,
   OrganizePlanItem,
   OrganizeTrashResult,
+  OrganizeTrashSelection,
   TrackFile
 } from "../shared/types.js";
 import { duplicateKeyForTrack } from "./matching.js";
@@ -291,34 +292,68 @@ export async function trashOrganizeCandidate(
   itemId: string,
   candidateId: string
 ): Promise<OrganizeTrashResult & { tracks: TrackFile[] }> {
+  return trashOrganizeCandidates(settings, tracks, [{ itemId, candidateId }]);
+}
+
+export async function trashOrganizeCandidates(
+  settings: PrivateSettings,
+  tracks: TrackFile[],
+  selections: OrganizeTrashSelection[]
+): Promise<OrganizeTrashResult & { tracks: TrackFile[] }> {
+  if (selections.length === 0) {
+    throw new Error("At least one organize blocker selection is required.");
+  }
+
   const plan = await buildOrganizePlan(tracks, settings);
-  const item = plan.items.find((candidateItem) => candidateItem.id === itemId);
-  const candidate = item?.collision?.candidates.find((collisionCandidate) => collisionCandidate.id === candidateId);
+  const selectedCandidates = new Map<string, OrganizeCollisionCandidate>();
 
-  if (!item || !candidate) {
-    throw new Error("This organize blocker is no longer valid. Refresh the preview and try again.");
+  for (const selection of selections) {
+    const item = plan.items.find((candidateItem) => candidateItem.id === selection.itemId);
+    const candidate = item?.collision?.candidates.find(
+      (collisionCandidate) => collisionCandidate.id === selection.candidateId
+    );
+
+    if (!item || !candidate) {
+      throw new Error("One or more organize blockers are no longer valid. Refresh the preview and try again.");
+    }
+
+    selectedCandidates.set(path.resolve(candidate.absolutePath), candidate);
   }
 
-  const sourcePath = path.resolve(candidate.absolutePath);
   const libraryRoot = path.resolve(settings.naming.libraryPath);
-
-  if (!isInsidePath(libraryRoot, sourcePath)) {
-    throw new Error("Only files inside the configured library can be recycled from organize.");
-  }
-
-  if (!(await pathExists(sourcePath))) {
-    throw new Error(`${candidate.relativePath} is already missing. Scan or refresh before continuing.`);
-  }
-
   const trashRoot = path.resolve(settings.naming.recycleBinPath);
-  const trashPath = path.join(trashRoot, new Date().toISOString().replace(/[:.]/g, "-"), candidate.relativePath);
-  await fs.mkdir(path.dirname(trashPath), { recursive: true });
-  await moveFile(sourcePath, trashPath);
-
+  const nowFolder = new Date().toISOString().replace(/[:.]/g, "-");
   const removedTrackIds = new Set<string>();
+  const removedPaths = new Set<string>();
+  const errors: string[] = [];
+  let trashed = 0;
 
-  if (candidate.trackId) {
-    removedTrackIds.add(candidate.trackId);
+  for (const candidate of selectedCandidates.values()) {
+    const sourcePath = path.resolve(candidate.absolutePath);
+
+    if (!isInsidePath(libraryRoot, sourcePath)) {
+      errors.push(`${candidate.relativePath}: only files inside the configured library can be recycled from organize`);
+      continue;
+    }
+
+    if (!(await pathExists(sourcePath))) {
+      errors.push(`${candidate.relativePath}: already missing. Scan or refresh before continuing`);
+      continue;
+    }
+
+    try {
+      const trashPath = path.join(trashRoot, nowFolder, candidate.relativePath);
+      await fs.mkdir(path.dirname(trashPath), { recursive: true });
+      await moveFile(sourcePath, trashPath);
+      trashed += 1;
+      removedPaths.add(sourcePath);
+
+      if (candidate.trackId) {
+        removedTrackIds.add(candidate.trackId);
+      }
+    } catch (error) {
+      errors.push(`${candidate.relativePath}: ${(error as Error).message}`);
+    }
   }
 
   const nextTracks = tracks.filter((track) => {
@@ -326,7 +361,7 @@ export async function trashOrganizeCandidate(
       return false;
     }
 
-    if (path.resolve(track.absolutePath) === sourcePath) {
+    if (removedPaths.has(path.resolve(track.absolutePath))) {
       removedTrackIds.add(track.id);
       return false;
     }
@@ -335,8 +370,9 @@ export async function trashOrganizeCandidate(
   });
 
   return {
-    trashed: 1,
+    trashed,
     removedTrackIds: Array.from(removedTrackIds),
+    errors,
     tracks: nextTracks,
     plan: await buildOrganizePlan(nextTracks, settings)
   };

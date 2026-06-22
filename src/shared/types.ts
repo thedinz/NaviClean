@@ -221,7 +221,13 @@ export type OrganizeApplyResult = {
 export type OrganizeTrashResult = {
   trashed: number;
   removedTrackIds: string[];
+  errors: string[];
   plan: OrganizePlan;
+};
+
+export type OrganizeTrashSelection = {
+  itemId: string;
+  candidateId: string;
 };
 
 export type DuplicateResolveResult = {
