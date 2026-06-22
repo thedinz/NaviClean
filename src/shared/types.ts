@@ -236,3 +236,9 @@ export type DuplicateResolveResult = {
   errors: string[];
 };
 
+export type DuplicateBulkResolveResult = {
+  trashed: number;
+  removedTrackIds: string[];
+  errors: string[];
+};
+

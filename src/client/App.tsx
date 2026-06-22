@@ -24,6 +24,7 @@ import {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import type {
   AuthInfo,
+  DuplicateBulkResolveResult,
   DuplicateGroup,
   LibraryStats,
   NamingMode,
@@ -418,9 +419,15 @@ function DuplicatesPage({
 }) {
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
   const [keepIds, setKeepIds] = useState<Record<string, string>>({});
+  const [selectedTrashIds, setSelectedTrashIds] = useState<Record<string, boolean>>({});
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [resolveErrors, setResolveErrors] = useState<string[]>([]);
+  const selectedRemoveIds = useMemo(
+    () => Object.entries(selectedTrashIds).filter(([, selected]) => selected).map(([id]) => id),
+    [selectedTrashIds]
+  );
 
   const load = async () => {
     setLoading(true);
@@ -429,6 +436,7 @@ function DuplicatesPage({
       const body = await api<{ groups: DuplicateGroup[] }>("/duplicates");
       setGroups(body.groups);
       setKeepIds(Object.fromEntries(body.groups.map((group) => [group.key, group.suggestedKeepId])));
+      setSelectedTrashIds((current) => pruneSelectedDuplicateTrashIds(body.groups, current));
     } finally {
       setLoading(false);
     }
@@ -437,6 +445,7 @@ function DuplicatesPage({
   useEffect(() => {
     if (!stats?.workflow.duplicateScanReady) {
       setGroups([]);
+      setSelectedTrashIds({});
       setLoading(false);
       return;
     }
@@ -454,13 +463,16 @@ function DuplicatesPage({
 
     setBusyKey(group.key);
     setNotice(null);
+    setResolveErrors([]);
 
     try {
-      const result = await api<{ trashed: number }>("/duplicates/resolve", {
+      const result = await api<{ trashed: number; errors: string[] }>("/duplicates/resolve", {
         method: "POST",
         body: JSON.stringify({ keepId, removeIds })
       });
-      setNotice(`${result.trashed} moved to recycle bin`);
+      const errorSuffix = result.errors.length ? `, ${result.errors.length} errors` : "";
+      setNotice(`${result.trashed} moved to recycle bin${errorSuffix}`);
+      setResolveErrors(result.errors);
       await load();
       await onChanged();
     } catch (caught) {
@@ -468,6 +480,59 @@ function DuplicatesPage({
     } finally {
       setBusyKey(null);
     }
+  };
+
+  const trashSelected = async () => {
+    if (selectedRemoveIds.length === 0) {
+      return;
+    }
+
+    if (!window.confirm(`Move ${selectedRemoveIds.length} selected duplicate file(s) to the recycle bin?`)) {
+      return;
+    }
+
+    setBusyKey("bulk");
+    setNotice(null);
+    setResolveErrors([]);
+
+    try {
+      const result = await api<DuplicateBulkResolveResult>("/duplicates/resolve/bulk", {
+        method: "POST",
+        body: JSON.stringify({ removeIds: selectedRemoveIds })
+      });
+      const errorSuffix = result.errors.length ? `, ${result.errors.length} errors` : "";
+      setNotice(`${result.trashed} moved to recycle bin${errorSuffix}`);
+      setResolveErrors(result.errors);
+      setSelectedTrashIds({});
+      await load();
+      await onChanged();
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const toggleTrashSelection = (group: DuplicateGroup, track: TrackFile) => {
+    const selected = Boolean(selectedTrashIds[track.id]);
+
+    if (!selected && duplicateTrashSelectionWouldRemoveGroup(group, selectedTrashIds, track.id)) {
+      return;
+    }
+
+    if (!selected && (keepIds[group.key] || group.suggestedKeepId) === track.id) {
+      const nextKeep = group.tracks.find((candidate) => candidate.id !== track.id && !selectedTrashIds[candidate.id])
+        || group.tracks.find((candidate) => candidate.id !== track.id);
+
+      if (nextKeep) {
+        setKeepIds((current) => ({ ...current, [group.key]: nextKeep.id }));
+      }
+    }
+
+    setSelectedTrashIds((current) => ({
+      ...current,
+      [track.id]: !selected
+    }));
   };
 
   if (!stats?.workflow.duplicateScanReady) {
@@ -499,9 +564,38 @@ function DuplicatesPage({
         <strong>Review before recycling</strong>
         <span>Only same organized album, disc/track, title/version, and duration matches are shown.</span>
       </div>
+      <div className="toolbar">
+        <div className="summary-chips">
+          <span>{groups.length} groups</span>
+          <span>{selectedRemoveIds.length} selected</span>
+        </div>
+        <div className="button-row">
+          <button className="secondary-button" type="button" onClick={load} disabled={loading || Boolean(busyKey)}>
+            {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+            <span>{loading ? "Loading" : "Refresh"}</span>
+          </button>
+          <button
+            className="danger-button"
+            type="button"
+            onClick={trashSelected}
+            disabled={loading || Boolean(busyKey) || selectedRemoveIds.length === 0}
+          >
+            {busyKey === "bulk" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+            <span>{busyKey === "bulk" ? "Moving" : "Trash selected"}</span>
+          </button>
+        </div>
+      </div>
       {notice && <div className="notice-bar">{notice}</div>}
       {busyKey && <ActionProgress label="Moving duplicates to recycle bin" />}
       {loading && <ActionProgress label="Loading duplicate groups" />}
+      {resolveErrors.length > 0 && (
+        <div className="error-list">
+          {resolveErrors.slice(0, 8).map((error) => (
+            <span key={error}>{error}</span>
+          ))}
+          {resolveErrors.length > 8 && <span>{resolveErrors.length - 8} more errors</span>}
+        </div>
+      )}
       {!loading && groups.length === 0 && <EmptyState icon={Check} title="No duplicate groups" />}
       {groups.map((group) => (
         <article className="panel duplicate-group" key={group.key}>
@@ -510,28 +604,46 @@ function DuplicatesPage({
               <h2>{group.tracks[0].title}</h2>
               <span>{group.reason}</span>
             </div>
-            <button className="danger-button" type="button" onClick={() => resolve(group)} disabled={busyKey === group.key}>
+            <button className="danger-button" type="button" onClick={() => resolve(group)} disabled={Boolean(busyKey)}>
               {busyKey === group.key ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
               <span>Trash others</span>
             </button>
           </div>
           <div className="duplicate-list">
-            {group.tracks.map((track) => (
-              <label className="duplicate-option" key={track.id}>
-                <input
-                  type="radio"
-                  name={group.key}
-                  checked={(keepIds[group.key] || group.suggestedKeepId) === track.id}
-                  onChange={() => setKeepIds((current) => ({ ...current, [group.key]: track.id }))}
-                />
-                <div>
-                  <strong>{track.extension.toUpperCase().replace(".", "")} - {track.title}</strong>
-                  <span>{albumReleaseLabel(track)}</span>
-                  <span>{track.relativePath}</span>
+            {group.tracks.map((track) => {
+              const selected = Boolean(selectedTrashIds[track.id]);
+              const keepDisabled = selected || Boolean(busyKey);
+              const trashDisabled =
+                Boolean(busyKey) || (!selected && duplicateTrashSelectionWouldRemoveGroup(group, selectedTrashIds, track.id));
+
+              return (
+                <div className="duplicate-option" key={track.id}>
+                  <input
+                    type="radio"
+                    name={group.key}
+                    checked={(keepIds[group.key] || group.suggestedKeepId) === track.id}
+                    disabled={keepDisabled}
+                    onChange={() => setKeepIds((current) => ({ ...current, [group.key]: track.id }))}
+                    aria-label={`Keep ${track.relativePath}`}
+                    title="Keep this file"
+                  />
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    disabled={trashDisabled}
+                    onChange={() => toggleTrashSelection(group, track)}
+                    aria-label={`Trash ${track.relativePath}`}
+                    title="Trash this file"
+                  />
+                  <div>
+                    <strong>{track.extension.toUpperCase().replace(".", "")} - {track.title}</strong>
+                    <span>{albumReleaseLabel(track)}</span>
+                    <span>{track.relativePath}</span>
+                  </div>
+                  <em>{qualitySummary(track)}</em>
                 </div>
-                <em>{qualitySummary(track)}</em>
-              </label>
-            ))}
+              );
+            })}
           </div>
         </article>
       ))}
@@ -1656,6 +1768,31 @@ function itemHasCollisionCandidate(items: OrganizePreviewItem[], itemId: string,
       item.id === itemId && item.collision?.candidates.some((candidate) => candidate.id === candidateId)
     )
   );
+}
+
+function pruneSelectedDuplicateTrashIds(groups: DuplicateGroup[], selectedIds: Record<string, boolean>) {
+  const validIds = new Set(groups.flatMap((group) => group.tracks.map((track) => track.id)));
+  const next = Object.fromEntries(
+    Object.entries(selectedIds).filter(([id, selected]) => selected && validIds.has(id))
+  );
+
+  for (const group of groups) {
+    const selectedTracks = group.tracks.filter((track) => next[track.id]);
+
+    if (selectedTracks.length >= group.tracks.length) {
+      delete next[selectedTracks.at(-1)?.id || ""];
+    }
+  }
+
+  return next;
+}
+
+function duplicateTrashSelectionWouldRemoveGroup(
+  group: DuplicateGroup,
+  selectedIds: Record<string, boolean>,
+  toggledTrackId: string
+) {
+  return group.tracks.every((track) => track.id === toggledTrackId || selectedIds[track.id]);
 }
 
 function organizeChangeLabel(item: OrganizePlan["items"][number]) {
