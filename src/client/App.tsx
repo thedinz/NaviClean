@@ -418,7 +418,6 @@ function DuplicatesPage({
   onOpenOrganize: () => void;
 }) {
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
-  const [keepIds, setKeepIds] = useState<Record<string, string>>({});
   const [selectedTrashIds, setSelectedTrashIds] = useState<Record<string, boolean>>({});
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -435,7 +434,6 @@ function DuplicatesPage({
     try {
       const body = await api<{ groups: DuplicateGroup[] }>("/duplicates");
       setGroups(body.groups);
-      setKeepIds(Object.fromEntries(body.groups.map((group) => [group.key, group.suggestedKeepId])));
       setSelectedTrashIds((current) => pruneSelectedDuplicateTrashIds(body.groups, current));
     } finally {
       setLoading(false);
@@ -453,26 +451,37 @@ function DuplicatesPage({
     load().catch((caught) => setNotice((caught as Error).message));
   }, [stats?.workflow.duplicateScanReady]);
 
-  const resolve = async (group: DuplicateGroup) => {
-    const keepId = keepIds[group.key] || group.suggestedKeepId;
-    const removeIds = group.tracks.filter((track) => track.id !== keepId).map((track) => track.id);
+  const selectedDuplicateTrashIdsForGroup = (group: DuplicateGroup) =>
+    group.tracks.filter((track) => selectedTrashIds[track.id]).map((track) => track.id);
+
+  const trashDuplicateIds = async (removeIds: string[], operationKey: string) => {
+    if (removeIds.length === 0) {
+      return;
+    }
 
     if (!window.confirm(`Move ${removeIds.length} duplicate file(s) to the recycle bin? Review every path before continuing.`)) {
       return;
     }
 
-    setBusyKey(group.key);
+    setBusyKey(operationKey);
     setNotice(null);
     setResolveErrors([]);
 
     try {
-      const result = await api<{ trashed: number; errors: string[] }>("/duplicates/resolve", {
+      const result = await api<DuplicateBulkResolveResult>("/duplicates/resolve/bulk", {
         method: "POST",
-        body: JSON.stringify({ keepId, removeIds })
+        body: JSON.stringify({ removeIds })
       });
       const errorSuffix = result.errors.length ? `, ${result.errors.length} errors` : "";
       setNotice(`${result.trashed} moved to recycle bin${errorSuffix}`);
       setResolveErrors(result.errors);
+      setSelectedTrashIds((current) => {
+        const next = { ...current };
+        removeIds.forEach((id) => {
+          delete next[id];
+        });
+        return next;
+      });
       await load();
       await onChanged();
     } catch (caught) {
@@ -482,35 +491,12 @@ function DuplicatesPage({
     }
   };
 
+  const trashGroupSelected = async (group: DuplicateGroup) => {
+    await trashDuplicateIds(selectedDuplicateTrashIdsForGroup(group), group.key);
+  };
+
   const trashSelected = async () => {
-    if (selectedRemoveIds.length === 0) {
-      return;
-    }
-
-    if (!window.confirm(`Move ${selectedRemoveIds.length} selected duplicate file(s) to the recycle bin?`)) {
-      return;
-    }
-
-    setBusyKey("bulk");
-    setNotice(null);
-    setResolveErrors([]);
-
-    try {
-      const result = await api<DuplicateBulkResolveResult>("/duplicates/resolve/bulk", {
-        method: "POST",
-        body: JSON.stringify({ removeIds: selectedRemoveIds })
-      });
-      const errorSuffix = result.errors.length ? `, ${result.errors.length} errors` : "";
-      setNotice(`${result.trashed} moved to recycle bin${errorSuffix}`);
-      setResolveErrors(result.errors);
-      setSelectedTrashIds({});
-      await load();
-      await onChanged();
-    } catch (caught) {
-      setNotice((caught as Error).message);
-    } finally {
-      setBusyKey(null);
-    }
+    await trashDuplicateIds(selectedRemoveIds, "bulk");
   };
 
   const toggleTrashSelection = (group: DuplicateGroup, track: TrackFile) => {
@@ -520,19 +506,17 @@ function DuplicatesPage({
       return;
     }
 
-    if (!selected && (keepIds[group.key] || group.suggestedKeepId) === track.id) {
-      const nextKeep = group.tracks.find((candidate) => candidate.id !== track.id && !selectedTrashIds[candidate.id])
-        || group.tracks.find((candidate) => candidate.id !== track.id);
+    setSelectedTrashIds((current) => {
+      const next = { ...current };
 
-      if (nextKeep) {
-        setKeepIds((current) => ({ ...current, [group.key]: nextKeep.id }));
+      if (selected) {
+        delete next[track.id];
+      } else {
+        next[track.id] = true;
       }
-    }
 
-    setSelectedTrashIds((current) => ({
-      ...current,
-      [track.id]: !selected
-    }));
+      return next;
+    });
   };
 
   if (!stats?.workflow.duplicateScanReady) {
@@ -597,56 +581,55 @@ function DuplicatesPage({
         </div>
       )}
       {!loading && groups.length === 0 && <EmptyState icon={Check} title="No duplicate groups" />}
-      {groups.map((group) => (
-        <article className="panel duplicate-group" key={group.key}>
-          <div className="panel-title split">
-            <div>
-              <h2>{group.tracks[0].title}</h2>
-              <span>{group.reason}</span>
-            </div>
-            <button className="danger-button" type="button" onClick={() => resolve(group)} disabled={Boolean(busyKey)}>
-              {busyKey === group.key ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
-              <span>Trash others</span>
-            </button>
-          </div>
-          <div className="duplicate-list">
-            {group.tracks.map((track) => {
-              const selected = Boolean(selectedTrashIds[track.id]);
-              const keepDisabled = selected || Boolean(busyKey);
-              const trashDisabled =
-                Boolean(busyKey) || (!selected && duplicateTrashSelectionWouldRemoveGroup(group, selectedTrashIds, track.id));
+      {groups.map((group) => {
+        const groupSelectedRemoveIds = selectedDuplicateTrashIdsForGroup(group);
 
-              return (
-                <div className="duplicate-option" key={track.id}>
-                  <input
-                    type="radio"
-                    name={group.key}
-                    checked={(keepIds[group.key] || group.suggestedKeepId) === track.id}
-                    disabled={keepDisabled}
-                    onChange={() => setKeepIds((current) => ({ ...current, [group.key]: track.id }))}
-                    aria-label={`Keep ${track.relativePath}`}
-                    title="Keep this file"
-                  />
-                  <input
-                    type="checkbox"
-                    checked={selected}
-                    disabled={trashDisabled}
-                    onChange={() => toggleTrashSelection(group, track)}
-                    aria-label={`Trash ${track.relativePath}`}
-                    title="Trash this file"
-                  />
-                  <div>
-                    <strong>{track.extension.toUpperCase().replace(".", "")} - {track.title}</strong>
-                    <span>{albumReleaseLabel(track)}</span>
-                    <span>{track.relativePath}</span>
+        return (
+          <article className="panel duplicate-group" key={group.key}>
+            <div className="panel-title split">
+              <div>
+                <h2>{group.tracks[0].title}</h2>
+                <span>{group.reason}</span>
+              </div>
+              <button
+                className="danger-button"
+                type="button"
+                onClick={() => trashGroupSelected(group)}
+                disabled={Boolean(busyKey) || groupSelectedRemoveIds.length === 0}
+              >
+                {busyKey === group.key ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+                <span>Trash selected</span>
+              </button>
+            </div>
+            <div className="duplicate-list">
+              {group.tracks.map((track) => {
+                const selected = Boolean(selectedTrashIds[track.id]);
+                const trashDisabled =
+                  Boolean(busyKey) || (!selected && duplicateTrashSelectionWouldRemoveGroup(group, selectedTrashIds, track.id));
+
+                return (
+                  <div className="duplicate-option" key={track.id}>
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      disabled={trashDisabled}
+                      onChange={() => toggleTrashSelection(group, track)}
+                      aria-label={`Trash ${track.relativePath}`}
+                      title="Trash this file"
+                    />
+                    <div>
+                      <strong>{track.extension.toUpperCase().replace(".", "")} - {track.title}</strong>
+                      <span>{albumReleaseLabel(track)}</span>
+                      <span>{track.relativePath}</span>
+                    </div>
+                    <em>{qualitySummary(track)}</em>
                   </div>
-                  <em>{qualitySummary(track)}</em>
-                </div>
-              );
-            })}
-          </div>
-        </article>
-      ))}
+                );
+              })}
+            </div>
+          </article>
+        );
+      })}
     </section>
   );
 }
