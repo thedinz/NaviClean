@@ -1,11 +1,11 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OrganizePlan, ScanStatus, SettingsUpdate, WorkflowState } from "../shared/types.js";
+import type { OrganizePlan, OrganizeTrashSelection, ScanStatus, SettingsUpdate, WorkflowState } from "../shared/types.js";
 import { clearSessionCookie, getAuthInfo, login, logout, requireAuth, setSessionCookie } from "./auth.js";
 import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
 import { buildDuplicateGroups, resolveDuplicates } from "./duplicates.js";
-import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate } from "./organizer.js";
+import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate, trashOrganizeCandidates } from "./organizer.js";
 import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin } from "./recycle-bin.js";
 import { scanLibrary } from "./scanner.js";
 import { loadSettings, saveSettings, toSettingsView, updateSettings } from "./settings.js";
@@ -236,6 +236,37 @@ app.post("/api/organize/trash", asyncHandler(async (req, res) => {
   res.json({
     trashed: result.trashed,
     removedTrackIds: result.removedTrackIds,
+    errors: result.errors,
+    plan: result.plan
+  });
+}));
+
+app.post("/api/organize/trash/bulk", asyncHandler(async (req, res) => {
+  const rawSelections: unknown[] = Array.isArray(req.body.selections) ? req.body.selections : [];
+  const selections: OrganizeTrashSelection[] = rawSelections
+    .map((selection) => {
+      const bodySelection = selection as Partial<OrganizeTrashSelection> | null;
+      return {
+        itemId: String(bodySelection?.itemId || ""),
+        candidateId: String(bodySelection?.candidateId || "")
+      };
+    })
+    .filter((selection) => selection.itemId && selection.candidateId);
+
+  if (selections.length === 0) {
+    res.status(400).json({ error: "selections are required" });
+    return;
+  }
+
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+  const result = await trashOrganizeCandidates(settings, catalog.tracks, selections);
+
+  await saveCatalog(result.tracks);
+  res.json({
+    trashed: result.trashed,
+    removedTrackIds: result.removedTrackIds,
+    errors: result.errors,
     plan: result.plan
   });
 }));
