@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { OrganizePlan, OrganizeTrashSelection, ScanStatus, SettingsUpdate, WorkflowState } from "../shared/types.js";
 import { clearSessionCookie, getAuthInfo, login, logout, requireAuth, setSessionCookie } from "./auth.js";
 import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
-import { buildDuplicateGroups, resolveDuplicates } from "./duplicates.js";
+import { buildDuplicateGroups, resolveDuplicates, resolveSelectedDuplicates } from "./duplicates.js";
 import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate, trashOrganizeCandidates } from "./organizer.js";
 import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin } from "./recycle-bin.js";
 import { scanLibrary } from "./scanner.js";
@@ -289,7 +289,41 @@ app.post("/api/duplicates/resolve", asyncHandler(async (req, res) => {
     return;
   }
 
-  res.json(await resolveDuplicates(settings, catalog.tracks, keepId, removeIds));
+  const result = await resolveDuplicates(settings, catalog.tracks, keepId, removeIds);
+
+  await saveCatalog(result.tracks);
+  res.json({
+    keptId: result.keptId,
+    trashed: result.trashed,
+    errors: result.errors
+  });
+}));
+
+app.post("/api/duplicates/resolve/bulk", asyncHandler(async (req, res) => {
+  const removeIds = Array.isArray(req.body.removeIds) ? req.body.removeIds.map(String).filter(Boolean) : [];
+
+  if (removeIds.length === 0) {
+    res.status(400).json({ error: "removeIds are required" });
+    return;
+  }
+
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+  const workflow = await buildWorkflowState(catalog, settings);
+
+  if (!workflow.duplicateScanReady) {
+    res.status(409).json({ error: workflow.message, workflow });
+    return;
+  }
+
+  const result = await resolveSelectedDuplicates(settings, catalog.tracks, removeIds);
+
+  await saveCatalog(result.tracks);
+  res.json({
+    trashed: result.trashed,
+    removedTrackIds: result.removedTrackIds,
+    errors: result.errors
+  });
 }));
 
 if (process.env.NODE_ENV === "production") {
