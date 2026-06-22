@@ -709,7 +709,7 @@ select:disabled {
 
 .segmented-control {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   width: min(520px, 100%);
   padding: 3px;
   border: 1px solid #d8d7cf;
@@ -891,4 +891,3 @@ select:disabled {
     justify-content: space-between;
   }
 }
-
