@@ -1,7 +1,7 @@
 # NaviClean
 
 NaviClean is a Docker-first cleaner and organizer for Navidrome music libraries.
-It scans a mounted music library, previews clean artist/album/track paths, and only unlocks duplicate cleanup after organization is complete.
+It scans a mounted music library, browses artists, albums, and tracks, previews clean artist/album/track paths, and only unlocks duplicate cleanup after organization is complete.
 
 ## Current defaults
 
@@ -61,7 +61,7 @@ The Vite UI runs on `5173` and proxies API requests to the server on `8080`.
 
 ## Safety
 
-Cleanup is staged: scan first, organize second, then review duplicates. Duplicate cleanup stays locked while organization has pending moves, conflicts, or missing files, but target collisions that match duplicate candidates are allowed through so the duplicate review can break the loop. The organize preview also shows collision candidates with quality details and can move a selected blocker to the recycle bin. Duplicate groups require the same organized album identity, disc/track number, title/version text, and duration or ISRC. Removed files are moved into the configured recycle bin path, preserving their relative path under a timestamped folder, and can be reviewed or permanently emptied from the Trash page.
+Cleanup is staged: scan first, organize second, then review duplicates. The Library page can also move selected artists, albums, or tracks to the recycle bin. Duplicate cleanup stays locked while organization has pending moves, conflicts, or missing files, but target collisions that match duplicate candidates are allowed through so the duplicate review can break the loop. The organize preview also shows collision candidates with quality details and can move a selected blocker to the recycle bin. Duplicate groups require the same organized album identity, disc/track number, title/version text, and duration or ISRC. Removed files are moved into the configured recycle bin path, preserving their relative path under a timestamped folder, and can be reviewed or permanently emptied from the Trash page.
 
 ## References
 

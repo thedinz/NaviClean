@@ -414,6 +414,141 @@ legend {
   background: transparent;
 }
 
+.library-browser {
+  display: grid;
+  gap: 14px;
+}
+
+.library-toolbar {
+  align-items: flex-start;
+}
+
+.library-breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: min(460px, 100%);
+}
+
+.library-breadcrumbs button {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid #d8d7cf;
+  border-radius: 8px;
+  background: #fffefa;
+  color: #53615d;
+  font-weight: 800;
+}
+
+.library-breadcrumbs button.active {
+  border-color: #16877c;
+  background: #dff4ef;
+  color: #126f66;
+}
+
+.library-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 12px;
+}
+
+.library-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #e4e2d9;
+  border-radius: 8px;
+  background: #fbfaf5;
+}
+
+.library-card-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 86px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #17211f;
+  text-align: left;
+}
+
+.library-card-main > svg {
+  color: #81908b;
+}
+
+.library-thumb {
+  display: grid;
+  width: 70px;
+  aspect-ratio: 1;
+  place-items: center;
+  gap: 4px;
+  border: 1px solid rgba(22, 135, 124, 0.24);
+  border-radius: 8px;
+  background: #e9f6f2;
+  color: #126f66;
+}
+
+.album-thumb {
+  border-color: rgba(217, 148, 43, 0.28);
+  background: #fff3dc;
+  color: #85570f;
+}
+
+.library-thumb strong {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.library-card-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.library-card-copy strong,
+.library-card-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-card-copy strong {
+  color: #17211f;
+  font-size: 1rem;
+}
+
+.library-card-copy span {
+  color: #64706d;
+  font-size: 0.86rem;
+}
+
+.danger-icon {
+  border-color: #e5b8b8;
+  background: #fff7f5;
+  color: #a13737;
+}
+
+.danger-icon:hover:not(:disabled) {
+  border-color: #c65353;
+  color: #8e2e2e;
+}
+
+.library-track-table {
+  min-width: 860px;
+}
+
+.library-track-table td:first-child {
+  color: #53615d;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .muted,
 .notice {
   color: #64706d;

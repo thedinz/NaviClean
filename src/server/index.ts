@@ -5,6 +5,13 @@ import type { OrganizePlan, OrganizeTrashSelection, ScanStatus, SettingsUpdate, 
 import { clearSessionCookie, getAuthInfo, login, logout, requireAuth, setSessionCookie } from "./auth.js";
 import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
 import { buildDuplicateGroups, resolveDuplicates, resolveSelectedDuplicates } from "./duplicates.js";
+import {
+  buildLibraryAlbums,
+  buildLibraryArtists,
+  findLibraryAlbumTracks,
+  findLibraryArtistTracks,
+  trashLibraryTracks
+} from "./library.js";
 import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate, trashOrganizeCandidates } from "./organizer.js";
 import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin } from "./recycle-bin.js";
 import { scanLibrary } from "./scanner.js";
@@ -109,6 +116,90 @@ app.get("/api/tracks", asyncHandler(async (req, res) => {
     .slice(0, limit);
 
   res.json({ tracks, total: catalog.tracks.length });
+}));
+
+app.get("/api/library/artists", asyncHandler(async (req, res) => {
+  const catalog = await loadCatalog();
+  res.json({
+    artists: buildLibraryArtists(catalog.tracks, String(req.query.search || "")),
+    total: catalog.tracks.length
+  });
+}));
+
+app.get("/api/library/artists/:artistId/albums", asyncHandler(async (req, res) => {
+  const catalog = await loadCatalog();
+  const artistId = String(req.params.artistId || "");
+  const albums = buildLibraryAlbums(catalog.tracks, artistId, String(req.query.search || ""));
+
+  if (!albums) {
+    res.status(404).json({ error: "Artist is no longer in the catalog. Scan or refresh before continuing." });
+    return;
+  }
+
+  res.json({ albums });
+}));
+
+app.get("/api/library/artists/:artistId/albums/:albumId/tracks", asyncHandler(async (req, res) => {
+  const catalog = await loadCatalog();
+  const artistId = String(req.params.artistId || "");
+  const albumId = String(req.params.albumId || "");
+  const tracks = findLibraryAlbumTracks(catalog.tracks, artistId, albumId);
+
+  if (!tracks) {
+    res.status(404).json({ error: "Album is no longer in the catalog. Scan or refresh before continuing." });
+    return;
+  }
+
+  res.json({ tracks });
+}));
+
+app.delete("/api/library/artists/:artistId", asyncHandler(async (req, res) => {
+  const catalog = await loadCatalog();
+  const artistId = String(req.params.artistId || "");
+  const tracks = findLibraryArtistTracks(catalog.tracks, artistId);
+
+  if (!tracks) {
+    res.status(404).json({ error: "Artist is no longer in the catalog. Scan or refresh before continuing." });
+    return;
+  }
+
+  const result = await trashLibraryTracks(await loadSettingsForPlanning(), catalog.tracks, tracks.map((track) => track.id));
+
+  await saveCatalog(result.tracks);
+  res.json(libraryTrashResponse(result));
+}));
+
+app.delete("/api/library/artists/:artistId/albums/:albumId", asyncHandler(async (req, res) => {
+  const catalog = await loadCatalog();
+  const artistId = String(req.params.artistId || "");
+  const albumId = String(req.params.albumId || "");
+  const tracks = findLibraryAlbumTracks(catalog.tracks, artistId, albumId);
+
+  if (!tracks) {
+    res.status(404).json({ error: "Album is no longer in the catalog. Scan or refresh before continuing." });
+    return;
+  }
+
+  const result = await trashLibraryTracks(await loadSettingsForPlanning(), catalog.tracks, tracks.map((track) => track.id));
+
+  await saveCatalog(result.tracks);
+  res.json(libraryTrashResponse(result));
+}));
+
+app.delete("/api/library/tracks/:trackId", asyncHandler(async (req, res) => {
+  const catalog = await loadCatalog();
+  const trackId = String(req.params.trackId || "");
+  const track = catalog.tracks.find((candidate) => candidate.id === trackId);
+
+  if (!track) {
+    res.status(404).json({ error: "Track is no longer in the catalog. Scan or refresh before continuing." });
+    return;
+  }
+
+  const result = await trashLibraryTracks(await loadSettingsForPlanning(), catalog.tracks, [track.id]);
+
+  await saveCatalog(result.tracks);
+  res.json(libraryTrashResponse(result));
 }));
 
 app.get("/api/duplicates", asyncHandler(async (_req, res) => {
@@ -329,6 +420,14 @@ function trustProxySetting() {
 
   const hops = Number.parseInt(value, 10);
   return Number.isFinite(hops) && hops > 0 ? hops : 1;
+}
+
+function libraryTrashResponse(result: Awaited<ReturnType<typeof trashLibraryTracks>>) {
+  return {
+    trashed: result.trashed,
+    removedTrackIds: result.removedTrackIds,
+    errors: result.errors
+  };
 }
 
 async function runScan() {

@@ -1,5 +1,6 @@
 import {
   Activity,
+  Album as AlbumIcon,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -12,6 +13,7 @@ import {
   Loader2,
   LockKeyhole,
   LogOut,
+  Music2,
   Play,
   RefreshCw,
   Save,
@@ -19,14 +21,18 @@ import {
   Settings,
   Shield,
   SlidersHorizontal,
-  Trash2
+  Trash2,
+  UserRound
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import type {
   AuthInfo,
   DuplicateBulkResolveResult,
   DuplicateGroup,
+  LibraryAlbumSummary,
+  LibraryArtistSummary,
   LibraryStats,
+  LibraryTrashResult,
   NamingMode,
   OrganizeApplyResult,
   OrganizeCollisionCandidate,
@@ -243,7 +249,7 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
         </header>
 
         {page === "dashboard" && <Dashboard stats={stats} scan={scan} />}
-        {page === "library" && <LibraryPage />}
+        {page === "library" && <LibraryPage onChanged={refreshStats} />}
         {page === "duplicates" && (
           <DuplicatesPage stats={stats} onChanged={refreshStats} onOpenOrganize={() => setPage("organize")} />
         )}
@@ -368,42 +374,390 @@ function Dashboard({ stats, scan }: { stats: LibraryStats | null; scan: ScanStat
   );
 }
 
-function LibraryPage() {
+function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
+  const [view, setView] = useState<"artists" | "albums" | "tracks">("artists");
   const [search, setSearch] = useState("");
+  const [artists, setArtists] = useState<LibraryArtistSummary[]>([]);
+  const [albums, setAlbums] = useState<LibraryAlbumSummary[]>([]);
   const [tracks, setTracks] = useState<TrackFile[]>([]);
-  const [total, setTotal] = useState(0);
+  const [selectedArtist, setSelectedArtist] = useState<LibraryArtistSummary | null>(null);
+  const [selectedAlbum, setSelectedAlbum] = useState<LibraryAlbumSummary | null>(null);
+  const [catalogTotal, setCatalogTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
+
     const handle = window.setTimeout(() => {
-      api<{ tracks: TrackFile[]; total: number }>(`/tracks?limit=150&search=${encodeURIComponent(search)}`)
+      loadLibraryView(view, search, selectedArtist, selectedAlbum)
         .then((body) => {
-          setTracks(body.tracks);
-          setTotal(body.total);
+          if (cancelled) {
+            return;
+          }
+
+          if (body.view === "artists") {
+            setArtists(body.artists);
+            setCatalogTotal(body.total);
+            setAlbums([]);
+            setTracks([]);
+          } else if (body.view === "albums") {
+            setAlbums(body.albums);
+            setTracks([]);
+          } else {
+            setTracks(body.tracks);
+          }
+
           setError(null);
         })
-        .catch((caught) => setError((caught as Error).message))
-        .finally(() => setLoading(false));
+        .catch((caught) => {
+          if (!cancelled) {
+            setError((caught as Error).message);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setLoading(false);
+          }
+        });
     }, 180);
 
-    return () => window.clearTimeout(handle);
-  }, [search]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [view, search, selectedArtist, selectedAlbum, reloadKey]);
+
+  const openArtists = () => {
+    setView("artists");
+    setSelectedArtist(null);
+    setSelectedAlbum(null);
+    setSearch("");
+  };
+
+  const openArtist = (artist: LibraryArtistSummary) => {
+    setSelectedArtist(artist);
+    setSelectedAlbum(null);
+    setView("albums");
+    setSearch("");
+  };
+
+  const openAlbum = (album: LibraryAlbumSummary) => {
+    setSelectedAlbum(album);
+    setView("tracks");
+    setSearch("");
+  };
+
+  const trashArtist = async (artist: LibraryArtistSummary) => {
+    const confirmed = window.confirm(
+      `Move ${artist.name}, ${artist.albumCount} ${pluralize("album", artist.albumCount)}, and ${artist.trackCount} ${pluralize("track", artist.trackCount)} to the recycle bin?`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    await trashLibraryItem(`artist:${artist.id}`, `/library/artists/${artist.id}`, () => {
+      if (selectedArtist?.id === artist.id) {
+        openArtists();
+      }
+    });
+  };
+
+  const trashAlbum = async (album: LibraryAlbumSummary) => {
+    const confirmed = window.confirm(
+      `Move ${album.artist} - ${album.title} and ${album.trackCount} ${pluralize("track", album.trackCount)} to the recycle bin?`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    await trashLibraryItem(`album:${album.id}`, `/library/artists/${album.artistId}/albums/${album.id}`, () => {
+      if (selectedAlbum?.id === album.id) {
+        setSelectedAlbum(null);
+        setView("albums");
+      }
+    });
+  };
+
+  const trashTrack = async (track: TrackFile) => {
+    const confirmed = window.confirm(`Move ${track.title} to the recycle bin?`);
+
+    if (!confirmed) {
+      return;
+    }
+
+    await trashLibraryItem(`track:${track.id}`, `/library/tracks/${track.id}`, () => {
+      if (tracks.length <= 1) {
+        setSelectedAlbum(null);
+        setView("albums");
+      }
+    });
+  };
+
+  const trashLibraryItem = async (key: string, endpoint: string, afterTrash?: () => void) => {
+    setBusyKey(key);
+    setError(null);
+
+    try {
+      const result = await api<LibraryTrashResult>(endpoint, { method: "DELETE" });
+      setNotice(libraryTrashNotice(result));
+
+      if (result.trashed > 0) {
+        afterTrash?.();
+        await onChanged();
+      }
+
+      setReloadKey((current) => current + 1);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const countLabel =
+    view === "artists"
+      ? `${artists.length.toLocaleString()} ${pluralize("artist", artists.length)} / ${catalogTotal.toLocaleString()} ${pluralize("track", catalogTotal)}`
+      : view === "albums"
+        ? `${albums.length.toLocaleString()} ${pluralize("album", albums.length)}`
+        : `${tracks.length.toLocaleString()} ${pluralize("track", tracks.length)}`;
 
   return (
-    <section className="panel">
-      <div className="toolbar">
+    <section className="panel library-browser">
+      <div className="toolbar library-toolbar">
+        <div className="library-breadcrumbs" aria-label="Library location">
+          <button className={view === "artists" ? "active" : ""} type="button" onClick={openArtists}>
+            Artists
+          </button>
+          {selectedArtist && (
+            <button
+              className={view === "albums" ? "active" : ""}
+              type="button"
+              onClick={() => {
+                setSelectedAlbum(null);
+                setView("albums");
+                setSearch("");
+              }}
+            >
+              {selectedArtist.name}
+            </button>
+          )}
+          {selectedAlbum && (
+            <button className="active" type="button" onClick={() => setView("tracks")}>
+              {selectedAlbum.title}
+            </button>
+          )}
+        </div>
         <div className="search-box">
           <Search size={17} />
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search" />
         </div>
-        <span className="muted">{loading ? "Loading tracks" : `${total.toLocaleString()} tracks`}</span>
+        <span className="muted">{loading ? "Loading library" : countLabel}</span>
       </div>
-      {loading && <ActionProgress label="Loading tracks" />}
+      {notice && <p className="notice-bar">{notice}</p>}
+      {loading && <ActionProgress label="Loading library" />}
       {error && <p className="form-error">{error}</p>}
-      {!loading && <TrackTable tracks={tracks} />}
+      {!loading && view === "artists" && (
+        <LibraryArtistGrid artists={artists} busyKey={busyKey} onOpen={openArtist} onTrash={trashArtist} />
+      )}
+      {!loading && view === "albums" && (
+        <LibraryAlbumGrid albums={albums} busyKey={busyKey} onOpen={openAlbum} onTrash={trashAlbum} />
+      )}
+      {!loading && view === "tracks" && (
+        <LibraryTrackTable tracks={tracks} busyKey={busyKey} onTrash={trashTrack} />
+      )}
     </section>
+  );
+}
+
+async function loadLibraryView(
+  view: "artists" | "albums" | "tracks",
+  search: string,
+  selectedArtist: LibraryArtistSummary | null,
+  selectedAlbum: LibraryAlbumSummary | null
+) {
+  if (view === "artists") {
+    const body = await api<{ artists: LibraryArtistSummary[]; total: number }>(
+      `/library/artists?search=${encodeURIComponent(search)}`
+    );
+    return { view, artists: body.artists, total: body.total };
+  }
+
+  if (view === "albums") {
+    if (!selectedArtist) {
+      return { view, albums: [] };
+    }
+
+    const body = await api<{ albums: LibraryAlbumSummary[] }>(
+      `/library/artists/${selectedArtist.id}/albums?search=${encodeURIComponent(search)}`
+    );
+    return { view, albums: body.albums };
+  }
+
+  if (!selectedArtist || !selectedAlbum) {
+    return { view, tracks: [] };
+  }
+
+  const body = await api<{ tracks: TrackFile[] }>(
+    `/library/artists/${selectedArtist.id}/albums/${selectedAlbum.id}/tracks`
+  );
+  return { view, tracks: filterLibraryTracks(body.tracks, search) };
+}
+
+function LibraryArtistGrid({
+  artists,
+  busyKey,
+  onOpen,
+  onTrash
+}: {
+  artists: LibraryArtistSummary[];
+  busyKey: string | null;
+  onOpen: (artist: LibraryArtistSummary) => void;
+  onTrash: (artist: LibraryArtistSummary) => void;
+}) {
+  if (artists.length === 0) {
+    return <EmptyState icon={UserRound} title="No artists" />;
+  }
+
+  return (
+    <div className="library-card-grid">
+      {artists.map((artist) => (
+        <article className="library-card" key={artist.id}>
+          <button className="library-card-main" type="button" onClick={() => onOpen(artist)}>
+            <span className="library-thumb artist-thumb" aria-hidden="true">
+              <UserRound size={22} />
+              <strong>{artist.thumbnailLabel}</strong>
+            </span>
+            <span className="library-card-copy">
+              <strong>{artist.name}</strong>
+              <span>{artist.albumCount} {pluralize("album", artist.albumCount)} / {artist.trackCount} {pluralize("track", artist.trackCount)}</span>
+              <span>{libraryMeta([formatBytes(artist.totalSize), artist.formats.join(" / "), issueLabel(artist.issueCount)])}</span>
+            </span>
+            <ChevronRight size={18} />
+          </button>
+          <button
+            className="icon-button danger-icon"
+            type="button"
+            onClick={() => onTrash(artist)}
+            disabled={Boolean(busyKey)}
+            title={`Trash ${artist.name}`}
+            aria-label={`Trash ${artist.name}`}
+          >
+            {busyKey === `artist:${artist.id}` ? <Loader2 className="spin" size={17} /> : <Trash2 size={17} />}
+          </button>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function LibraryAlbumGrid({
+  albums,
+  busyKey,
+  onOpen,
+  onTrash
+}: {
+  albums: LibraryAlbumSummary[];
+  busyKey: string | null;
+  onOpen: (album: LibraryAlbumSummary) => void;
+  onTrash: (album: LibraryAlbumSummary) => void;
+}) {
+  if (albums.length === 0) {
+    return <EmptyState icon={AlbumIcon} title="No albums" />;
+  }
+
+  return (
+    <div className="library-card-grid album-grid">
+      {albums.map((album) => (
+        <article className="library-card album-card" key={album.id}>
+          <button className="library-card-main" type="button" onClick={() => onOpen(album)}>
+            <span className="library-thumb album-thumb" aria-hidden="true">
+              <AlbumIcon size={22} />
+              <strong>{album.thumbnailLabel}</strong>
+            </span>
+            <span className="library-card-copy">
+              <strong>{album.title}</strong>
+              <span>{libraryMeta([album.albumType, album.yearLabel, `${album.trackCount} ${pluralize("track", album.trackCount)}`])}</span>
+              <span>{libraryMeta([formatBytes(album.totalSize), album.duration ? formatDuration(album.duration) : "", album.formats.join(" / "), issueLabel(album.issueCount)])}</span>
+            </span>
+            <ChevronRight size={18} />
+          </button>
+          <button
+            className="icon-button danger-icon"
+            type="button"
+            onClick={() => onTrash(album)}
+            disabled={Boolean(busyKey)}
+            title={`Trash ${album.title}`}
+            aria-label={`Trash ${album.title}`}
+          >
+            {busyKey === `album:${album.id}` ? <Loader2 className="spin" size={17} /> : <Trash2 size={17} />}
+          </button>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function LibraryTrackTable({
+  tracks,
+  busyKey,
+  onTrash
+}: {
+  tracks: TrackFile[];
+  busyKey: string | null;
+  onTrash: (track: TrackFile) => void;
+}) {
+  if (tracks.length === 0) {
+    return <EmptyState icon={Music2} title="No tracks" />;
+  }
+
+  return (
+    <div className="table-wrap">
+      <table className="library-track-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Track</th>
+            <th>Current path</th>
+            <th>Quality</th>
+            <th>Trash</th>
+          </tr>
+        </thead>
+        <tbody>
+          {tracks.map((track) => (
+            <tr key={track.id}>
+              <td>{trackNumberLabel(track)}</td>
+              <td>
+                <strong>{track.title}</strong>
+                <span>{albumReleaseLabel(track)}</span>
+              </td>
+              <td>{track.relativePath}</td>
+              <td>
+                <span className="quality-pill">{qualitySummary(track)}</span>
+              </td>
+              <td>
+                <button
+                  className="icon-button danger-icon"
+                  type="button"
+                  onClick={() => onTrash(track)}
+                  disabled={Boolean(busyKey)}
+                  title={`Trash ${track.title}`}
+                  aria-label={`Trash ${track.title}`}
+                >
+                  {busyKey === `track:${track.id}` ? <Loader2 className="spin" size={17} /> : <Trash2 size={17} />}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -1444,46 +1798,6 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
   );
 }
 
-function TrackTable({ tracks }: { tracks: TrackFile[] }) {
-  if (tracks.length === 0) {
-    return <EmptyState icon={Database} title="No tracks" />;
-  }
-
-  return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Track</th>
-            <th>Album</th>
-            <th>Current path</th>
-            <th>Target path</th>
-            <th>Quality</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tracks.map((track) => (
-            <tr key={track.id}>
-              <td>
-                <strong>{track.title}</strong>
-                <span>{track.artist}</span>
-              </td>
-              <td>{track.album}</td>
-              <td>{track.relativePath}</td>
-              <td>{track.targetRelativePath}</td>
-              <td>
-                <span className="quality-pill">
-                  {qualitySummary(track)}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 function PathDiff({ value, compareTo }: { value: string; compareTo: string }) {
   return (
     <span className="path-diff">
@@ -1721,6 +2035,48 @@ function pathDirectory(value: string) {
 function pathFilename(value: string) {
   const index = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
   return index >= 0 ? value.slice(index + 1) : value;
+}
+
+function filterLibraryTracks(tracks: TrackFile[], search: string) {
+  const query = search.trim().toLowerCase();
+
+  if (!query) {
+    return tracks;
+  }
+
+  return tracks.filter((track) =>
+    [track.title, track.artist, track.albumArtist, track.album, track.relativePath]
+      .join(" ")
+      .toLowerCase()
+      .includes(query)
+  );
+}
+
+function libraryTrashNotice(result: LibraryTrashResult) {
+  const errorSuffix = result.errors.length ? ` (${result.errors.length} issue${result.errors.length === 1 ? "" : "s"})` : "";
+  return `${result.trashed} moved to recycle bin${errorSuffix}.`;
+}
+
+function libraryMeta(values: string[]) {
+  return values.filter(Boolean).join(" / ");
+}
+
+function issueLabel(count: number) {
+  return count > 0 ? `${count} metadata ${count === 1 ? "issue" : "issues"}` : "";
+}
+
+function pluralize(value: string, count: number) {
+  return count === 1 ? value : `${value}s`;
+}
+
+function trackNumberLabel(track: TrackFile) {
+  const trackNumber = track.trackNumber ? track.trackNumber.toString().padStart(2, "0") : "--";
+
+  if (track.discNumber && track.discNumber > 1) {
+    return `${track.discNumber}-${trackNumber}`;
+  }
+
+  return trackNumber;
 }
 
 function albumReleaseLabel(track: TrackFile) {

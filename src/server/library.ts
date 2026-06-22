@@ -1,0 +1,383 @@
+import { constants } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { LibraryAlbumSummary, LibraryArtistSummary, LibraryTrashResult, TrackFile } from "../shared/types.js";
+import type { PrivateSettings } from "./settings.js";
+import { isInsidePath, normalizeForMatch, sha1 } from "./utils.js";
+
+type ArtistGroup = {
+  id: string;
+  key: string;
+  name: string;
+  tracks: TrackFile[];
+};
+
+type AlbumGroup = {
+  id: string;
+  key: string;
+  artistId: string;
+  artist: string;
+  title: string;
+  albumType: string;
+  tracks: TrackFile[];
+};
+
+export function buildLibraryArtists(tracks: TrackFile[], search = ""): LibraryArtistSummary[] {
+  const query = searchQuery(search);
+
+  return buildArtistGroups(tracks)
+    .map(artistSummary)
+    .filter((artist) => summaryMatches(query, [artist.name, artist.formats.join(" ")]))
+    .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+}
+
+export function buildLibraryAlbums(tracks: TrackFile[], artistId: string, search = ""): LibraryAlbumSummary[] | null {
+  const artist = findArtistGroup(tracks, artistId);
+
+  if (!artist) {
+    return null;
+  }
+
+  const query = searchQuery(search);
+
+  return buildAlbumGroups(artist)
+    .map(albumSummary)
+    .filter((album) => summaryMatches(query, [album.title, album.artist, album.albumType, album.yearLabel, album.formats.join(" ")]))
+    .sort(compareAlbums);
+}
+
+export function findLibraryArtistTracks(tracks: TrackFile[], artistId: string) {
+  return findArtistGroup(tracks, artistId)?.tracks ?? null;
+}
+
+export function findLibraryAlbumTracks(tracks: TrackFile[], artistId: string, albumId: string) {
+  const artist = findArtistGroup(tracks, artistId);
+
+  if (!artist) {
+    return null;
+  }
+
+  const album = buildAlbumGroups(artist).find((candidate) => candidate.id === albumId);
+  return album ? sortTracks(album.tracks) : null;
+}
+
+export async function trashLibraryTracks(
+  settings: PrivateSettings,
+  tracks: TrackFile[],
+  trackIds: string[]
+): Promise<LibraryTrashResult & { tracks: TrackFile[] }> {
+  const selectedIds = new Set(trackIds);
+
+  if (selectedIds.size === 0) {
+    throw new Error("At least one library track is required.");
+  }
+
+  const selectedTracks = tracks.filter((track) => selectedIds.has(track.id));
+  const selectedTrackIds = new Set(selectedTracks.map((track) => track.id));
+  const errors = trackIds
+    .filter((id) => !selectedTrackIds.has(id))
+    .map((id) => `${id}: track is no longer in the catalog`);
+  const libraryRoot = path.resolve(settings.naming.libraryPath);
+  const trashRoot = safeRecycleBinPath(settings);
+  const trashSessionRoot = path.join(trashRoot, new Date().toISOString().replace(/[:.]/g, "-"));
+  const removedTrackIds = new Set<string>();
+  const touchedDirectories = new Set<string>();
+  let trashed = 0;
+
+  for (const track of selectedTracks) {
+    const sourcePath = path.resolve(track.absolutePath);
+
+    if (!isInsidePath(libraryRoot, sourcePath) || sourcePath === libraryRoot) {
+      errors.push(`${track.relativePath}: only files inside the configured library can be recycled`);
+      continue;
+    }
+
+    try {
+      const targetPath = path.join(trashSessionRoot, ...track.relativePath.split("/").filter(Boolean));
+
+      if (!isInsidePath(trashSessionRoot, targetPath) || targetPath === trashSessionRoot) {
+        errors.push(`${track.relativePath}: recycle target leaves the recycle session folder`);
+        continue;
+      }
+
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await moveFile(sourcePath, targetPath);
+      touchedDirectories.add(path.dirname(sourcePath));
+      removedTrackIds.add(track.id);
+      trashed += 1;
+    } catch (error) {
+      errors.push(`${track.relativePath}: ${(error as Error).message}`);
+    }
+  }
+
+  for (const directory of touchedDirectories) {
+    await pruneEmptyDirectories(libraryRoot, directory);
+  }
+
+  return {
+    trashed,
+    removedTrackIds: Array.from(removedTrackIds),
+    errors,
+    tracks: tracks.filter((track) => !removedTrackIds.has(track.id))
+  };
+}
+
+function buildArtistGroups(tracks: TrackFile[]) {
+  const groups = new Map<string, ArtistGroup>();
+
+  for (const track of tracks) {
+    const name = artistName(track);
+    const key = artistKey(name);
+    const group = groups.get(key) ?? {
+      id: sha1(`artist:${key}`),
+      key,
+      name,
+      tracks: []
+    };
+
+    group.tracks.push(track);
+    group.name = preferredDisplayName(group.name, name);
+    groups.set(key, group);
+  }
+
+  return Array.from(groups.values());
+}
+
+function findArtistGroup(tracks: TrackFile[], artistId: string) {
+  return buildArtistGroups(tracks).find((group) => group.id === artistId) ?? null;
+}
+
+function buildAlbumGroups(artist: ArtistGroup) {
+  const groups = new Map<string, AlbumGroup>();
+
+  for (const track of artist.tracks) {
+    const title = albumTitle(track);
+    const albumType = track.albumType || "Album";
+    const key = `${albumKey(title)}|${albumKey(albumType)}`;
+    const group = groups.get(key) ?? {
+      id: sha1(`album:${artist.key}:${key}`),
+      key,
+      artistId: artist.id,
+      artist: artist.name,
+      title,
+      albumType,
+      tracks: []
+    };
+
+    group.tracks.push(track);
+    group.title = preferredDisplayName(group.title, title);
+    group.albumType = preferredDisplayName(group.albumType, albumType);
+    groups.set(key, group);
+  }
+
+  return Array.from(groups.values());
+}
+
+function artistSummary(group: ArtistGroup): LibraryArtistSummary {
+  const albums = buildAlbumGroups(group);
+
+  return {
+    id: group.id,
+    name: group.name,
+    thumbnailLabel: thumbnailLabel(group.name),
+    albumCount: albums.length,
+    trackCount: group.tracks.length,
+    totalSize: totalSize(group.tracks),
+    formats: formats(group.tracks),
+    issueCount: issueCount(group.tracks)
+  };
+}
+
+function albumSummary(group: AlbumGroup): LibraryAlbumSummary {
+  return {
+    id: group.id,
+    artistId: group.artistId,
+    artist: group.artist,
+    title: group.title,
+    albumType: group.albumType || "Album",
+    yearLabel: yearLabel(group.tracks),
+    thumbnailLabel: thumbnailLabel(group.title),
+    trackCount: group.tracks.length,
+    totalSize: totalSize(group.tracks),
+    duration: totalDuration(group.tracks),
+    formats: formats(group.tracks),
+    issueCount: issueCount(group.tracks)
+  };
+}
+
+function sortTracks(tracks: TrackFile[]) {
+  return [...tracks].sort((left, right) => {
+    const disc = (left.discNumber ?? 1) - (right.discNumber ?? 1);
+
+    if (disc !== 0) {
+      return disc;
+    }
+
+    const track = (left.trackNumber ?? Number.MAX_SAFE_INTEGER) - (right.trackNumber ?? Number.MAX_SAFE_INTEGER);
+
+    if (track !== 0) {
+      return track;
+    }
+
+    return left.title.localeCompare(right.title, undefined, { sensitivity: "base" }) ||
+      left.relativePath.localeCompare(right.relativePath, undefined, { sensitivity: "base" });
+  });
+}
+
+function compareAlbums(left: LibraryAlbumSummary, right: LibraryAlbumSummary) {
+  const year = albumYearSort(right.yearLabel) - albumYearSort(left.yearLabel);
+
+  if (year !== 0) {
+    return year;
+  }
+
+  return left.title.localeCompare(right.title, undefined, { sensitivity: "base" });
+}
+
+function albumYearSort(value: string) {
+  const years = Array.from(value.matchAll(/\d{4}/g)).map((match) => Number(match[0]));
+  return years.length ? Math.max(...years) : 0;
+}
+
+function searchQuery(value: string) {
+  return normalizeForMatch(value, { removeBracketedText: false });
+}
+
+function summaryMatches(query: string, values: string[]) {
+  if (!query) {
+    return true;
+  }
+
+  return values.some((value) => normalizeForMatch(value, { removeBracketedText: false }).includes(query));
+}
+
+function artistName(track: TrackFile) {
+  return track.albumArtist || track.artist || "Unknown Artist";
+}
+
+function albumTitle(track: TrackFile) {
+  return track.album || "Unknown Album";
+}
+
+function artistKey(value: string) {
+  return normalizeForMatch(value || "Unknown Artist", { removeBracketedText: false }) || "unknown artist";
+}
+
+function albumKey(value: string) {
+  return normalizeForMatch(value || "Unknown Album", { removeBracketedText: false }) || "unknown album";
+}
+
+function preferredDisplayName(current: string, candidate: string) {
+  if (current.startsWith("Unknown") && !candidate.startsWith("Unknown")) {
+    return candidate;
+  }
+
+  return current;
+}
+
+function thumbnailLabel(value: string) {
+  const words = value
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length === 0) {
+    return "?";
+  }
+
+  return words
+    .slice(0, 2)
+    .map((word) => word.charAt(0).toUpperCase())
+    .join("");
+}
+
+function totalSize(tracks: TrackFile[]) {
+  return tracks.reduce((total, track) => total + track.size, 0);
+}
+
+function totalDuration(tracks: TrackFile[]) {
+  const durations = tracks.map((track) => track.duration).filter((duration): duration is number => typeof duration === "number");
+  return durations.length ? durations.reduce((total, duration) => total + duration, 0) : null;
+}
+
+function formats(tracks: TrackFile[]) {
+  return Array.from(new Set(tracks.map((track) => track.extension.replace(/^\./, "").toUpperCase()).filter(Boolean))).sort();
+}
+
+function issueCount(tracks: TrackFile[]) {
+  return tracks.filter((track) => track.issues.length > 0).length;
+}
+
+function yearLabel(tracks: TrackFile[]) {
+  const years = Array.from(new Set(tracks.map((track) => track.year).filter((year): year is number => typeof year === "number"))).sort(
+    (left, right) => left - right
+  );
+
+  if (years.length === 0) {
+    return "Unknown Year";
+  }
+
+  if (years.length === 1) {
+    return String(years[0]);
+  }
+
+  return `${years[0]}-${years[years.length - 1]}`;
+}
+
+function safeRecycleBinPath(settings: PrivateSettings) {
+  const recycleBinPath = path.resolve(settings.naming.recycleBinPath);
+  const libraryPath = path.resolve(settings.naming.libraryPath);
+
+  if (recycleBinPath === path.parse(recycleBinPath).root) {
+    throw new Error("Recycle bin path cannot be a drive or filesystem root.");
+  }
+
+  if (recycleBinPath === libraryPath || isInsidePath(recycleBinPath, libraryPath)) {
+    throw new Error("Recycle bin path cannot be the library path or contain the library path.");
+  }
+
+  return recycleBinPath;
+}
+
+async function moveFile(source: string, target: string) {
+  try {
+    await fs.rename(source, target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EXDEV") {
+      throw error;
+    }
+
+    const stat = await fs.stat(source);
+    await fs.copyFile(source, target, constants.COPYFILE_EXCL);
+    await fs.chmod(target, stat.mode);
+    await fs.utimes(target, stat.atime, stat.mtime);
+    await fs.unlink(source);
+  }
+}
+
+async function pruneEmptyDirectories(root: string, startDirectory: string) {
+  let current = path.resolve(startDirectory);
+  const resolvedRoot = path.resolve(root);
+
+  while (current !== resolvedRoot && isInsidePath(resolvedRoot, current)) {
+    try {
+      await fs.rmdir(current);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+
+      if (code === "ENOENT") {
+        current = path.dirname(current);
+        continue;
+      }
+
+      if (code === "ENOTEMPTY" || code === "EEXIST") {
+        break;
+      }
+
+      throw error;
+    }
+
+    current = path.dirname(current);
+  }
+}
