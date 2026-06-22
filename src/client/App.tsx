@@ -59,8 +59,7 @@ const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
 ];
 
 const namingModes: Array<{ id: NamingMode; label: string }> = [
-  { id: "spotifybu", label: "SpotifyBU" },
-  { id: "lidarr", label: "Lidarr" },
+  { id: "standard", label: "Standard" },
   { id: "manual", label: "Manual" }
 ];
 
@@ -74,12 +73,12 @@ const organizePreviewFilters: Array<{ id: OrganizePreviewFilter; label: string }
   { id: "all", label: "All" }
 ];
 
-const spotifyBuNamingDefaults = {
+const standardNamingDefaults = {
   artistFolderFormat: "{Album Artist Name}",
   standardTrackFormat:
-    "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
+    "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}",
   multiDiscTrackFormat:
-    "{Album Artist Name} - {Album Type} - {Release Year} - {Album Title}/{medium:00}{track:00} - {Track Title}",
+    "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}",
   replaceIllegalCharacters: true,
   colonReplacementFormat: 4
 };
@@ -957,7 +956,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
     <section className="panel">
       <div className="notice-bar safety">
         <strong>Stage 2: organize first</strong>
-        <span>Files move into the SpotifyBU/Lidarr album layout before duplicate cleanup unlocks.</span>
+        <span>Files move into the active album layout before duplicate cleanup unlocks.</span>
       </div>
       <div className="toolbar">
         <div className="summary-chips">
@@ -1156,11 +1155,9 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [adminPassword, setAdminPassword] = useState("");
   const [navidromePassword, setNavidromePassword] = useState("");
-  const [lidarrApiKey, setLidarrApiKey] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [navidromeBusy, setNavidromeBusy] = useState(false);
-  const [lidarrBusy, setLidarrBusy] = useState(false);
 
   useEffect(() => {
     api<SettingsView>("/settings")
@@ -1198,38 +1195,20 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
             standardTrackFormat: settings.naming.standardTrackFormat,
             multiDiscTrackFormat: settings.naming.multiDiscTrackFormat,
             replaceIllegalCharacters: settings.naming.replaceIllegalCharacters,
-            colonReplacementFormat: settings.naming.colonReplacementFormat,
-            lidarr: {
-              baseUrl: settings.naming.lidarr.baseUrl,
-              apiKey: lidarrApiKey
-            }
+            colonReplacementFormat: settings.naming.colonReplacementFormat
           }
         })
       });
 
-      let message = "Saved";
-
-      if (next.naming.mode === "lidarr") {
-        next = await api<SettingsView>("/lidarr/naming/sync", {
-          method: "POST",
-          body: JSON.stringify({
-            baseUrl: next.naming.lidarr.baseUrl,
-            apiKey: lidarrApiKey
-          })
-        });
-        message = "Saved and loaded Lidarr naming";
-      }
-
       setSettings(next);
       setAdminPassword("");
       setNavidromePassword("");
-      setLidarrApiKey("");
       onAuthChange({
         authEnabled: next.auth.enabled,
         authenticated: true,
         username: next.auth.username
       });
-      setNotice(message);
+      setNotice("Saved");
     } catch (caught) {
       setNotice((caught as Error).message);
     } finally {
@@ -1269,61 +1248,6 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
     setSettings({ ...settings, naming: { ...settings.naming, ...update } });
   };
 
-  const updateLidarr = (update: Partial<SettingsView["naming"]["lidarr"]>) => {
-    if (!settings) {
-      return;
-    }
-    updateNaming({ lidarr: { ...settings.naming.lidarr, ...update } });
-  };
-
-  const testLidarr = async () => {
-    if (!settings) {
-      return;
-    }
-
-    setLidarrBusy(true);
-    setNotice(null);
-    try {
-      const result = await api<{ ok: boolean; message: string }>("/lidarr/test", {
-        method: "POST",
-        body: JSON.stringify({
-          baseUrl: settings.naming.lidarr.baseUrl,
-          apiKey: lidarrApiKey
-        })
-      });
-      setNotice(result.message);
-    } catch (caught) {
-      setNotice((caught as Error).message);
-    } finally {
-      setLidarrBusy(false);
-    }
-  };
-
-  const loadLidarrNaming = async () => {
-    if (!settings) {
-      return;
-    }
-
-    setLidarrBusy(true);
-    setNotice(null);
-    try {
-      const next = await api<SettingsView>("/lidarr/naming/sync", {
-        method: "POST",
-        body: JSON.stringify({
-          baseUrl: settings.naming.lidarr.baseUrl,
-          apiKey: lidarrApiKey
-        })
-      });
-      setSettings(next);
-      setLidarrApiKey("");
-      setNotice("Loaded Lidarr naming");
-    } catch (caught) {
-      setNotice((caught as Error).message);
-    } finally {
-      setLidarrBusy(false);
-    }
-  };
-
   if (!settings) {
     return <MessageScreen title="Settings" message="Loading" />;
   }
@@ -1335,7 +1259,6 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
       {notice && <div className="notice-bar settings-notice">{notice}</div>}
       {busy && <ActionProgress label="Saving settings" />}
       {navidromeBusy && <ActionProgress label="Testing Navidrome connection" />}
-      {lidarrBusy && <ActionProgress label="Contacting Lidarr" />}
 
       <fieldset className="panel">
         <legend>
@@ -1430,8 +1353,8 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
           />
         </label>
         <div className="settings-subsection">
-          <span className="subsection-label">Naming source</span>
-          <div className="segmented-control" role="radiogroup" aria-label="Naming source">
+          <span className="subsection-label">Naming mode</span>
+          <div className="segmented-control" role="radiogroup" aria-label="Naming mode">
             {namingModes.map((mode) => (
               <button
                 key={mode.id}
@@ -1440,7 +1363,7 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
                 role="radio"
                 aria-checked={settings.naming.mode === mode.id}
                 onClick={() =>
-                  updateNaming(mode.id === "spotifybu" ? { mode: mode.id, ...spotifyBuNamingDefaults } : { mode: mode.id })
+                  updateNaming(mode.id === "standard" ? { mode: mode.id, ...standardNamingDefaults } : { mode: mode.id })
                 }
               >
                 {mode.label}
@@ -1448,43 +1371,10 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
             ))}
           </div>
         </div>
-        {settings.naming.mode === "lidarr" && (
-          <div className="settings-subsection">
-            <div className="form-grid two">
-              <label>
-                Lidarr URL
-                <input
-                  value={settings.naming.lidarr.baseUrl}
-                  onChange={(event) => updateLidarr({ baseUrl: event.target.value })}
-                  placeholder="http://lidarr:8686"
-                />
-              </label>
-              <label>
-                Lidarr API key
-                <input
-                  value={lidarrApiKey}
-                  onChange={(event) => setLidarrApiKey(event.target.value)}
-                  type="password"
-                  placeholder={settings.naming.lidarr.apiKeySet ? "Saved" : ""}
-                />
-              </label>
-            </div>
-            <div className="button-row">
-              <button className="secondary-button" type="button" onClick={testLidarr} disabled={lidarrBusy}>
-                {lidarrBusy ? <Loader2 className="spin" size={18} /> : <Activity size={18} />}
-                <span>Test</span>
-              </button>
-              <button className="secondary-button" type="button" onClick={loadLidarrNaming} disabled={lidarrBusy}>
-                {lidarrBusy ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
-                <span>Load from Lidarr</span>
-              </button>
-            </div>
-          </div>
-        )}
-        {settings.naming.mode === "spotifybu" && (
+        {settings.naming.mode === "standard" && (
           <div className="notice-bar safety">
-            <strong>SpotifyBU naming</strong>
-            <span>This fixed mode keeps NaviClean aligned with SpotifyBU for fresh installs and rescans.</span>
+            <strong>Standard naming</strong>
+            <span>Uses Artist / Artist - Album (Year) / Artist - Album (Year) - 01 - Track Title.</span>
           </div>
         )}
         {settings.naming.mode === "manual" && (
@@ -1913,4 +1803,3 @@ function formatDuration(value: number) {
   const remainingSeconds = seconds % 60;
   return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 }
-

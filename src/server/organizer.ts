@@ -15,12 +15,12 @@ import { duplicateKeyForTrack } from "./matching.js";
 import type { PrivateSettings } from "./settings.js";
 import { isInsidePath, toPosixRelative } from "./utils.js";
 
-const unknownLidarrReleaseYear = "Unknown Year";
+const unknownReleaseYear = "Unknown Year";
 const controlCharacters = /[\u0000-\u001f]/g;
 const combiningMarks = /[\u0300-\u036f]/g;
 const reservedWindowsNames = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
-const lidarrBadCharacters = ["\\", "/", "<", ">", "?", "*", "|", "\""];
-const lidarrReplacementCharacters = ["+", "+", "", "", "!", "-", "", ""];
+const unsafePathCharacters = ["\\", "/", "<", ">", "?", "*", "|", "\""];
+const pathReplacementCharacters = ["+", "+", "", "", "!", "-", "", ""];
 
 type PlannedOrganizeItem = {
   item: OrganizePlanItem;
@@ -32,10 +32,11 @@ type PlannedOrganizeItem = {
 export function targetForTrack(track: TrackFile, settings: PrivateSettings) {
   const root = path.resolve(settings.naming.libraryPath);
   const extension = track.extension.startsWith(".") ? track.extension : `.${track.extension}`;
-  const targetRelativePath =
-    settings.naming.mode === "spotifybu"
-      ? spotifyBuRelativePath(track, extension)
-      : templateRelativePath(track, settings, extension);
+  const compatibleExistingPath =
+    settings.naming.mode === "standard"
+      ? compatibleExistingStandardRelativePath(track, extension)
+      : null;
+  const targetRelativePath = compatibleExistingPath ?? templateRelativePath(track, settings, extension);
   const target = path.resolve(root, ...targetRelativePath.split("/").filter(Boolean));
 
   if (!isInsidePath(root, target)) {
@@ -382,29 +383,7 @@ export function trackNeedsMove(track: TrackFile) {
   return path.resolve(track.absolutePath) !== path.resolve(track.targetPath);
 }
 
-function buildLidarrArtistFolderName(track: TrackFile) {
-  return cleanLidarrToken(track.albumArtist || track.artist || "Unknown Artist", "Unknown Artist");
-}
-
-function buildLidarrAlbumFolderName(track: TrackFile, artistFolderName = buildLidarrArtistFolderName(track)) {
-  const albumType = lidarrAlbumType(track);
-  return [
-    artistFolderName,
-    ...(albumType ? [albumType] : []),
-    releaseYear(track),
-    cleanLidarrToken(track.album || "Unknown Album", "Unknown Album")
-  ].join(" - ");
-}
-
-function buildNavidromeTrackFileBase(track: TrackFile) {
-  const mediumNumber = track.discNumber ?? 1;
-  const trackNumber = track.trackNumber ?? 0;
-  const prefix = `${padLidarrNumber(mediumNumber)}${padLidarrNumber(trackNumber)}`;
-
-  return `${prefix} - ${cleanLidarrToken(track.title || "Unknown Track", "Unknown Track")}`;
-}
-
-function cleanLidarrToken(value: string, fallback: string) {
+function cleanPathToken(value: string, fallback: string) {
   return (
     value
       .normalize("NFKD")
@@ -414,18 +393,6 @@ function cleanLidarrToken(value: string, fallback: string) {
       .trim()
       .slice(0, 120) || fallback
   );
-}
-
-function spotifyBuRelativePath(track: TrackFile, extension: string) {
-  const compatibleExistingPath = compatibleExistingSpotifyBuRelativePath(track, extension);
-
-  if (compatibleExistingPath) {
-    return compatibleExistingPath;
-  }
-
-  const artistFolderName = buildLidarrArtistFolderName(track);
-  const albumFolderName = buildLidarrAlbumFolderName(track, artistFolderName);
-  return path.posix.join(artistFolderName, albumFolderName, `${buildNavidromeTrackFileBase(track)}${extension}`);
 }
 
 function templateRelativePath(track: TrackFile, settings: PrivateSettings, extension: string) {
@@ -474,7 +441,7 @@ function toTemplateTokens(track: TrackFile) {
     "albumcleantitle": cleanTitleToken(album),
     "albumtitlethe": titleThe(album),
     "albumcleantitlethe": cleanTitleToken(titleThe(album)),
-    "albumtype": lidarrAlbumType(track),
+    "albumtype": albumTypeToken(track),
     "tracktitle": title,
     "trackcleantitle": cleanTitleToken(title),
     "trackartistname": artist,
@@ -589,12 +556,12 @@ function pathSegmentsFromTemplate(value: string, naming: PrivateSettings["naming
 
 function sanitizeTemplateSegment(value: string, naming: PrivateSettings["naming"]) {
   let segment = value.normalize("NFKD").replace(combiningMarks, "").replace(/\s+/g, " ").trim();
-  segment = replaceLidarrColon(segment, naming);
+  segment = replaceTemplateColon(segment, naming);
 
-  for (let index = 0; index < lidarrBadCharacters.length; index += 1) {
+  for (let index = 0; index < unsafePathCharacters.length; index += 1) {
     segment = segment.replaceAll(
-      lidarrBadCharacters[index],
-      naming.replaceIllegalCharacters ? lidarrReplacementCharacters[index] : ""
+      unsafePathCharacters[index],
+      naming.replaceIllegalCharacters ? pathReplacementCharacters[index] : ""
     );
   }
 
@@ -611,7 +578,7 @@ function sanitizeTemplateSegment(value: string, naming: PrivateSettings["naming"
   return segment.slice(0, 180).trim();
 }
 
-function replaceLidarrColon(value: string, naming: PrivateSettings["naming"]) {
+function replaceTemplateColon(value: string, naming: PrivateSettings["naming"]) {
   if (!naming.replaceIllegalCharacters) {
     return value.replaceAll(":", "");
   }
@@ -660,7 +627,7 @@ function qualityTitleForTrack(track: TrackFile) {
   return `${codec}${bitrate}${depth}${sampleRate}`.trim();
 }
 
-function lidarrAlbumType(track: TrackFile) {
+function albumTypeToken(track: TrackFile) {
   const albumType = (track.albumType ?? "").trim().toLowerCase();
 
   if (albumType === "compilation") {
@@ -678,7 +645,7 @@ function lidarrAlbumType(track: TrackFile) {
   return albumType ? titleCaseAlbumType(albumType) : "";
 }
 
-function compatibleExistingSpotifyBuRelativePath(track: TrackFile, extension: string) {
+function compatibleExistingStandardRelativePath(track: TrackFile, extension: string) {
   const parsedPath = path.posix.parse(track.relativePath);
 
   if (parsedPath.ext.toLowerCase() !== extension.toLowerCase()) {
@@ -689,11 +656,13 @@ function compatibleExistingSpotifyBuRelativePath(track: TrackFile, extension: st
     return null;
   }
 
-  return currentAlbumDirectoryIsCompatible(track, parsedPath.dir) ? track.relativePath : null;
+  return currentStandardAlbumDirectoryIsCompatible(track, parsedPath.dir) ? track.relativePath : null;
 }
 
 function currentTrackFilenameMatches(track: TrackFile, filename: string) {
-  const match = filename.match(/^\s*(?<medium>\d{2})(?<track>\d{2})\s*[-_. ]+(?<title>.+)$/);
+  const match = filename.match(
+    /^\s*(?:(?<artist>.+?)\s+-\s+(?<album>.+?)\s+\((?<year>\d{4}|Unknown Year)\)\s+-\s+)?(?:(?<medium>\d{1,2})[-_.])?(?<track>\d{1,3})\s*[-_. ]+(?<title>.+)$/
+  );
 
   if (!match?.groups) {
     return false;
@@ -703,15 +672,31 @@ function currentTrackFilenameMatches(track: TrackFile, filename: string) {
   const trackNumber = Number.parseInt(match.groups.track, 10);
   const expectedMedium = track.discNumber ?? 1;
   const expectedTrack = track.trackNumber ?? 0;
+  const expectedArtist = cleanPathToken(track.albumArtist || track.artist || "Unknown Artist", "Unknown Artist");
+  const expectedAlbum = cleanPathToken(track.album || "Unknown Album", "Unknown Album");
+
+  if (
+    match.groups.artist &&
+    normalizedPathKey(match.groups.artist) !== normalizedPathKey(expectedArtist)
+  ) {
+    return false;
+  }
+
+  if (
+    match.groups.album &&
+    normalizedPathKey(match.groups.album) !== normalizedPathKey(expectedAlbum)
+  ) {
+    return false;
+  }
 
   return (
-    mediumNumber === expectedMedium &&
+    (Number.isNaN(mediumNumber) || mediumNumber === expectedMedium) &&
     trackNumber === expectedTrack &&
-    lidarrTokenKey(match.groups.title) === lidarrTokenKey(track.title || "Unknown Track")
+    normalizedPathKey(match.groups.title) === normalizedPathKey(track.title || "Unknown Track")
   );
 }
 
-function currentAlbumDirectoryIsCompatible(track: TrackFile, relativeDirectory: string) {
+function currentStandardAlbumDirectoryIsCompatible(track: TrackFile, relativeDirectory: string) {
   const segments = relativeDirectory.split("/").filter(Boolean);
   const albumFolderName = segments.at(-1);
   const parentArtistFolderName = segments.at(-2);
@@ -720,67 +705,52 @@ function currentAlbumDirectoryIsCompatible(track: TrackFile, relativeDirectory: 
     return false;
   }
 
-  const expectedArtist = buildLidarrArtistFolderName(track);
+  const expectedArtist = cleanPathToken(track.albumArtist || track.artist || "Unknown Artist", "Unknown Artist");
 
-  if (lidarrTokenKey(parentArtistFolderName) !== lidarrTokenKey(expectedArtist)) {
+  if (normalizedPathKey(parentArtistFolderName) !== normalizedPathKey(expectedArtist)) {
     return false;
   }
 
-  const prefix = `${parentArtistFolderName} - `;
-
-  if (!albumFolderName.toLowerCase().startsWith(prefix.toLowerCase())) {
-    return false;
-  }
-
-  const parsedAlbumFolder = parseExistingAlbumFolder(albumFolderName.slice(prefix.length));
+  const parsedAlbumFolder = parseStandardAlbumFolder(albumFolderName, parentArtistFolderName);
 
   if (!parsedAlbumFolder) {
     return false;
   }
 
-  const expectedAlbum = cleanLidarrToken(track.album || "Unknown Album", "Unknown Album");
-  const expectedYear = releaseYear(track);
-  const expectedAlbumType = lidarrAlbumType(track);
-
-  if (
-    parsedAlbumFolder.year !== expectedYear ||
-    lidarrTokenKey(parsedAlbumFolder.album) !== lidarrTokenKey(expectedAlbum)
-  ) {
-    return false;
-  }
-
-  if (!parsedAlbumFolder.albumType) {
-    return !expectedAlbumType;
-  }
-
-  return !expectedAlbumType || lidarrTokenKey(parsedAlbumFolder.albumType) === lidarrTokenKey(expectedAlbumType);
+  const expectedAlbum = cleanPathToken(track.album || "Unknown Album", "Unknown Album");
+  return normalizedPathKey(parsedAlbumFolder.album) === normalizedPathKey(expectedAlbum);
 }
 
-function parseExistingAlbumFolder(value: string) {
-  const withoutType = value.match(/^(?<year>\d{4}|Unknown Year) - (?<album>.+)$/);
+function parseStandardAlbumFolder(value: string, artistFolderName: string) {
+  const prefix = `${artistFolderName} - `;
 
-  if (withoutType?.groups) {
+  if (!value.toLowerCase().startsWith(prefix.toLowerCase())) {
+    return null;
+  }
+
+  const remainder = value.slice(prefix.length);
+  const standard = remainder.match(/^(?<album>.+?)\s+\((?<year>\d{4}|Unknown Year)\)$/);
+
+  if (standard?.groups) {
     return {
-      album: withoutType.groups.album.trim(),
-      albumType: "",
-      year: withoutType.groups.year
+      album: standard.groups.album.trim(),
+      year: standard.groups.year
     };
   }
 
-  const withType = value.match(/^(?<albumType>.+?) - (?<year>\d{4}|Unknown Year) - (?<album>.+)$/);
+  const legacy = remainder.match(/^(?:(?<albumType>.+?) - )?(?<year>\d{4}|Unknown Year) - (?<album>.+)$/);
 
-  if (!withType?.groups) {
+  if (!legacy?.groups) {
     return null;
   }
 
   return {
-    album: withType.groups.album.trim(),
-    albumType: withType.groups.albumType.trim(),
-    year: withType.groups.year
+    album: legacy.groups.album.trim(),
+    year: legacy.groups.year
   };
 }
 
-function lidarrTokenKey(value: string) {
+function normalizedPathKey(value: string) {
   return cleanTitleToken(value).toLowerCase();
 }
 
@@ -793,11 +763,7 @@ function titleCaseAlbumType(value: string) {
 }
 
 function releaseYear(track: TrackFile) {
-  return track.year ? String(track.year) : unknownLidarrReleaseYear;
-}
-
-function padLidarrNumber(value: number) {
-  return Math.max(0, Math.floor(value)).toString().padStart(2, "0");
+  return track.year ? String(track.year) : unknownReleaseYear;
 }
 
 async function pathExists(filePath: string) {
@@ -836,4 +802,3 @@ async function moveFile(source: string, target: string) {
     await fs.unlink(source);
   }
 }
-

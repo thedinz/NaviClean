@@ -19,15 +19,9 @@ export type NamingSettings = {
   multiDiscTrackFormat: string;
   replaceIllegalCharacters: boolean;
   colonReplacementFormat: number;
-  lidarr: LidarrSettingsView;
 };
 
-export type NamingMode = "manual" | "lidarr" | "spotifybu";
-
-export type LidarrSettingsView = {
-  baseUrl: string;
-  apiKeySet: boolean;
-};
+export type NamingMode = "standard" | "manual";
 
 export type ScanSettings = {
   extensions: string[];
@@ -54,12 +48,7 @@ export type SettingsUpdate = {
     username?: string;
     password?: string;
   };
-  naming?: Partial<Omit<NamingSettings, "lidarr">> & {
-    lidarr?: {
-      baseUrl?: string;
-      apiKey?: string;
-    };
-  };
+  naming?: Partial<NamingSettings>;
   scan?: Partial<ScanSettings>;
 };
 
@@ -241,4 +230,3 @@ export type DuplicateBulkResolveResult = {
   removedTrackIds: string[];
   errors: string[];
 };
-
