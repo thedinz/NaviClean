@@ -31,6 +31,9 @@ import type {
   OrganizeCollisionCandidate,
   OrganizePlan,
   OrganizeTrashResult,
+  RecycleBinDeleteResult,
+  RecycleBinItem,
+  RecycleBinView,
   ScanStatus,
   SettingsView,
   TrackFile
@@ -38,7 +41,7 @@ import type {
 import { api } from "./api";
 import { appVersion } from "./version";
 
-type Page = "dashboard" | "library" | "duplicates" | "organize" | "settings";
+type Page = "dashboard" | "library" | "duplicates" | "organize" | "trash" | "settings";
 type OrganizePreviewFilter = "attention" | "ready" | "duplicate-target" | "conflict" | "missing" | "same" | "all";
 type OrganizePreviewItem = OrganizePlan["items"][number];
 
@@ -49,6 +52,7 @@ const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
   { id: "library", label: "Library", icon: Database },
   { id: "organize", label: "Organize", icon: FolderInput },
   { id: "duplicates", label: "Duplicates", icon: CopyX },
+  { id: "trash", label: "Trash", icon: Trash2 },
   { id: "settings", label: "Settings", icon: Settings }
 ];
 
@@ -243,6 +247,7 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
           <DuplicatesPage stats={stats} onChanged={refreshStats} onOpenOrganize={() => setPage("organize")} />
         )}
         {page === "organize" && <OrganizePage onChanged={refreshStats} />}
+        {page === "trash" && <TrashPage />}
         {page === "settings" && <SettingsPage onAuthChange={onAuthChange} />}
         <VersionFooter />
       </main>
@@ -529,6 +534,208 @@ function DuplicatesPage({
           </div>
         </article>
       ))}
+    </section>
+  );
+}
+
+function TrashPage() {
+  const [view, setView] = useState<RecycleBinView | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<"selected" | "empty" | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [errors, setErrors] = useState<string[]>([]);
+  const items = view?.items || [];
+  const selectedItems = items.filter((item) => selectedIds[item.id]);
+  const allSelected = items.length > 0 && selectedItems.length === items.length;
+
+  const load = async ({ clearNotice = true }: { clearNotice?: boolean } = {}) => {
+    setLoading(true);
+    if (clearNotice) {
+      setNotice(null);
+      setErrors([]);
+    }
+
+    try {
+      const next = await api<RecycleBinView>("/recycle-bin");
+      setView(next);
+      setSelectedIds((current) => {
+        const validIds = new Set(next.items.map((item) => item.id));
+        return Object.fromEntries(Object.entries(current).filter(([id, selected]) => selected && validIds.has(id)));
+      });
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const toggleAll = () => {
+    if (allSelected) {
+      setSelectedIds({});
+      return;
+    }
+
+    setSelectedIds(Object.fromEntries(items.map((item) => [item.id, true])));
+  };
+
+  const toggleItem = (item: RecycleBinItem) => {
+    setSelectedIds((current) => ({
+      ...current,
+      [item.id]: !current[item.id]
+    }));
+  };
+
+  const deleteSelected = async () => {
+    if (selectedItems.length === 0) {
+      return;
+    }
+
+    if (!window.confirm(`Permanently delete ${selectedItems.length} selected file(s) from Trash?`)) {
+      return;
+    }
+
+    setBusy("selected");
+    setNotice(null);
+    setErrors([]);
+
+    try {
+      const result = await api<RecycleBinDeleteResult>("/recycle-bin/items", {
+        method: "DELETE",
+        body: JSON.stringify({ ids: selectedItems.map((item) => item.id) })
+      });
+      setView(result.recycleBin);
+      setSelectedIds({});
+      setErrors(result.errors);
+      setNotice(`${result.deletedFiles} permanently deleted (${formatBytes(result.deletedBytes)}).`);
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const emptyTrash = async () => {
+    if (!view?.totalFiles) {
+      return;
+    }
+
+    if (!window.confirm(`Permanently delete all ${view.totalFiles} file(s) from Trash?`)) {
+      return;
+    }
+
+    setBusy("empty");
+    setNotice(null);
+    setErrors([]);
+
+    try {
+      const result = await api<RecycleBinDeleteResult>("/recycle-bin", { method: "DELETE" });
+      setView(result.recycleBin);
+      setSelectedIds({});
+      setErrors(result.errors);
+      setNotice(`${result.deletedFiles} permanently deleted (${formatBytes(result.deletedBytes)}).`);
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <div className="notice-bar safety">
+        <strong>Recycle bin</strong>
+        <span>{view?.recycleBinPath || "Loading recycle bin path"}</span>
+      </div>
+      <div className="toolbar">
+        <div className="summary-chips">
+          <span>{view?.totalFiles || 0} files</span>
+          <span>{formatBytes(view?.totalSize || 0)}</span>
+          <span>{selectedItems.length} selected</span>
+        </div>
+        <div className="button-row">
+          <button className="secondary-button" type="button" onClick={() => load()} disabled={loading || Boolean(busy)}>
+            {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+            <span>{loading ? "Loading" : "Refresh"}</span>
+          </button>
+          <button
+            className="danger-button"
+            type="button"
+            onClick={deleteSelected}
+            disabled={loading || Boolean(busy) || selectedItems.length === 0}
+          >
+            {busy === "selected" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+            <span>{busy === "selected" ? "Deleting" : "Delete selected"}</span>
+          </button>
+          <button
+            className="danger-button"
+            type="button"
+            onClick={emptyTrash}
+            disabled={loading || Boolean(busy) || !view?.totalFiles}
+          >
+            {busy === "empty" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+            <span>{busy === "empty" ? "Emptying" : "Empty trash"}</span>
+          </button>
+        </div>
+      </div>
+      {(loading || busy) && <ActionProgress label={busy ? "Deleting recycle bin files" : "Loading recycle bin"} />}
+      {notice && <div className="notice-bar">{notice}</div>}
+      {errors.length > 0 && (
+        <div className="error-list">
+          {errors.slice(0, 8).map((error) => (
+            <span key={error}>{error}</span>
+          ))}
+          {errors.length > 8 && <span>{errors.length - 8} more errors</span>}
+        </div>
+      )}
+      {!loading && items.length === 0 ? (
+        <EmptyState icon={Trash2} title="Trash is empty" />
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>
+                  <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all trash files" />
+                </th>
+                <th>Deleted</th>
+                <th>Original path</th>
+                <th>Trash path</th>
+                <th>Size</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item) => (
+                <tr key={item.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedIds[item.id])}
+                      onChange={() => toggleItem(item)}
+                      aria-label={`Select ${item.originalRelativePath}`}
+                    />
+                  </td>
+                  <td>
+                    <strong>{item.deletedAt ? formatDate(item.deletedAt) : item.deletedGroup || "Unknown"}</strong>
+                    <span>{item.extension.replace(".", "").toUpperCase() || "File"}</span>
+                  </td>
+                  <td>
+                    <span className="path-diff">{item.originalRelativePath}</span>
+                  </td>
+                  <td>
+                    <span className="path-diff">{item.relativePath}</span>
+                  </td>
+                  <td>{formatBytes(item.size)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </section>
   );
 }

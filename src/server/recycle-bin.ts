@@ -1,0 +1,203 @@
+import type { Dirent } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { RecycleBinDeleteResult, RecycleBinItem, RecycleBinView } from "../shared/types.js";
+import type { PrivateSettings } from "./settings.js";
+import { isInsidePath, sha1, toPosixRelative } from "./utils.js";
+
+export async function listRecycleBin(settings: PrivateSettings): Promise<RecycleBinView> {
+  const recycleBinPath = safeRecycleBinPath(settings);
+  const files = await collectRecycleBinFiles(recycleBinPath);
+  const items = files
+    .map((file) => recycleBinItemForFile(recycleBinPath, file.absolutePath, file.size, file.mtimeMs))
+    .sort((left, right) => right.mtimeMs - left.mtimeMs || left.relativePath.localeCompare(right.relativePath));
+  const totalSize = items.reduce((total, item) => total + item.size, 0);
+
+  return {
+    recycleBinPath,
+    totalFiles: items.length,
+    totalSize,
+    items
+  };
+}
+
+export async function emptyRecycleBin(settings: PrivateSettings): Promise<RecycleBinDeleteResult> {
+  const before = await listRecycleBin(settings);
+  const recycleBinPath = safeRecycleBinPath(settings);
+
+  await fs.rm(recycleBinPath, { force: true, recursive: true });
+  await fs.mkdir(recycleBinPath, { recursive: true });
+
+  return {
+    deletedFiles: before.totalFiles,
+    deletedBytes: before.totalSize,
+    errors: [],
+    recycleBin: await listRecycleBin(settings)
+  };
+}
+
+export async function deleteRecycleBinItems(
+  settings: PrivateSettings,
+  itemIds: string[]
+): Promise<RecycleBinDeleteResult> {
+  const recycleBinPath = safeRecycleBinPath(settings);
+  const current = await listRecycleBin(settings);
+  const selectedIds = new Set(itemIds);
+  const selectedItems = current.items.filter((item) => selectedIds.has(item.id));
+  const touchedDirectories = new Set<string>();
+  const errors: string[] = [];
+  let deletedFiles = 0;
+  let deletedBytes = 0;
+
+  for (const item of selectedItems) {
+    const itemPath = path.resolve(recycleBinPath, ...item.relativePath.split("/").filter(Boolean));
+
+    if (!isInsidePath(recycleBinPath, itemPath) || itemPath === recycleBinPath) {
+      errors.push(`${item.relativePath}: path is outside the recycle bin`);
+      continue;
+    }
+
+    try {
+      await fs.rm(itemPath, { force: false });
+      touchedDirectories.add(path.dirname(itemPath));
+      deletedFiles += 1;
+      deletedBytes += item.size;
+    } catch (error) {
+      errors.push(`${item.relativePath}: ${(error as Error).message}`);
+    }
+  }
+
+  for (const directory of touchedDirectories) {
+    await pruneEmptyDirectories(recycleBinPath, directory);
+  }
+
+  const missingIds = itemIds.filter((id) => !current.items.some((item) => item.id === id));
+
+  for (const id of missingIds) {
+    errors.push(`${id}: item is no longer in the recycle bin`);
+  }
+
+  return {
+    deletedFiles,
+    deletedBytes,
+    errors,
+    recycleBin: await listRecycleBin(settings)
+  };
+}
+
+function safeRecycleBinPath(settings: PrivateSettings) {
+  const recycleBinPath = path.resolve(settings.naming.recycleBinPath);
+  const libraryPath = path.resolve(settings.naming.libraryPath);
+
+  if (recycleBinPath === path.parse(recycleBinPath).root) {
+    throw new Error("Recycle bin path cannot be a drive or filesystem root.");
+  }
+
+  if (recycleBinPath === libraryPath || isInsidePath(recycleBinPath, libraryPath)) {
+    throw new Error("Recycle bin path cannot be the library path or contain the library path.");
+  }
+
+  return recycleBinPath;
+}
+
+async function collectRecycleBinFiles(root: string) {
+  const files: Array<{ absolutePath: string; size: number; mtimeMs: number }> = [];
+  const stack = [root];
+
+  while (stack.length > 0) {
+    const current = stack.pop() as string;
+    let entries: Dirent[];
+
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+
+      throw new Error(`Unable to read recycle bin ${current}: ${(error as Error).message}`);
+    }
+
+    for (const entry of entries) {
+      const absolutePath = path.join(current, entry.name);
+
+      if (entry.isDirectory()) {
+        stack.push(absolutePath);
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const stat = await fs.stat(absolutePath);
+      files.push({
+        absolutePath,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs
+      });
+    }
+  }
+
+  return files;
+}
+
+function recycleBinItemForFile(root: string, absolutePath: string, size: number, mtimeMs: number): RecycleBinItem {
+  const relativePath = toPosixRelative(root, absolutePath);
+  const segments = relativePath.split("/").filter(Boolean);
+  const deletedGroup = segments[0] || "";
+  const originalRelativePath = segments.length > 1 ? segments.slice(1).join("/") : relativePath;
+
+  return {
+    id: sha1(relativePath),
+    relativePath,
+    originalRelativePath,
+    deletedGroup,
+    deletedAt: parseRecycleBinGroupDate(deletedGroup),
+    extension: path.extname(absolutePath).toLowerCase(),
+    size,
+    mtimeMs
+  };
+}
+
+function parseRecycleBinGroupDate(value: string) {
+  const match = value.match(
+    /^(?<date>\d{4}-\d{2}-\d{2})T(?<hour>\d{2})-(?<minute>\d{2})-(?<second>\d{2})(?:-(?<ms>\d{3}))?Z$/
+  );
+
+  if (!match?.groups) {
+    return null;
+  }
+
+  const parsed = new Date(
+    `${match.groups.date}T${match.groups.hour}:${match.groups.minute}:${match.groups.second}.${match.groups.ms || "000"}Z`
+  );
+
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+async function pruneEmptyDirectories(root: string, startDirectory: string) {
+  let current = path.resolve(startDirectory);
+  const resolvedRoot = path.resolve(root);
+
+  while (current !== resolvedRoot && isInsidePath(resolvedRoot, current)) {
+    try {
+      await fs.rmdir(current);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+
+      if (code === "ENOENT") {
+        current = path.dirname(current);
+        continue;
+      }
+
+      if (code === "ENOTEMPTY" || code === "EEXIST") {
+        break;
+      }
+
+      throw error;
+    }
+
+    current = path.dirname(current);
+  }
+}
