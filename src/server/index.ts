@@ -6,6 +6,7 @@ import { clearSessionCookie, getAuthInfo, login, logout, requireAuth, setSession
 import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
 import { buildDuplicateGroups, resolveDuplicates } from "./duplicates.js";
 import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate } from "./organizer.js";
+import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin } from "./recycle-bin.js";
 import { scanLibrary } from "./scanner.js";
 import { loadSettings, saveSettings, toSettingsView, updateSettings } from "./settings.js";
 import { testNavidromeConnection } from "./navidrome.js";
@@ -163,6 +164,25 @@ app.get("/api/stats", asyncHandler(async (_req, res) => {
   const groups = workflow.duplicateScanReady ? buildDuplicateGroups(catalog.tracks) : [];
   const duplicateTracks = groups.reduce((total, group) => total + group.tracks.length, 0);
   res.json(createStats(catalog.tracks, groups.length, duplicateTracks, catalog.updatedAt, workflow));
+}));
+
+app.get("/api/recycle-bin", asyncHandler(async (_req, res) => {
+  res.json(await listRecycleBin(await loadSettingsForPlanning()));
+}));
+
+app.delete("/api/recycle-bin", asyncHandler(async (_req, res) => {
+  res.json(await emptyRecycleBin(await loadSettingsForPlanning()));
+}));
+
+app.delete("/api/recycle-bin/items", asyncHandler(async (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids.map(String).filter(Boolean) : [];
+
+  if (ids.length === 0) {
+    res.status(400).json({ error: "ids are required" });
+    return;
+  }
+
+  res.json(await deleteRecycleBinItems(await loadSettingsForPlanning(), ids));
 }));
 
 app.post("/api/organize/preview", asyncHandler(async (_req, res) => {

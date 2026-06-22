@@ -133,6 +133,31 @@ export type LibraryStats = {
   workflow: WorkflowState;
 };
 
+export type RecycleBinItem = {
+  id: string;
+  relativePath: string;
+  originalRelativePath: string;
+  deletedGroup: string;
+  deletedAt: string | null;
+  extension: string;
+  size: number;
+  mtimeMs: number;
+};
+
+export type RecycleBinView = {
+  recycleBinPath: string;
+  totalFiles: number;
+  totalSize: number;
+  items: RecycleBinItem[];
+};
+
+export type RecycleBinDeleteResult = {
+  deletedFiles: number;
+  deletedBytes: number;
+  errors: string[];
+  recycleBin: RecycleBinView;
+};
+
 export type OrganizePlanItem = {
   id: string;
   sourcePath: string;
