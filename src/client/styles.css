@@ -484,6 +484,7 @@ legend {
 
 .library-thumb {
   display: grid;
+  overflow: hidden;
   width: 70px;
   aspect-ratio: 1;
   place-items: center;
@@ -498,6 +499,17 @@ legend {
   border-color: rgba(217, 148, 43, 0.28);
   background: #fff3dc;
   color: #85570f;
+}
+
+.library-thumb.has-art {
+  border-color: #d7d7cf;
+  background: #17211f;
+}
+
+.library-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .library-thumb strong {

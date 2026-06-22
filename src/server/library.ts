@@ -180,6 +180,9 @@ function artistSummary(group: ArtistGroup): LibraryArtistSummary {
     id: group.id,
     name: group.name,
     thumbnailLabel: thumbnailLabel(group.name),
+    artworkUrl: artworkUrl("artist", {
+      artist: group.name
+    }),
     albumCount: albums.length,
     trackCount: group.tracks.length,
     totalSize: totalSize(group.tracks),
@@ -189,20 +192,40 @@ function artistSummary(group: ArtistGroup): LibraryArtistSummary {
 }
 
 function albumSummary(group: AlbumGroup): LibraryAlbumSummary {
+  const year = yearLabel(group.tracks);
+
   return {
     id: group.id,
     artistId: group.artistId,
     artist: group.artist,
     title: group.title,
     albumType: group.albumType || "Album",
-    yearLabel: yearLabel(group.tracks),
+    yearLabel: year,
     thumbnailLabel: thumbnailLabel(group.title),
+    artworkUrl: artworkUrl("album", {
+      artist: group.artist,
+      album: group.title,
+      year
+    }),
     trackCount: group.tracks.length,
     totalSize: totalSize(group.tracks),
     duration: totalDuration(group.tracks),
     formats: formats(group.tracks),
     issueCount: issueCount(group.tracks)
   };
+}
+
+function artworkUrl(type: "artist" | "album", params: Record<string, string>) {
+  const searchParams = new URLSearchParams();
+  searchParams.set("size", "360");
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value && value !== "Unknown Year") {
+      searchParams.set(key, value);
+    }
+  }
+
+  return `/api/library/artwork/${type}?${searchParams.toString()}`;
 }
 
 function sortTracks(tracks: TrackFile[]) {
