@@ -122,6 +122,38 @@ export type LibraryStats = {
   workflow: WorkflowState;
 };
 
+export type LibraryArtistSummary = {
+  id: string;
+  name: string;
+  thumbnailLabel: string;
+  albumCount: number;
+  trackCount: number;
+  totalSize: number;
+  formats: string[];
+  issueCount: number;
+};
+
+export type LibraryAlbumSummary = {
+  id: string;
+  artistId: string;
+  artist: string;
+  title: string;
+  albumType: string;
+  yearLabel: string;
+  thumbnailLabel: string;
+  trackCount: number;
+  totalSize: number;
+  duration: number | null;
+  formats: string[];
+  issueCount: number;
+};
+
+export type LibraryTrashResult = {
+  trashed: number;
+  removedTrackIds: string[];
+  errors: string[];
+};
+
 export type RecycleBinItem = {
   id: string;
   relativePath: string;
