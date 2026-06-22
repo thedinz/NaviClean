@@ -31,6 +31,7 @@ import type {
   OrganizeCollisionCandidate,
   OrganizePlan,
   OrganizeTrashResult,
+  OrganizeTrashSelection,
   RecycleBinDeleteResult,
   RecycleBinItem,
   RecycleBinView,
@@ -749,11 +750,16 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
   const [previewBusy, setPreviewBusy] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
   const [trashBusyKey, setTrashBusyKey] = useState<string | null>(null);
+  const [selectedTrashCandidates, setSelectedTrashCandidates] = useState<Record<string, string>>({});
   const organizeItems = plan?.items || [];
   const filterCounts = useMemo(() => countOrganizePreviewFilters(organizeItems), [organizeItems]);
   const filteredItems = useMemo(
     () => organizeItems.filter((item) => organizePreviewItemMatchesFilter(item, organizeFilter)),
     [organizeFilter, organizeItems]
+  );
+  const selectedTrashSelections = useMemo(
+    () => selectedOrganizeTrashSelections(organizeItems, selectedTrashCandidates),
+    [organizeItems, selectedTrashCandidates]
   );
   const pageCount = Math.max(1, Math.ceil(filteredItems.length / organizePreviewPageSize));
   const currentPage = Math.min(pageIndex, pageCount - 1);
@@ -770,6 +776,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
     setPlan(nextPlan);
     setPageIndex(0);
     setOrganizeFilter((current) => selectOrganizeFilterAfterRefresh(current, nextPlan));
+    setSelectedTrashCandidates((current) => pruneSelectedTrashCandidates(nextPlan.items, current));
   };
 
   const load = async ({ clearNotice = true }: { clearNotice?: boolean } = {}) => {
@@ -820,21 +827,28 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
     }
   };
 
-  const trashCandidate = async (item: OrganizePreviewItem, candidate: OrganizeCollisionCandidate) => {
-    if (!window.confirm(`Move ${candidate.relativePath} to the recycle bin?`)) {
+  const trashSelectedCandidates = async () => {
+    if (selectedTrashSelections.length === 0) {
       return;
     }
 
-    setTrashBusyKey(`${item.id}:${candidate.id}`);
+    if (!window.confirm(`Move ${selectedTrashSelections.length} selected file(s) to the recycle bin?`)) {
+      return;
+    }
+
+    setTrashBusyKey("bulk");
     setNotice(null);
     setApplyErrors([]);
 
     try {
-      const result = await api<OrganizeTrashResult>("/organize/trash", {
+      const result = await api<OrganizeTrashResult>("/organize/trash/bulk", {
         method: "POST",
-        body: JSON.stringify({ itemId: item.id, candidateId: candidate.id })
+        body: JSON.stringify({ selections: selectedTrashSelections })
       });
-      setNotice(`${result.trashed} moved to recycle bin. Preview refreshed.`);
+      const errorSuffix = result.errors.length ? `, ${result.errors.length} errors` : "";
+      setNotice(`${result.trashed} moved to recycle bin${errorSuffix}. Preview refreshed.`);
+      setApplyErrors(result.errors);
+      setSelectedTrashCandidates({});
       showPlan(result.plan);
       await onChanged();
     } catch (caught) {
@@ -857,13 +871,23 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
           <span>{plan?.summary.duplicateTargets || 0} duplicates</span>
           <span>{plan?.summary.conflicts || 0} conflicts</span>
           <span>{plan?.summary.missing || 0} missing</span>
+          <span>{selectedTrashSelections.length} selected</span>
         </div>
         <div className="button-row">
-          <button className="secondary-button" type="button" onClick={() => load()} disabled={previewBusy || applyBusy}>
+          <button className="secondary-button" type="button" onClick={() => load()} disabled={previewBusy || applyBusy || Boolean(trashBusyKey)}>
             {previewBusy ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
             <span>{previewBusy ? "Previewing" : "Preview"}</span>
           </button>
-          <button className="primary-button" type="button" onClick={apply} disabled={previewBusy || applyBusy || !plan?.summary.ready}>
+          <button
+            className="danger-button"
+            type="button"
+            onClick={trashSelectedCandidates}
+            disabled={previewBusy || applyBusy || Boolean(trashBusyKey) || selectedTrashSelections.length === 0}
+          >
+            {trashBusyKey ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+            <span>{trashBusyKey ? "Moving" : "Trash selected"}</span>
+          </button>
+          <button className="primary-button" type="button" onClick={apply} disabled={previewBusy || applyBusy || Boolean(trashBusyKey) || !plan?.summary.ready}>
             {applyBusy ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
             <span>{applyBusy ? "Applying" : "Apply"}</span>
           </button>
@@ -871,7 +895,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
       </div>
       {(previewBusy || applyBusy || trashBusyKey) && (
         <ActionProgress
-          label={trashBusyKey ? "Moving file to recycle bin" : applyBusy ? "Applying organization plan" : "Building organization preview"}
+          label={trashBusyKey ? "Moving selected files to recycle bin" : applyBusy ? "Applying organization plan" : "Building organization preview"}
         />
       )}
       {notice && <div className="notice-bar">{notice}</div>}
@@ -963,8 +987,21 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
                         {item.collision ? (
                           <CollisionCandidates
                             item={item}
-                            busyKey={trashBusyKey}
-                            onTrash={trashCandidate}
+                            disabled={Boolean(trashBusyKey)}
+                            selectedCandidateId={selectedTrashCandidates[item.id] || ""}
+                            onSelect={(candidate) => {
+                              setSelectedTrashCandidates((current) => {
+                                if (!candidate) {
+                                  const { [item.id]: _removed, ...next } = current;
+                                  return next;
+                                }
+
+                                return {
+                                  ...current,
+                                  [item.id]: candidate.id
+                                };
+                              });
+                            }}
                           />
                         ) : (
                           <span className="muted">-</span>
@@ -984,39 +1021,36 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
 
 function CollisionCandidates({
   item,
-  busyKey,
-  onTrash
+  disabled,
+  selectedCandidateId,
+  onSelect
 }: {
   item: OrganizePreviewItem;
-  busyKey: string | null;
-  onTrash: (item: OrganizePreviewItem, candidate: OrganizeCollisionCandidate) => Promise<void>;
+  disabled: boolean;
+  selectedCandidateId: string;
+  onSelect: (candidate: OrganizeCollisionCandidate | null) => void;
 }) {
   const candidates = item.collision?.candidates || [];
 
   return (
     <div className="collision-candidates">
       {candidates.map((candidate) => {
-        const candidateBusyKey = `${item.id}:${candidate.id}`;
-        const busy = busyKey === candidateBusyKey;
+        const selected = selectedCandidateId === candidate.id;
 
         return (
-          <div className="collision-candidate" key={candidate.id}>
+          <label className="collision-candidate" key={candidate.id}>
+            <input
+              type="checkbox"
+              checked={selected}
+              disabled={disabled}
+              onChange={() => onSelect(selected ? null : candidate)}
+            />
             <div>
               <strong>{collisionRoleLabel(candidate)}</strong>
               <span>{candidate.relativePath}</span>
               <span>{qualitySummary(candidate)}</span>
             </div>
-            <button
-              className="danger-button compact"
-              type="button"
-              onClick={() => onTrash(item, candidate)}
-              disabled={Boolean(busyKey)}
-              title={`Move ${candidate.relativePath} to recycle bin`}
-            >
-              {busy ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
-              <span>{busy ? "Moving" : "Trash"}</span>
-            </button>
-          </div>
+          </label>
         );
       })}
     </div>
@@ -1597,6 +1631,31 @@ function selectOrganizeFilterAfterRefresh(current: OrganizePreviewFilter, plan: 
   }
 
   return "all";
+}
+
+function selectedOrganizeTrashSelections(
+  items: OrganizePreviewItem[],
+  selectedCandidates: Record<string, string>
+): OrganizeTrashSelection[] {
+  return Object.entries(selectedCandidates)
+    .filter(([itemId, candidateId]) => itemHasCollisionCandidate(items, itemId, candidateId))
+    .map(([itemId, candidateId]) => ({ itemId, candidateId }));
+}
+
+function pruneSelectedTrashCandidates(items: OrganizePreviewItem[], selectedCandidates: Record<string, string>) {
+  return Object.fromEntries(
+    Object.entries(selectedCandidates).filter(([itemId, candidateId]) =>
+      itemHasCollisionCandidate(items, itemId, candidateId)
+    )
+  );
+}
+
+function itemHasCollisionCandidate(items: OrganizePreviewItem[], itemId: string, candidateId: string) {
+  return Boolean(
+    items.find((item) =>
+      item.id === itemId && item.collision?.candidates.some((candidate) => candidate.id === candidateId)
+    )
+  );
 }
 
 function organizeChangeLabel(item: OrganizePlan["items"][number]) {

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { TrackFile } from "../src/shared/types.js";
-import { buildOrganizePlan, targetForTrack, trashOrganizeCandidate } from "../src/server/organizer.js";
+import { buildOrganizePlan, targetForTrack, trashOrganizeCandidate, trashOrganizeCandidates } from "../src/server/organizer.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 
 const lidarrTrackFormat =
@@ -290,9 +290,96 @@ test("trashing an organize collision candidate recycles the file and refreshes t
     await fs.access(sourcePath);
     assert.equal(result.trashed, 1);
     assert.deepEqual(result.removedTrackIds, ["organized"]);
+    assert.deepEqual(result.errors, []);
     assert.deepEqual(result.tracks.map((resultTrack) => resultTrack.id), ["copy"]);
     assert.equal(result.plan.summary.conflicts, 0);
     assert.equal(result.plan.summary.ready, 1);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("trashing multiple organize collision candidates recycles them in one plan refresh", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const testSettings = settings({
+      libraryPath: root,
+      mode: "spotifybu"
+    });
+    const firstTargetRelativePath = "Artist/Artist - Album - 2026 - Album Name/0103 - Track.mp3";
+    const firstSourceRelativePath = "Unsorted/Track Copy.mp3";
+    const secondTargetRelativePath = "Artist/Artist - Album - 2026 - Album Name/0104 - Other Track.mp3";
+    const secondSourceRelativePath = "Unsorted/Other Track Copy.mp3";
+    const firstTargetPath = path.join(root, ...firstTargetRelativePath.split("/"));
+    const firstSourcePath = path.join(root, ...firstSourceRelativePath.split("/"));
+    const secondTargetPath = path.join(root, ...secondTargetRelativePath.split("/"));
+    const secondSourcePath = path.join(root, ...secondSourceRelativePath.split("/"));
+    const tracks = [
+      track({
+        id: "organized-one",
+        absolutePath: firstTargetPath,
+        relativePath: firstTargetRelativePath,
+        duration: 180,
+        size: 20
+      }),
+      track({
+        id: "copy-one",
+        absolutePath: firstSourcePath,
+        relativePath: firstSourceRelativePath,
+        duration: 240,
+        size: 10
+      }),
+      track({
+        id: "organized-two",
+        absolutePath: secondTargetPath,
+        relativePath: secondTargetRelativePath,
+        title: "Other Track",
+        trackNumber: 4,
+        duration: 180,
+        size: 30
+      }),
+      track({
+        id: "copy-two",
+        absolutePath: secondSourcePath,
+        relativePath: secondSourceRelativePath,
+        title: "Other Track",
+        trackNumber: 4,
+        duration: 240,
+        size: 15
+      })
+    ];
+
+    for (const filePath of [firstTargetPath, firstSourcePath, secondTargetPath, secondSourcePath]) {
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, path.basename(filePath));
+    }
+
+    const plan = await buildOrganizePlan(tracks, testSettings);
+    const firstSourceItem = plan.items.find((item) => item.id === "copy-one");
+    const firstTargetCandidate = firstSourceItem?.collision?.candidates.find((candidate) => candidate.trackId === "organized-one");
+    const secondSourceItem = plan.items.find((item) => item.id === "copy-two");
+    const secondTargetCandidate = secondSourceItem?.collision?.candidates.find((candidate) => candidate.trackId === "organized-two");
+
+    assert.equal(plan.summary.conflicts, 2);
+    assert.ok(firstTargetCandidate);
+    assert.ok(secondTargetCandidate);
+
+    const result = await trashOrganizeCandidates(testSettings, tracks, [
+      { itemId: "copy-one", candidateId: firstTargetCandidate.id },
+      { itemId: "copy-two", candidateId: secondTargetCandidate.id }
+    ]);
+
+    await assert.rejects(fs.access(firstTargetPath), /ENOENT/);
+    await assert.rejects(fs.access(secondTargetPath), /ENOENT/);
+    await fs.access(firstSourcePath);
+    await fs.access(secondSourcePath);
+    assert.equal(result.trashed, 2);
+    assert.deepEqual(new Set(result.removedTrackIds), new Set(["organized-one", "organized-two"]));
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.tracks.map((resultTrack) => resultTrack.id), ["copy-one", "copy-two"]);
+    assert.equal(result.plan.summary.conflicts, 0);
+    assert.equal(result.plan.summary.ready, 2);
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }
