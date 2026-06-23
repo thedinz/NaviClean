@@ -13,7 +13,7 @@ import type {
 } from "../shared/types.js";
 import { duplicateKeyForTrack } from "./matching.js";
 import type { PrivateSettings } from "./settings.js";
-import { fetchSpotifyBuTargets, spotifyBuTargetForTrack } from "./spotifybu.js";
+import { fetchSpotifyBuTargets, spotifyBuConflictForTrack, spotifyBuTargetForTrack } from "./spotifybu.js";
 import { isInsidePath, toPosixRelative } from "./utils.js";
 
 const unknownReleaseYear = "Unknown Year";
@@ -55,9 +55,10 @@ function targetForRelativePath(track: TrackFile, settings: PrivateSettings, targ
 
 export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSettings): Promise<OrganizePlan> {
   const items: OrganizePlanItem[] = [];
-  const spotifyBuTargets = await fetchSpotifyBuTargets(settings, tracks);
+  const spotifyBuLookup = await fetchSpotifyBuTargets(settings, tracks);
   const plannedItems: PlannedOrganizeItem[] = tracks.map((track) => {
-    const spotifyBuTarget = spotifyBuTargetForTrack(spotifyBuTargets, track);
+    const spotifyBuConflict = spotifyBuConflictForTrack(spotifyBuLookup, track);
+    const spotifyBuTarget = spotifyBuTargetForTrack(spotifyBuLookup, track);
     const target = spotifyBuTarget
       ? targetForRelativePath(track, settings, spotifyBuTarget.targetRelativePath)
       : targetForTrack(track, settings);
@@ -67,9 +68,11 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       targetPath: target.targetPath,
       sourceRelativePath: track.relativePath,
       targetRelativePath: target.targetRelativePath,
-      targetSource: spotifyBuTarget ? "spotifybu" : "naviclean",
+      targetSource: spotifyBuTarget || spotifyBuConflict ? "spotifybu" : "naviclean",
       status: "ready",
-      message: "Ready"
+      message: spotifyBuConflict
+        ? spotifyBuConflictMessage(spotifyBuConflict.targets.length)
+        : "Ready"
     };
 
     return {
@@ -107,12 +110,14 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     if (target.outsideLibrary) {
       item.status = "outside-library";
       item.message = "Target leaves library root";
-    } else if (path.resolve(track.absolutePath) === path.resolve(target.targetPath)) {
-      item.status = "same";
-      item.message = "Already organized";
     } else if (!(await pathExists(track.absolutePath))) {
       item.status = "missing-source";
       item.message = "Source file is missing";
+    } else if (item.targetSource === "spotifybu" && item.message !== "Ready") {
+      item.status = "conflict";
+    } else if (path.resolve(track.absolutePath) === path.resolve(target.targetPath)) {
+      item.status = "same";
+      item.message = "Already organized";
     } else if (collision?.duplicateKeyMatches) {
       item.status = "duplicate-target";
       item.message = "Target is shared by duplicate candidates";
@@ -129,6 +134,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
 
   return {
     items,
+    warnings: spotifyBuLookup.warnings,
     summary: {
       ready: items.filter((item) => item.status === "ready").length,
       same: items.filter((item) => item.status === "same").length,
@@ -137,6 +143,10 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       missing: items.filter((item) => item.status === "missing-source").length
     }
   };
+}
+
+function spotifyBuConflictMessage(targetCount: number) {
+  return `SpotifyBU returned ${targetCount || "multiple"} possible target${targetCount === 1 ? "" : "s"} for this file`;
 }
 
 function buildCollision(
