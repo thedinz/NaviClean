@@ -48,7 +48,7 @@ NaviClean uses one selected naming mode at a time:
   - Multi-disc track: `{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}`
 - `Manual` keeps the editable templates for users who want to define their own folder and file layout.
 
-NaviClean appends the original extension before planning moves. A normal standard target path looks like `Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track`. Missing release years are written as `Unknown Year`. In standard mode, folders that already match the same artist, album, track number, and title are treated as organized even if the year token came from different metadata, keeping NaviClean aligned with SpotifyBU instead of moving files back and forth.
+NaviClean appends the original extension before planning moves. A normal standard target path looks like `Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track`. Missing release years are written as `Unknown Year`. In standard mode, the rendered target path is canonical, so a different year, folder name, or filename is treated as organization work instead of being accepted as close enough. This keeps NaviClean's organizer using the same exact path formula as SpotifyBU.
 
 ## Library artwork
 

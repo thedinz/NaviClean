@@ -42,7 +42,7 @@ test("manual mode honors custom tokens", () => {
   assert.equal(target.targetRelativePath, "Artist/Artist/EP - Album Name/03 - Track.mp3");
 });
 
-test("compatible standard folder is already organized when local year differs", async () => {
+test("standard folder with a different local year needs organization", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
 
   try {
@@ -65,16 +65,19 @@ test("compatible standard folder is already organized when local year differs", 
       })
     );
 
-    assert.equal(plan.summary.ready, 0);
-    assert.equal(plan.summary.same, 1);
-    assert.equal(plan.items[0]?.status, "same");
-    assert.equal(plan.items[0]?.targetRelativePath, standardRelativePath);
+    assert.equal(plan.summary.ready, 1);
+    assert.equal(plan.summary.same, 0);
+    assert.equal(plan.items[0]?.status, "ready");
+    assert.equal(
+      plan.items[0]?.targetRelativePath,
+      "Artist/Artist - Album Name (2025)/Artist - Album Name (2025) - 03 - Track.mp3"
+    );
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }
 });
 
-test("compatible standard folder is already organized when parent artist stripped trailing punctuation", async () => {
+test("standard folder with inferred year needs organization when metadata year is unknown", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
 
   try {
@@ -103,10 +106,13 @@ test("compatible standard folder is already organized when parent artist strippe
       })
     );
 
-    assert.equal(plan.summary.ready, 0);
-    assert.equal(plan.summary.same, 1);
-    assert.equal(plan.items[0]?.status, "same");
-    assert.equal(plan.items[0]?.targetRelativePath, standardRelativePath);
+    assert.equal(plan.summary.ready, 1);
+    assert.equal(plan.summary.same, 0);
+    assert.equal(plan.items[0]?.status, "ready");
+    assert.equal(
+      plan.items[0]?.targetRelativePath,
+      "Journey Worship Co/Journey Worship Co. - Come to the Lord (Unknown Year)/Journey Worship Co. - Come to the Lord (Unknown Year) - 01 - Come to the Lord.mp3"
+    );
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }
