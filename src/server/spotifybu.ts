@@ -13,22 +13,30 @@ export type SpotifyBuTarget = {
   targetRelativePath: string;
 };
 
-type SpotifyBuTargetsResponse = {
-  conflicts?: Array<{
-    sourceRelativePath: string;
-    targets: Array<{
-      targetRelativePath: string;
-    }>;
+export type SpotifyBuConflict = {
+  sourceRelativePath: string;
+  targets: Array<{
+    targetRelativePath: string;
   }>;
+};
+
+export type SpotifyBuTargetLookup = {
+  conflicts: Map<string, SpotifyBuConflict>;
+  targets: Map<string, SpotifyBuTarget>;
+  warnings: string[];
+};
+
+type SpotifyBuTargetsResponse = {
+  conflicts?: SpotifyBuConflict[];
   targets?: SpotifyBuTarget[];
   warnings?: string[];
 };
 
 export async function fetchSpotifyBuTargets(settings: PrivateSettings, tracks: TrackFile[]) {
-  const targets = new Map<string, SpotifyBuTarget>();
+  const lookup = emptySpotifyBuTargetLookup();
 
   if (settings.naming.mode !== "spotifybu") {
-    return targets;
+    return lookup;
   }
 
   if (!settings.spotifybu.baseUrl) {
@@ -53,9 +61,32 @@ export async function fetchSpotifyBuTargets(settings: PrivateSettings, tracks: T
 
   const body = (await response.json()) as SpotifyBuTargetsResponse;
 
-  if (body.conflicts?.length) {
-    throw new Error(
-      `SpotifyBU returned conflicting targets for ${body.conflicts.length} file${body.conflicts.length === 1 ? "" : "s"}.`
+  for (const warning of body.warnings ?? []) {
+    if (warning) {
+      lookup.warnings.push(warning);
+    }
+  }
+
+  for (const conflict of body.conflicts ?? []) {
+    const sourceKey = normalizedRelativePathKey(conflict.sourceRelativePath);
+
+    if (!sourceKey) {
+      continue;
+    }
+
+    lookup.conflicts.set(sourceKey, {
+      sourceRelativePath: conflict.sourceRelativePath,
+      targets: conflict.targets
+        .map((target) => ({
+          targetRelativePath: normalizeSpotifyBuRelativePath(target.targetRelativePath)
+        }))
+        .filter((target) => Boolean(target.targetRelativePath))
+    });
+  }
+
+  if (lookup.conflicts.size > 0) {
+    lookup.warnings.push(
+      `SpotifyBU returned conflicting targets for ${lookup.conflicts.size} file${lookup.conflicts.size === 1 ? "" : "s"}; those files are marked as conflicts and the rest of the preview continues.`
     );
   }
 
@@ -66,13 +97,13 @@ export async function fetchSpotifyBuTargets(settings: PrivateSettings, tracks: T
       continue;
     }
 
-    targets.set(normalizedRelativePathKey(target.sourceRelativePath), {
+    lookup.targets.set(normalizedRelativePathKey(target.sourceRelativePath), {
       ...target,
       targetRelativePath: cleanTargetPath
     });
   }
 
-  return targets;
+  return lookup;
 }
 
 export async function testSpotifyBuConnection(
@@ -111,8 +142,20 @@ export async function testSpotifyBuConnection(
   };
 }
 
-export function spotifyBuTargetForTrack(targets: Map<string, SpotifyBuTarget>, track: TrackFile) {
-  return targets.get(normalizedRelativePathKey(track.relativePath));
+export function spotifyBuConflictForTrack(lookup: SpotifyBuTargetLookup, track: TrackFile) {
+  return lookup.conflicts.get(normalizedRelativePathKey(track.relativePath));
+}
+
+export function spotifyBuTargetForTrack(lookup: SpotifyBuTargetLookup, track: TrackFile) {
+  return lookup.targets.get(normalizedRelativePathKey(track.relativePath));
+}
+
+function emptySpotifyBuTargetLookup(): SpotifyBuTargetLookup {
+  return {
+    conflicts: new Map(),
+    targets: new Map(),
+    warnings: []
+  };
 }
 
 function spotifyBuHeaders(settings: Pick<PrivateSettings, "spotifybu">) {
