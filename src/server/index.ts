@@ -17,6 +17,7 @@ import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin } from "./recycl
 import { scanLibrary } from "./scanner.js";
 import { loadSettings, toSettingsView, updateSettings } from "./settings.js";
 import { fetchNavidromeArtwork, testNavidromeConnection } from "./navidrome.js";
+import { testSpotifyBuConnection } from "./spotifybu.js";
 
 const app = express();
 const port = Number(process.env.PORT || 8080);
@@ -76,6 +77,11 @@ app.put("/api/settings", asyncHandler(async (req, res) => {
 app.post("/api/navidrome/test", asyncHandler(async (req, res) => {
   const settings = await loadSettings();
   res.json(await testNavidromeConnection(settings, req.body));
+}));
+
+app.post("/api/spotifybu/test", asyncHandler(async (req, res) => {
+  const settings = await loadSettings();
+  res.json(await testSpotifyBuConnection(settings, req.body));
 }));
 
 app.get("/api/scan/status", (_req, res) => {
