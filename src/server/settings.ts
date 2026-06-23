@@ -14,6 +14,11 @@ export type PrivateSettings = {
     username: string;
     password: string;
   };
+  spotifybu: {
+    baseUrl: string;
+    username: string;
+    password: string;
+  };
   naming: {
     mode: NamingMode;
     libraryPath: string;
@@ -51,6 +56,11 @@ const defaultNaming = {
   multiDiscTrackFormat: "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}",
   replaceIllegalCharacters: true,
   colonReplacementFormat: 4
+};
+const defaultSpotifyBu = {
+  baseUrl: "",
+  username: "",
+  password: ""
 };
 
 const dataDir = process.env.NAVICLEAN_DATA_DIR || path.resolve(process.cwd(), ".data");
@@ -96,6 +106,11 @@ export function toSettingsView(settings: PrivateSettings): SettingsView {
       username: settings.navidrome.username,
       passwordSet: settings.navidrome.password.length > 0
     },
+    spotifybu: {
+      baseUrl: settings.spotifybu.baseUrl,
+      username: settings.spotifybu.username,
+      passwordSet: settings.spotifybu.password.length > 0
+    },
     naming: {
       mode: settings.naming.mode,
       libraryPath: settings.naming.libraryPath,
@@ -115,6 +130,7 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
   const next: PrivateSettings = {
     auth: { ...current.auth },
     navidrome: { ...current.navidrome },
+    spotifybu: { ...current.spotifybu },
     naming: { ...current.naming },
     scan: { extensions: [...current.scan.extensions] }
   };
@@ -143,6 +159,18 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
     }
   }
 
+  if (update.spotifybu) {
+    if (typeof update.spotifybu.baseUrl === "string") {
+      next.spotifybu.baseUrl = trimTrailingSlash(update.spotifybu.baseUrl.trim());
+    }
+    if (typeof update.spotifybu.username === "string") {
+      next.spotifybu.username = update.spotifybu.username.trim();
+    }
+    if (typeof update.spotifybu.password === "string" && update.spotifybu.password.length > 0) {
+      next.spotifybu.password = update.spotifybu.password;
+    }
+  }
+
   if (update.naming) {
     next.naming = normalizeNamingSettings(next.naming, update.naming);
   }
@@ -167,6 +195,7 @@ async function createDefaultSettings(): Promise<PrivateSettings> {
       username: "",
       password: ""
     },
+    spotifybu: defaultSpotifyBu,
     naming: defaultNaming,
     scan: {
       extensions: defaultExtensions
@@ -185,6 +214,7 @@ function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
       username: "",
       password: ""
     },
+    spotifybu: defaultSpotifyBu,
     naming: defaultNaming,
     scan: {
       extensions: defaultExtensions
@@ -201,6 +231,11 @@ function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
       baseUrl: trimTrailingSlash(partial.navidrome?.baseUrl || fallback.navidrome.baseUrl),
       username: partial.navidrome?.username || fallback.navidrome.username,
       password: partial.navidrome?.password || fallback.navidrome.password
+    },
+    spotifybu: {
+      baseUrl: trimTrailingSlash(partial.spotifybu?.baseUrl || fallback.spotifybu.baseUrl),
+      username: partial.spotifybu?.username || fallback.spotifybu.username,
+      password: partial.spotifybu?.password || fallback.spotifybu.password
     },
     naming: normalizeNamingSettings(fallback.naming, partial.naming),
     scan: {
@@ -226,9 +261,10 @@ function normalizeNamingSettings(
     colonReplacementFormat
   };
 
-  if (mode === "standard") {
+  if (mode === "standard" || mode === "spotifybu") {
     return {
       ...merged,
+      mode,
       artistFolderFormat: defaultNaming.artistFolderFormat,
       standardTrackFormat: defaultNaming.standardTrackFormat,
       multiDiscTrackFormat: defaultNaming.multiDiscTrackFormat,
@@ -241,12 +277,8 @@ function normalizeNamingSettings(
 }
 
 function normalizeNamingMode(value: unknown, fallback: NamingMode): NamingMode {
-  if (value === "standard" || value === "manual") {
+  if (value === "standard" || value === "manual" || value === "spotifybu") {
     return value;
-  }
-
-  if (value === "spotifybu") {
-    return "standard";
   }
 
   if (value === "lidarr") {
