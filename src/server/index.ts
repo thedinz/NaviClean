@@ -21,6 +21,8 @@ import { fetchNavidromeArtwork, testNavidromeConnection } from "./navidrome.js";
 const app = express();
 const port = Number(process.env.PORT || 8080);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const defaultLibraryArtistPageSize = 25;
+const maxLibraryArtistPageSize = 100;
 app.set("trust proxy", trustProxySetting());
 
 const scanStatus: ScanStatus = {
@@ -120,8 +122,23 @@ app.get("/api/tracks", asyncHandler(async (req, res) => {
 
 app.get("/api/library/artists", asyncHandler(async (req, res) => {
   const catalog = await loadCatalog();
+  const pageSize = clampPositiveInteger(
+    Number(req.query.pageSize || defaultLibraryArtistPageSize),
+    defaultLibraryArtistPageSize,
+    1,
+    maxLibraryArtistPageSize
+  );
+  const requestedPage = clampPositiveInteger(Number(req.query.page || 1), 1, 1, Number.MAX_SAFE_INTEGER);
+  const artists = buildLibraryArtists(catalog.tracks, String(req.query.search || ""));
+  const pageCount = Math.max(1, Math.ceil(artists.length / pageSize));
+  const page = Math.min(requestedPage, pageCount);
+  const start = (page - 1) * pageSize;
+
   res.json({
-    artists: buildLibraryArtists(catalog.tracks, String(req.query.search || "")),
+    artists: artists.slice(start, start + pageSize),
+    artistTotal: artists.length,
+    page,
+    pageSize,
     total: catalog.tracks.length
   });
 }));
@@ -469,6 +486,14 @@ function clampArtworkSize(value: number) {
   }
 
   return Math.max(96, Math.min(720, Math.round(value)));
+}
+
+function clampPositiveInteger(value: number, fallback: number, min: number, max: number) {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.max(min, Math.min(max, Math.floor(value)));
 }
 
 async function runScan() {
