@@ -1354,10 +1354,9 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
 
       if (result.plan) {
         showPlan(result.plan);
-      } else {
-        await load({ clearNotice: false });
       }
 
+      await load({ clearNotice: false });
       await onChanged();
     } catch (caught) {
       setNotice((caught as Error).message);
@@ -1389,6 +1388,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
       setApplyErrors(result.errors);
       setSelectedTrashCandidates({});
       showPlan(result.plan);
+      await load({ clearNotice: false });
       await onChanged();
     } catch (caught) {
       setNotice((caught as Error).message);
