@@ -238,6 +238,7 @@ export type OrganizeCollisionCandidate = {
 
 export type OrganizePlan = {
   items: OrganizePlanItem[];
+  warnings: string[];
   summary: {
     ready: number;
     same: number;
