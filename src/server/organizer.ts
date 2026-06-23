@@ -32,11 +32,7 @@ type PlannedOrganizeItem = {
 export function targetForTrack(track: TrackFile, settings: PrivateSettings) {
   const root = path.resolve(settings.naming.libraryPath);
   const extension = track.extension.startsWith(".") ? track.extension : `.${track.extension}`;
-  const compatibleExistingPath =
-    settings.naming.mode === "standard"
-      ? compatibleExistingStandardRelativePath(track, extension)
-      : null;
-  const targetRelativePath = compatibleExistingPath ?? templateRelativePath(track, settings, extension);
+  const targetRelativePath = templateRelativePath(track, settings, extension);
   const target = path.resolve(root, ...targetRelativePath.split("/").filter(Boolean));
 
   if (!isInsidePath(root, target)) {
@@ -383,18 +379,6 @@ export function trackNeedsMove(track: TrackFile) {
   return path.resolve(track.absolutePath) !== path.resolve(track.targetPath);
 }
 
-function cleanPathToken(value: string, fallback: string) {
-  return (
-    value
-      .normalize("NFKD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 120) || fallback
-  );
-}
-
 function templateRelativePath(track: TrackFile, settings: PrivateSettings, extension: string) {
   const tokens = toTemplateTokens(track);
   const artistFormat = settings.naming.artistFolderFormat || "{Artist Name}";
@@ -643,156 +627,6 @@ function albumTypeToken(track: TrackFile) {
   }
 
   return albumType ? titleCaseAlbumType(albumType) : "";
-}
-
-function compatibleExistingStandardRelativePath(track: TrackFile, extension: string) {
-  const parsedPath = path.posix.parse(track.relativePath);
-
-  if (parsedPath.ext.toLowerCase() !== extension.toLowerCase()) {
-    return null;
-  }
-
-  if (!currentTrackFilenameMatches(track, parsedPath.name)) {
-    return null;
-  }
-
-  return currentStandardAlbumDirectoryIsCompatible(track, parsedPath.dir) ? track.relativePath : null;
-}
-
-function currentTrackFilenameMatches(track: TrackFile, filename: string) {
-  const match = filename.match(
-    /^\s*(?:(?<artist>.+?)\s+-\s+(?<album>.+?)\s+\((?<year>\d{4}|Unknown Year)\)\s+-\s+)?(?:(?<medium>\d{1,2})[-_.])?(?<track>\d{1,3})\s*[-_. ]+(?<title>.+)$/
-  );
-
-  if (!match?.groups) {
-    return false;
-  }
-
-  const mediumNumber = Number.parseInt(match.groups.medium, 10);
-  const trackNumber = Number.parseInt(match.groups.track, 10);
-  const expectedMedium = track.discNumber ?? 1;
-  const expectedTrack = track.trackNumber ?? 0;
-  const expectedArtist = cleanPathToken(track.albumArtist || track.artist || "Unknown Artist", "Unknown Artist");
-  const expectedAlbum = cleanPathToken(track.album || "Unknown Album", "Unknown Album");
-
-  if (
-    match.groups.artist &&
-    normalizedPathKey(match.groups.artist) !== normalizedPathKey(expectedArtist)
-  ) {
-    return false;
-  }
-
-  if (
-    match.groups.album &&
-    normalizedPathKey(match.groups.album) !== normalizedPathKey(expectedAlbum)
-  ) {
-    return false;
-  }
-
-  return (
-    (Number.isNaN(mediumNumber) || mediumNumber === expectedMedium) &&
-    trackNumber === expectedTrack &&
-    normalizedPathKey(match.groups.title) === normalizedPathKey(track.title || "Unknown Track")
-  );
-}
-
-function currentStandardAlbumDirectoryIsCompatible(track: TrackFile, relativeDirectory: string) {
-  const segments = relativeDirectory.split("/").filter(Boolean);
-  const albumFolderName = segments.at(-1);
-  const parentArtistFolderName = segments.at(-2);
-
-  if (!albumFolderName || !parentArtistFolderName) {
-    return false;
-  }
-
-  const expectedArtist = cleanPathToken(track.albumArtist || track.artist || "Unknown Artist", "Unknown Artist");
-
-  if (normalizedPathKey(parentArtistFolderName) !== normalizedPathKey(expectedArtist)) {
-    return false;
-  }
-
-  const parsedAlbumFolder = parseStandardAlbumFolder(albumFolderName, [expectedArtist, parentArtistFolderName]);
-
-  if (!parsedAlbumFolder) {
-    return false;
-  }
-
-  const expectedAlbum = cleanPathToken(track.album || "Unknown Album", "Unknown Album");
-  return normalizedPathKey(parsedAlbumFolder.album) === normalizedPathKey(expectedAlbum);
-}
-
-function parseStandardAlbumFolder(value: string, artistFolderNames: string[]) {
-  for (const artistFolderName of artistFolderNames) {
-    const prefix = `${artistFolderName} - `;
-
-    if (!value.toLowerCase().startsWith(prefix.toLowerCase())) {
-      continue;
-    }
-
-    const parsed = parseStandardAlbumFolderRemainder(value.slice(prefix.length));
-
-    if (parsed) {
-      return parsed;
-    }
-  }
-
-  return parseStandardAlbumFolderWithArtist(value, artistFolderNames);
-}
-
-function parseStandardAlbumFolderRemainder(remainder: string) {
-  const standard = remainder.match(/^(?<album>.+?)\s+\((?<year>\d{4}|Unknown Year)\)$/);
-
-  if (standard?.groups) {
-    return {
-      album: standard.groups.album.trim(),
-      year: standard.groups.year
-    };
-  }
-
-  const legacy = remainder.match(/^(?:(?<albumType>.+?) - )?(?<year>\d{4}|Unknown Year) - (?<album>.+)$/);
-
-  if (!legacy?.groups) {
-    return null;
-  }
-
-  return {
-    album: legacy.groups.album.trim(),
-    year: legacy.groups.year
-  };
-}
-
-function parseStandardAlbumFolderWithArtist(value: string, artistFolderNames: string[]) {
-  const standard = value.match(/^(?<artist>.+?)\s+-\s+(?<album>.+?)\s+\((?<year>\d{4}|Unknown Year)\)$/);
-  const standardGroups = standard?.groups;
-
-  if (standardGroups && artistFolderNames.some((artist) => sameNormalizedPathKey(artist, standardGroups.artist))) {
-    return {
-      album: standardGroups.album.trim(),
-      year: standardGroups.year
-    };
-  }
-
-  const legacy = value.match(
-    /^(?<artist>.+?)\s+-\s+(?:(?<albumType>.+?)\s+-\s+)?(?<year>\d{4}|Unknown Year)\s+-\s+(?<album>.+)$/
-  );
-  const legacyGroups = legacy?.groups;
-
-  if (!legacyGroups || !artistFolderNames.some((artist) => sameNormalizedPathKey(artist, legacyGroups.artist))) {
-    return null;
-  }
-
-  return {
-    album: legacyGroups.album.trim(),
-    year: legacyGroups.year
-  };
-}
-
-function sameNormalizedPathKey(left: string, right: string) {
-  return normalizedPathKey(left) === normalizedPathKey(right);
-}
-
-function normalizedPathKey(value: string) {
-  return cleanTitleToken(value).toLowerCase();
 }
 
 function titleCaseAlbumType(value: string) {
