@@ -53,6 +53,7 @@ type Page = "dashboard" | "library" | "duplicates" | "organize" | "trash" | "set
 type OrganizePreviewFilter = "attention" | "ready" | "duplicate-target" | "conflict" | "missing" | "same" | "all";
 type OrganizePreviewItem = OrganizePlan["items"][number];
 
+const libraryArtistPageSize = 25;
 const organizePreviewPageSize = 150;
 
 const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
@@ -382,6 +383,8 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
   const [tracks, setTracks] = useState<TrackFile[]>([]);
   const [selectedArtist, setSelectedArtist] = useState<LibraryArtistSummary | null>(null);
   const [selectedAlbum, setSelectedAlbum] = useState<LibraryAlbumSummary | null>(null);
+  const [artistPage, setArtistPage] = useState(1);
+  const [artistTotal, setArtistTotal] = useState(0);
   const [catalogTotal, setCatalogTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -394,7 +397,7 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
     setLoading(true);
 
     const handle = window.setTimeout(() => {
-      loadLibraryView(view, search, selectedArtist, selectedAlbum)
+      loadLibraryView(view, search, selectedArtist, selectedAlbum, artistPage)
         .then((body) => {
           if (cancelled) {
             return;
@@ -402,6 +405,8 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
 
           if (body.view === "artists") {
             setArtists(body.artists);
+            setArtistPage(body.page);
+            setArtistTotal(body.artistTotal);
             setCatalogTotal(body.total);
             setAlbums([]);
             setTracks([]);
@@ -430,13 +435,14 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [view, search, selectedArtist, selectedAlbum, reloadKey]);
+  }, [view, search, selectedArtist, selectedAlbum, artistPage, reloadKey]);
 
   const openArtists = () => {
     setView("artists");
     setSelectedArtist(null);
     setSelectedAlbum(null);
     setSearch("");
+    setArtistPage(1);
   };
 
   const openArtist = (artist: LibraryArtistSummary) => {
@@ -450,6 +456,14 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
     setSelectedAlbum(album);
     setView("tracks");
     setSearch("");
+  };
+
+  const updateSearch = (value: string) => {
+    setSearch(value);
+
+    if (view === "artists") {
+      setArtistPage(1);
+    }
   };
 
   const trashArtist = async (artist: LibraryArtistSummary) => {
@@ -521,9 +535,16 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
     }
   };
 
+  const artistPageCount = Math.max(1, Math.ceil(artistTotal / libraryArtistPageSize));
+  const artistRangeStart = artistTotal === 0 ? 0 : (artistPage - 1) * libraryArtistPageSize + 1;
+  const artistRangeEnd = artistTotal === 0 ? 0 : Math.min(artistTotal, artistRangeStart + artists.length - 1);
+  const artistRangeLabel =
+    artistTotal > libraryArtistPageSize
+      ? `${artistRangeStart.toLocaleString()}-${artistRangeEnd.toLocaleString()} of ${artistTotal.toLocaleString()} ${pluralize("artist", artistTotal)}`
+      : `${artistTotal.toLocaleString()} ${pluralize("artist", artistTotal)}`;
   const countLabel =
     view === "artists"
-      ? `${artists.length.toLocaleString()} ${pluralize("artist", artists.length)} / ${catalogTotal.toLocaleString()} ${pluralize("track", catalogTotal)}`
+      ? `${artistRangeLabel} / ${catalogTotal.toLocaleString()} ${pluralize("track", catalogTotal)}`
       : view === "albums"
         ? `${albums.length.toLocaleString()} ${pluralize("album", albums.length)}`
         : `${tracks.length.toLocaleString()} ${pluralize("track", tracks.length)}`;
@@ -556,8 +577,31 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
         </div>
         <div className="search-box">
           <Search size={17} />
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search" />
+          <input value={search} onChange={(event) => updateSearch(event.target.value)} placeholder="Search" />
         </div>
+        {view === "artists" && artistTotal > libraryArtistPageSize && (
+          <div className="pagination-controls library-pagination" aria-label="Artist pages">
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => setArtistPage((current) => Math.max(1, current - 1))}
+              disabled={artistPage <= 1}
+              title="Previous artists"
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <span>{artistRangeLabel}</span>
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => setArtistPage((current) => Math.min(artistPageCount, current + 1))}
+              disabled={artistPage >= artistPageCount}
+              title="Next artists"
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+        )}
         <span className="muted">{loading ? "Loading library" : countLabel}</span>
       </div>
       {notice && <p className="notice-bar">{notice}</p>}
@@ -580,13 +624,27 @@ async function loadLibraryView(
   view: "artists" | "albums" | "tracks",
   search: string,
   selectedArtist: LibraryArtistSummary | null,
-  selectedAlbum: LibraryAlbumSummary | null
+  selectedAlbum: LibraryAlbumSummary | null,
+  artistPage: number
 ) {
   if (view === "artists") {
-    const body = await api<{ artists: LibraryArtistSummary[]; total: number }>(
-      `/library/artists?search=${encodeURIComponent(search)}`
+    const body = await api<{
+      artists: LibraryArtistSummary[];
+      artistTotal: number;
+      page: number;
+      pageSize: number;
+      total: number;
+    }>(
+      `/library/artists?search=${encodeURIComponent(search)}&page=${artistPage}&pageSize=${libraryArtistPageSize}`
     );
-    return { view, artists: body.artists, total: body.total };
+    return {
+      view,
+      artists: body.artists,
+      artistTotal: body.artistTotal,
+      page: body.page,
+      pageSize: body.pageSize,
+      total: body.total
+    };
   }
 
   if (view === "albums") {
