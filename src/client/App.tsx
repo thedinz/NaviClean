@@ -67,6 +67,7 @@ const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
 
 const namingModes: Array<{ id: NamingMode; label: string }> = [
   { id: "standard", label: "Standard" },
+  { id: "spotifybu", label: "SpotifyBU" },
   { id: "manual", label: "Manual" }
 ];
 
@@ -1599,9 +1600,11 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [adminPassword, setAdminPassword] = useState("");
   const [navidromePassword, setNavidromePassword] = useState("");
+  const [spotifyBuPassword, setSpotifyBuPassword] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [navidromeBusy, setNavidromeBusy] = useState(false);
+  const [spotifyBuBusy, setSpotifyBuBusy] = useState(false);
 
   useEffect(() => {
     api<SettingsView>("/settings")
@@ -1631,6 +1634,11 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
             username: settings.navidrome.username,
             password: navidromePassword
           },
+          spotifybu: {
+            baseUrl: settings.spotifybu.baseUrl,
+            username: settings.spotifybu.username,
+            password: spotifyBuPassword
+          },
           naming: {
             mode: settings.naming.mode,
             libraryPath: settings.naming.libraryPath,
@@ -1647,6 +1655,7 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
       setSettings(next);
       setAdminPassword("");
       setNavidromePassword("");
+      setSpotifyBuPassword("");
       onAuthChange({
         authEnabled: next.auth.enabled,
         authenticated: true,
@@ -1685,6 +1694,31 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
     }
   };
 
+  const testSpotifyBu = async () => {
+    if (!settings) {
+      return;
+    }
+
+    setSpotifyBuBusy(true);
+    setNotice(null);
+
+    try {
+      const result = await api<{ ok: boolean; message: string }>("/spotifybu/test", {
+        method: "POST",
+        body: JSON.stringify({
+          baseUrl: settings.spotifybu.baseUrl,
+          username: settings.spotifybu.username,
+          password: spotifyBuPassword
+        })
+      });
+      setNotice(result.message);
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setSpotifyBuBusy(false);
+    }
+  };
+
   const updateNaming = (update: Partial<SettingsView["naming"]>) => {
     if (!settings) {
       return;
@@ -1703,6 +1737,7 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
       {notice && <div className="notice-bar settings-notice">{notice}</div>}
       {busy && <ActionProgress label="Saving settings" />}
       {navidromeBusy && <ActionProgress label="Testing Navidrome connection" />}
+      {spotifyBuBusy && <ActionProgress label="Testing SpotifyBU connection" />}
 
       <fieldset className="panel">
         <legend>
@@ -1773,6 +1808,45 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
         </button>
       </fieldset>
 
+      <fieldset className="panel">
+        <legend>
+          <Music2 size={18} />
+          SpotifyBU
+        </legend>
+        <label>
+          URL
+          <input
+            value={settings.spotifybu.baseUrl}
+            onChange={(event) =>
+              setSettings({ ...settings, spotifybu: { ...settings.spotifybu, baseUrl: event.target.value } })
+            }
+            placeholder="http://spotifybu:3000"
+          />
+        </label>
+        <label>
+          Username
+          <input
+            value={settings.spotifybu.username}
+            onChange={(event) =>
+              setSettings({ ...settings, spotifybu: { ...settings.spotifybu, username: event.target.value } })
+            }
+          />
+        </label>
+        <label>
+          Password
+          <input
+            value={spotifyBuPassword}
+            onChange={(event) => setSpotifyBuPassword(event.target.value)}
+            type="password"
+            placeholder={settings.spotifybu.passwordSet ? "Saved" : ""}
+          />
+        </label>
+        <button className="secondary-button" type="button" onClick={testSpotifyBu} disabled={spotifyBuBusy}>
+          {spotifyBuBusy ? <Loader2 className="spin" size={18} /> : <Activity size={18} />}
+          <span>{spotifyBuBusy ? "Testing" : "Test"}</span>
+        </button>
+      </fieldset>
+
       <fieldset className="panel wide-settings">
         <legend>
           <FolderInput size={18} />
@@ -1807,7 +1881,11 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
                 role="radio"
                 aria-checked={settings.naming.mode === mode.id}
                 onClick={() =>
-                  updateNaming(mode.id === "standard" ? { mode: mode.id, ...standardNamingDefaults } : { mode: mode.id })
+                  updateNaming(
+                    mode.id === "standard" || mode.id === "spotifybu"
+                      ? { mode: mode.id, ...standardNamingDefaults }
+                      : { mode: mode.id }
+                  )
                 }
               >
                 {mode.label}
@@ -1825,6 +1903,12 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
           <div className="notice-bar safety">
             <strong>Manual naming</strong>
             <span>Preview organization before applying moves.</span>
+          </div>
+        )}
+        {settings.naming.mode === "spotifybu" && (
+          <div className="notice-bar safety">
+            <strong>SpotifyBU authority</strong>
+            <span>Matched SpotifyBU files use SpotifyBU targets; unmatched files use standard naming.</span>
           </div>
         )}
         <div className="form-grid two">
