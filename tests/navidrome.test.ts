@@ -90,6 +90,11 @@ function settings(libraryPath: string): PrivateSettings {
       username: "admin",
       password: "secret"
     },
+    spotifybu: {
+      baseUrl: "",
+      username: "",
+      password: ""
+    },
     naming: {
       mode: "standard",
       libraryPath,

@@ -10,6 +10,12 @@ export type NavidromeSettingsView = {
   passwordSet: boolean;
 };
 
+export type SpotifyBuSettingsView = {
+  baseUrl: string;
+  username: string;
+  passwordSet: boolean;
+};
+
 export type NamingSettings = {
   mode: NamingMode;
   libraryPath: string;
@@ -21,7 +27,7 @@ export type NamingSettings = {
   colonReplacementFormat: number;
 };
 
-export type NamingMode = "standard" | "manual";
+export type NamingMode = "standard" | "manual" | "spotifybu";
 
 export type ScanSettings = {
   extensions: string[];
@@ -33,6 +39,7 @@ export type SettingsView = {
     username: string;
   };
   navidrome: NavidromeSettingsView;
+  spotifybu: SpotifyBuSettingsView;
   naming: NamingSettings;
   scan: ScanSettings;
 };
@@ -44,6 +51,11 @@ export type SettingsUpdate = {
     password?: string;
   };
   navidrome?: {
+    baseUrl?: string;
+    username?: string;
+    password?: string;
+  };
+  spotifybu?: {
     baseUrl?: string;
     username?: string;
     password?: string;
@@ -80,6 +92,7 @@ export type TrackFile = {
   qualityScore: number;
   targetPath: string;
   targetRelativePath: string;
+  targetSource?: "naviclean" | "spotifybu";
   issues: string[];
 };
 
@@ -187,6 +200,7 @@ export type OrganizePlanItem = {
   targetPath: string;
   sourceRelativePath: string;
   targetRelativePath: string;
+  targetSource?: "naviclean" | "spotifybu";
   status: "ready" | "same" | "duplicate-target" | "conflict" | "outside-library" | "missing-source";
   message: string;
   collision?: OrganizeCollision;

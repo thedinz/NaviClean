@@ -13,6 +13,7 @@ import type {
 } from "../shared/types.js";
 import { duplicateKeyForTrack } from "./matching.js";
 import type { PrivateSettings } from "./settings.js";
+import { fetchSpotifyBuTargets, spotifyBuTargetForTrack } from "./spotifybu.js";
 import { isInsidePath, toPosixRelative } from "./utils.js";
 
 const unknownReleaseYear = "Unknown Year";
@@ -30,9 +31,11 @@ type PlannedOrganizeItem = {
 };
 
 export function targetForTrack(track: TrackFile, settings: PrivateSettings) {
+  return targetForRelativePath(track, settings, templateRelativePath(track, settings, track.extension.startsWith(".") ? track.extension : `.${track.extension}`));
+}
+
+function targetForRelativePath(track: TrackFile, settings: PrivateSettings, targetRelativePath: string) {
   const root = path.resolve(settings.naming.libraryPath);
-  const extension = track.extension.startsWith(".") ? track.extension : `.${track.extension}`;
-  const targetRelativePath = templateRelativePath(track, settings, extension);
   const target = path.resolve(root, ...targetRelativePath.split("/").filter(Boolean));
 
   if (!isInsidePath(root, target)) {
@@ -52,14 +55,19 @@ export function targetForTrack(track: TrackFile, settings: PrivateSettings) {
 
 export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSettings): Promise<OrganizePlan> {
   const items: OrganizePlanItem[] = [];
+  const spotifyBuTargets = await fetchSpotifyBuTargets(settings, tracks);
   const plannedItems: PlannedOrganizeItem[] = tracks.map((track) => {
-    const target = targetForTrack(track, settings);
+    const spotifyBuTarget = spotifyBuTargetForTrack(spotifyBuTargets, track);
+    const target = spotifyBuTarget
+      ? targetForRelativePath(track, settings, spotifyBuTarget.targetRelativePath)
+      : targetForTrack(track, settings);
     const item: OrganizePlanItem = {
       id: track.id,
       sourcePath: track.absolutePath,
       targetPath: target.targetPath,
       sourceRelativePath: track.relativePath,
       targetRelativePath: target.targetRelativePath,
+      targetSource: spotifyBuTarget ? "spotifybu" : "naviclean",
       status: "ready",
       message: "Ready"
     };
