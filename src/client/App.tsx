@@ -1438,6 +1438,15 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
         />
       )}
       {notice && <div className="notice-bar">{notice}</div>}
+      {plan?.warnings?.length ? (
+        <div className="notice-bar safety">
+          <strong>SpotifyBU</strong>
+          {plan.warnings.slice(0, 3).map((warning) => (
+            <span key={warning}>{warning}</span>
+          ))}
+          {plan.warnings.length > 3 && <span>{plan.warnings.length - 3} more warnings</span>}
+        </div>
+      ) : null}
       {applyErrors.length > 0 && (
         <div className="error-list">
           {applyErrors.slice(0, 8).map((error) => (
