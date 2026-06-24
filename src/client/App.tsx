@@ -44,12 +44,17 @@ import type {
   RecycleBinView,
   ScanStatus,
   SettingsView,
+  SpotifyAlbumDetail,
+  SpotifyArtistDiscography,
+  SpotifyArtistSummary,
+  SpotifyCatalogDownloadJob,
+  SpotifyCatalogDownloadPreviewResult,
   TrackFile
 } from "../shared/types";
 import { api } from "./api";
 import { appVersion } from "./version";
 
-type Page = "dashboard" | "library" | "duplicates" | "organize" | "trash" | "settings";
+type Page = "dashboard" | "library" | "discover" | "duplicates" | "organize" | "trash" | "settings";
 type OrganizePreviewFilter = "attention" | "ready" | "duplicate-target" | "conflict" | "missing" | "same" | "all";
 type OrganizePreviewItem = OrganizePlan["items"][number];
 
@@ -59,6 +64,7 @@ const organizePreviewPageSize = 150;
 const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
   { id: "library", label: "Library", icon: Database },
+  { id: "discover", label: "Discover", icon: Music2 },
   { id: "organize", label: "Organize", icon: FolderInput },
   { id: "duplicates", label: "Duplicates", icon: CopyX },
   { id: "trash", label: "Trash", icon: Trash2 },
@@ -67,7 +73,6 @@ const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
 
 const namingModes: Array<{ id: NamingMode; label: string }> = [
   { id: "standard", label: "Standard" },
-  { id: "spotifybu", label: "SpotifyBU" },
   { id: "manual", label: "Manual" }
 ];
 
@@ -252,6 +257,7 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
 
         {page === "dashboard" && <Dashboard stats={stats} scan={scan} />}
         {page === "library" && <LibraryPage onChanged={refreshStats} />}
+        {page === "discover" && <DiscoverPage />}
         {page === "duplicates" && (
           <DuplicatesPage stats={stats} onChanged={refreshStats} onOpenOrganize={() => setPage("organize")} />
         )}
@@ -1454,7 +1460,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
       {notice && <div className="notice-bar">{notice}</div>}
       {plan?.warnings?.length ? (
         <div className="notice-bar safety">
-          <strong>SpotifyBU</strong>
+          <strong>Organizer</strong>
           {plan.warnings.slice(0, 3).map((warning) => (
             <span key={warning}>{warning}</span>
           ))}
@@ -1619,15 +1625,460 @@ function CollisionCandidates({
   );
 }
 
+function DiscoverPage() {
+  const [query, setQuery] = useState("");
+  const [artists, setArtists] = useState<SpotifyArtistSummary[]>([]);
+  const [discography, setDiscography] = useState<SpotifyArtistDiscography | null>(null);
+  const [album, setAlbum] = useState<SpotifyAlbumDetail | null>(null);
+  const [selectedTrackIds, setSelectedTrackIds] = useState<Record<string, boolean>>({});
+  const [downloadPreview, setDownloadPreview] = useState<SpotifyCatalogDownloadPreviewResult | null>(null);
+  const [downloadJob, setDownloadJob] = useState<SpotifyCatalogDownloadJob | null>(null);
+  const [rightsConfirmed, setRightsConfirmed] = useState(false);
+  const [bulkRiskAccepted, setBulkRiskAccepted] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const selectedMissingTrackIds = album?.tracks
+    .filter((track) => selectedTrackIds[track.id] && !track.present)
+    .map((track) => track.id) ?? [];
+  const canStartDownload = Boolean(
+    album &&
+      downloadPreview?.downloadableCount &&
+      rightsConfirmed &&
+      bulkRiskAccepted &&
+      !isCatalogDownloadJobActive(downloadJob) &&
+      busy !== "download-preview" &&
+      busy !== "download-start"
+  );
+
+  useEffect(() => {
+    if (!downloadJob || !isCatalogDownloadJobActive(downloadJob)) {
+      return undefined;
+    }
+
+    const interval = window.setInterval(() => {
+      void loadDownloadJob(downloadJob.id);
+    }, 2500);
+
+    return () => window.clearInterval(interval);
+  }, [downloadJob?.id, downloadJob?.status]);
+
+  const searchArtists = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!query.trim()) {
+      return;
+    }
+
+    setBusy("search");
+    setNotice(null);
+    clearDownloadState();
+
+    try {
+      const result = await api<{ artists: SpotifyArtistSummary[] }>(
+        `/spotify/artists/search?query=${encodeURIComponent(query.trim())}`
+      );
+      setArtists(result.artists);
+      setDiscography(null);
+      setAlbum(null);
+      setSelectedTrackIds({});
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const loadDiscography = async (artist: SpotifyArtistSummary) => {
+    setBusy(`artist:${artist.id}`);
+    setNotice(null);
+    clearDownloadState();
+
+    try {
+      setDiscography(await api<SpotifyArtistDiscography>(`/spotify/artists/${artist.id}/discography`));
+      setAlbum(null);
+      setSelectedTrackIds({});
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const loadAlbum = async (albumId: string) => {
+    setBusy(`album:${albumId}`);
+    setNotice(null);
+    clearDownloadState();
+
+    try {
+      const result = await api<{ album: SpotifyAlbumDetail }>(`/spotify/albums/${albumId}`);
+      const nextSelection = Object.fromEntries(
+        result.album.tracks.filter((track) => !track.present).map((track) => [track.id, true])
+      );
+
+      setAlbum(result.album);
+      setSelectedTrackIds(nextSelection);
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const prepareDownloadPreview = async () => {
+    if (!album) {
+      return;
+    }
+
+    setBusy("download-preview");
+    setNotice(null);
+    setDownloadJob(null);
+
+    try {
+      const result = await api<{ preview: SpotifyCatalogDownloadPreviewResult }>("/spotify/download-preview", {
+        method: "POST",
+        body: JSON.stringify({
+          spotifyAlbumId: album.id,
+          trackIds: selectedMissingTrackIds
+        })
+      });
+
+      setDownloadPreview(result.preview);
+      setNotice(
+        `Found provider candidates for ${result.preview.downloadableCount} of ${result.preview.items.length} selected track${result.preview.items.length === 1 ? "" : "s"}.`
+      );
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const startDownloadJob = async () => {
+    if (!album) {
+      return;
+    }
+
+    setBusy("download-start");
+    setNotice(null);
+
+    try {
+      const result = await api<{ job: SpotifyCatalogDownloadJob; preview: SpotifyCatalogDownloadPreviewResult }>(
+        "/spotify/download-jobs",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            bulkRiskAccepted,
+            rightsConfirmed,
+            spotifyAlbumId: album.id,
+            trackIds: selectedMissingTrackIds
+          })
+        }
+      );
+
+      setDownloadPreview(result.preview);
+      setDownloadJob(result.job);
+      setNotice(`Download job started with ${result.job.pendingCount} queued track${result.job.pendingCount === 1 ? "" : "s"}.`);
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const loadDownloadJob = async (jobId: string) => {
+    try {
+      const result = await api<{ job: SpotifyCatalogDownloadJob }>(
+        `/spotify/download-jobs/${encodeURIComponent(jobId)}`
+      );
+
+      setDownloadJob(result.job);
+
+      if (isCatalogDownloadJobTerminal(result.job)) {
+        setNotice(
+          `Download job ${result.job.status}: ${result.job.completedCount} completed, ${result.job.failedCount} failed.`
+        );
+
+        if (album) {
+          const refreshed = await api<{ album: SpotifyAlbumDetail }>(`/spotify/albums/${album.id}`);
+          setAlbum(refreshed.album);
+          setSelectedTrackIds(
+            Object.fromEntries(refreshed.album.tracks.filter((track) => !track.present).map((track) => [track.id, true]))
+          );
+        }
+      }
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    }
+  };
+
+  function clearDownloadState() {
+    setDownloadPreview(null);
+    setDownloadJob(null);
+    setRightsConfirmed(false);
+    setBulkRiskAccepted(false);
+  }
+
+  return (
+    <section className="panel discover-panel">
+      <form className="toolbar" onSubmit={searchArtists}>
+        <label className="search-box">
+          <Search size={18} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search Spotify artists"
+          />
+        </label>
+        <button className="primary-button" type="submit" disabled={busy === "search" || !query.trim()}>
+          {busy === "search" ? <Loader2 className="spin" size={18} /> : <Search size={18} />}
+          <span>{busy === "search" ? "Searching" : "Search"}</span>
+        </button>
+      </form>
+
+      {notice && <div className="notice-bar">{notice}</div>}
+      <div className="notice-bar safety">
+        <strong>Spotify catalog</strong>
+        <span>Spotify supplies metadata and artwork only. Provider downloads must be content you are authorized to download.</span>
+      </div>
+
+      {artists.length > 0 && (
+        <div className="catalog-grid">
+          {artists.map((artist) => (
+            <button
+              className="catalog-card"
+              key={artist.id}
+              onClick={() => loadDiscography(artist)}
+              type="button"
+            >
+              {artist.imageUrl ? <img alt="" src={artist.imageUrl} /> : <Music2 size={28} />}
+              <span>
+                <strong>{artist.name}</strong>
+                <em>{busy === `artist:${artist.id}` ? "Loading" : "View discography"}</em>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {discography && (
+        <div className="settings-subsection">
+          <span className="subsection-label">{discography.artist.name}</span>
+          <div className="catalog-grid albums">
+            {discography.albums.map((candidate) => (
+              <button
+                className="catalog-card"
+                key={candidate.id}
+                onClick={() => loadAlbum(candidate.id)}
+                type="button"
+              >
+                {candidate.imageUrl ? <img alt="" src={candidate.imageUrl} /> : <AlbumIcon size={28} />}
+                <span>
+                  <strong>{candidate.name}</strong>
+                  <em>
+                    {candidate.releaseYear || "Unknown year"} - {candidate.localTrackCount}/{candidate.totalTracks} local
+                  </em>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {album && (
+        <div className="table-wrap catalog-tracks">
+          <div className="toolbar compact-toolbar">
+            <div>
+              <span className="eyebrow">{album.artist.name}</span>
+              <h2>{album.name}</h2>
+            </div>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={prepareDownloadPreview}
+              disabled={busy === "download-preview" || selectedMissingTrackIds.length === 0}
+            >
+              {busy === "download-preview" ? <Loader2 className="spin" size={18} /> : <Search size={18} />}
+              <span>{busy === "download-preview" ? "Finding" : "Find sources"}</span>
+            </button>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th></th>
+                <th>#</th>
+                <th>Track</th>
+                <th>Status</th>
+                <th>Length</th>
+              </tr>
+            </thead>
+            <tbody>
+              {album.tracks.map((track) => (
+                <tr className={track.present ? "" : "catalog-missing"} key={track.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedTrackIds[track.id])}
+                      disabled={track.present}
+                      onChange={(event) =>
+                        setSelectedTrackIds((current) => ({
+                          ...current,
+                          [track.id]: event.target.checked
+                        }))
+                      }
+                    />
+                  </td>
+                  <td>{track.discNumber}-{track.trackNumber}</td>
+                  <td>{track.name}</td>
+                  <td>{track.present ? "Local" : "Missing"}</td>
+                  <td>{formatDuration(track.duration)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {downloadPreview && (
+        <div className="download-preview">
+          <div className="toolbar compact-toolbar">
+            <div>
+              <span className="eyebrow">Provider preview</span>
+              <h2>
+                {downloadPreview.downloadableCount}/{downloadPreview.items.length} ready
+              </h2>
+            </div>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={startDownloadJob}
+              disabled={!canStartDownload}
+            >
+              {busy === "download-start" ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
+              <span>{busy === "download-start" ? "Starting" : "Download"}</span>
+            </button>
+          </div>
+          <div className="download-confirmations">
+            <label>
+              <input
+                checked={rightsConfirmed}
+                disabled={isCatalogDownloadJobActive(downloadJob)}
+                onChange={(event) => setRightsConfirmed(event.target.checked)}
+                type="checkbox"
+              />
+              <span>I am authorized to download the selected tracks.</span>
+            </label>
+            <label>
+              <input
+                checked={bulkRiskAccepted}
+                disabled={isCatalogDownloadJobActive(downloadJob)}
+                onChange={(event) => setBulkRiskAccepted(event.target.checked)}
+                type="checkbox"
+              />
+              <span>I accept provider throttling and bulk-download risk.</span>
+            </label>
+          </div>
+          {downloadPreview.warnings.map((warning) => (
+            <div className="notice-bar safety" key={warning}>{warning}</div>
+          ))}
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Track</th>
+                  <th>Target</th>
+                  <th>Provider</th>
+                  <th>Match</th>
+                </tr>
+              </thead>
+              <tbody>
+                {downloadPreview.items.map((item) => {
+                  const candidate = item.selectedCandidate;
+
+                  return (
+                    <tr key={item.track.id}>
+                      <td>
+                        <strong>{item.track.name}</strong>
+                        <span>{item.track.artists.join(", ")}</span>
+                      </td>
+                      <td>{item.targetRelativePath}</td>
+                      <td>
+                        {candidate ? (
+                          <>
+                            <span className="provider-pill">{providerLabel(candidate.providerId)}</span>
+                            <span>{candidate.title}</span>
+                          </>
+                        ) : (
+                          item.error || "No source found"
+                        )}
+                      </td>
+                      <td>
+                        {candidate ? (
+                          <>
+                            <strong>{candidate.score.overall}%</strong>
+                            <span>{formatProviderDuration(candidate.durationMs)}</span>
+                          </>
+                        ) : (
+                          "Missing"
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {downloadJob && (
+        <div className="download-preview">
+          <div className="toolbar compact-toolbar">
+            <div>
+              <span className="eyebrow">Download job</span>
+              <h2>{downloadJob.status}</h2>
+            </div>
+            {isCatalogDownloadJobActive(downloadJob) && <Loader2 className="spin" size={22} />}
+          </div>
+          <div className="status-row">
+            <span>{downloadJob.completedCount} completed</span>
+            <span>{downloadJob.pendingCount} pending</span>
+            <span>{downloadJob.failedCount} failed</span>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Track</th>
+                  <th>Status</th>
+                  <th>Destination</th>
+                </tr>
+              </thead>
+              <tbody>
+                {downloadJob.items.map((item) => (
+                  <tr key={item.track.id}>
+                    <td>{item.track.name}</td>
+                    <td>{item.error || item.status}</td>
+                    <td>{item.relativePath || item.targetRelativePath}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void }) {
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [adminPassword, setAdminPassword] = useState("");
   const [navidromePassword, setNavidromePassword] = useState("");
-  const [spotifyBuPassword, setSpotifyBuPassword] = useState("");
+  const [spotifyClientSecret, setSpotifyClientSecret] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [navidromeBusy, setNavidromeBusy] = useState(false);
-  const [spotifyBuBusy, setSpotifyBuBusy] = useState(false);
+  const [spotifyBusy, setSpotifyBusy] = useState(false);
 
   useEffect(() => {
     api<SettingsView>("/settings")
@@ -1657,10 +2108,14 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
             username: settings.navidrome.username,
             password: navidromePassword
           },
-          spotifybu: {
-            baseUrl: settings.spotifybu.baseUrl,
-            username: settings.spotifybu.username,
-            password: spotifyBuPassword
+          catalog: {
+            spotify: {
+              clientId: settings.catalog.spotify.clientId,
+              clientSecret: spotifyClientSecret,
+              market: settings.catalog.spotify.market
+            },
+            providers: settings.catalog.providers,
+            discovery: settings.catalog.discovery
           },
           naming: {
             mode: settings.naming.mode,
@@ -1678,7 +2133,7 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
       setSettings(next);
       setAdminPassword("");
       setNavidromePassword("");
-      setSpotifyBuPassword("");
+      setSpotifyClientSecret("");
       onAuthChange({
         authEnabled: next.auth.enabled,
         authenticated: true,
@@ -1717,28 +2172,28 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
     }
   };
 
-  const testSpotifyBu = async () => {
+  const testSpotify = async () => {
     if (!settings) {
       return;
     }
 
-    setSpotifyBuBusy(true);
+    setSpotifyBusy(true);
     setNotice(null);
 
     try {
-      const result = await api<{ ok: boolean; message: string }>("/spotifybu/test", {
+      const result = await api<{ ok: boolean; message: string }>("/spotify/test", {
         method: "POST",
         body: JSON.stringify({
-          baseUrl: settings.spotifybu.baseUrl,
-          username: settings.spotifybu.username,
-          password: spotifyBuPassword
+          clientId: settings.catalog.spotify.clientId,
+          clientSecret: spotifyClientSecret,
+          market: settings.catalog.spotify.market
         })
       });
       setNotice(result.message);
     } catch (caught) {
       setNotice((caught as Error).message);
     } finally {
-      setSpotifyBuBusy(false);
+      setSpotifyBusy(false);
     }
   };
 
@@ -1760,7 +2215,7 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
       {notice && <div className="notice-bar settings-notice">{notice}</div>}
       {busy && <ActionProgress label="Saving settings" />}
       {navidromeBusy && <ActionProgress label="Testing Navidrome connection" />}
-      {spotifyBuBusy && <ActionProgress label="Testing SpotifyBU connection" />}
+      {spotifyBusy && <ActionProgress label="Testing Spotify catalog connection" />}
 
       <fieldset className="panel">
         <legend>
@@ -1834,39 +2289,73 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
       <fieldset className="panel">
         <legend>
           <Music2 size={18} />
-          SpotifyBU
+          Spotify catalog
         </legend>
         <label>
-          URL
+          Client ID
           <input
-            value={settings.spotifybu.baseUrl}
+            value={settings.catalog.spotify.clientId}
             onChange={(event) =>
-              setSettings({ ...settings, spotifybu: { ...settings.spotifybu, baseUrl: event.target.value } })
-            }
-            placeholder="http://spotifybu:3000"
-          />
-        </label>
-        <label>
-          Username
-          <input
-            value={settings.spotifybu.username}
-            onChange={(event) =>
-              setSettings({ ...settings, spotifybu: { ...settings.spotifybu, username: event.target.value } })
+              setSettings({
+                ...settings,
+                catalog: {
+                  ...settings.catalog,
+                  spotify: { ...settings.catalog.spotify, clientId: event.target.value }
+                }
+              })
             }
           />
         </label>
         <label>
-          Password
+          Client secret
           <input
-            value={spotifyBuPassword}
-            onChange={(event) => setSpotifyBuPassword(event.target.value)}
+            value={spotifyClientSecret}
+            onChange={(event) => setSpotifyClientSecret(event.target.value)}
             type="password"
-            placeholder={settings.spotifybu.passwordSet ? "Saved" : ""}
+            placeholder={settings.catalog.spotify.clientSecretSet ? "Saved" : ""}
           />
         </label>
-        <button className="secondary-button" type="button" onClick={testSpotifyBu} disabled={spotifyBuBusy}>
-          {spotifyBuBusy ? <Loader2 className="spin" size={18} /> : <Activity size={18} />}
-          <span>{spotifyBuBusy ? "Testing" : "Test"}</span>
+        <label>
+          Market
+          <input
+            value={settings.catalog.spotify.market}
+            maxLength={2}
+            onChange={(event) =>
+              setSettings({
+                ...settings,
+                catalog: {
+                  ...settings.catalog,
+                  spotify: { ...settings.catalog.spotify, market: event.target.value.toUpperCase() }
+                }
+              })
+            }
+            placeholder="US"
+          />
+        </label>
+        <label>
+          Spotify requests per minute
+          <input
+            min={10}
+            max={60}
+            type="number"
+            value={settings.catalog.discovery.requestsPerMinute}
+            onChange={(event) =>
+              setSettings({
+                ...settings,
+                catalog: {
+                  ...settings.catalog,
+                  discovery: {
+                    ...settings.catalog.discovery,
+                    requestsPerMinute: Number(event.target.value)
+                  }
+                }
+              })
+            }
+          />
+        </label>
+        <button className="secondary-button" type="button" onClick={testSpotify} disabled={spotifyBusy}>
+          {spotifyBusy ? <Loader2 className="spin" size={18} /> : <Activity size={18} />}
+          <span>{spotifyBusy ? "Testing" : "Test"}</span>
         </button>
       </fieldset>
 
@@ -1905,7 +2394,7 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
                 aria-checked={settings.naming.mode === mode.id}
                 onClick={() =>
                   updateNaming(
-                    mode.id === "standard" || mode.id === "spotifybu"
+                    mode.id === "standard"
                       ? { mode: mode.id, ...standardNamingDefaults }
                       : { mode: mode.id }
                   )
@@ -1926,12 +2415,6 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
           <div className="notice-bar safety">
             <strong>Manual naming</strong>
             <span>Preview organization before applying moves.</span>
-          </div>
-        )}
-        {settings.naming.mode === "spotifybu" && (
-          <div className="notice-bar safety">
-            <strong>SpotifyBU authority</strong>
-            <span>Matched SpotifyBU files use SpotifyBU targets; unmatched files use standard naming.</span>
           </div>
         )}
         <div className="form-grid two">
@@ -2355,4 +2838,20 @@ function formatDuration(value: number) {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
   return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+}
+
+function formatProviderDuration(value?: number) {
+  return typeof value === "number" ? formatDuration(value / 1000) : "Unknown length";
+}
+
+function providerLabel(value: string) {
+  return value === "jiosaavn" ? "JioSaavn" : "YouTube";
+}
+
+function isCatalogDownloadJobActive(job: SpotifyCatalogDownloadJob | null) {
+  return job?.status === "queued" || job?.status === "running";
+}
+
+function isCatalogDownloadJobTerminal(job: SpotifyCatalogDownloadJob) {
+  return job.status === "completed" || job.status === "failed";
 }

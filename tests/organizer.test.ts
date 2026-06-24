@@ -42,173 +42,6 @@ test("manual mode honors custom tokens", () => {
   assert.equal(target.targetRelativePath, "Artist/Artist/EP - Album Name/03 - Track.mp3");
 });
 
-test("spotifybu mode uses SpotifyBU target for matched files", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
-  const originalFetch = globalThis.fetch;
-
-  try {
-    const sourceRelativePath = "Artist/Artist - Album Name (2025)/Artist - Album Name (2025) - 03 - Track.mp3";
-    const spotifyBuRelativePath = "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3";
-    const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
-    const testSettings = settings({
-      libraryPath: root,
-      mode: "spotifybu"
-    });
-
-    testSettings.spotifybu = {
-      baseUrl: "http://spotifybu.local",
-      username: "admin",
-      password: "secret"
-    };
-
-    globalThis.fetch = async (input, init) => {
-      assert.equal(String(input), "http://spotifybu.local/api/naviclean/targets");
-      assert.equal(new Headers(init?.headers).get("authorization"), "Basic YWRtaW46c2VjcmV0");
-
-      return new Response(
-        JSON.stringify({
-          conflicts: [],
-          requested: 1,
-          skippedStale: 0,
-          targets: [
-            {
-              sourceRelativePath,
-              targetRelativePath: spotifyBuRelativePath
-            }
-          ],
-          warnings: []
-        }),
-        {
-          headers: {
-            "content-type": "application/json"
-          }
-        }
-      );
-    };
-
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, "audio");
-
-    const plan = await buildOrganizePlan(
-      [
-        track({
-          absolutePath: sourcePath,
-          relativePath: sourceRelativePath,
-          year: 2025
-        })
-      ],
-      testSettings
-    );
-
-    assert.equal(plan.summary.ready, 1);
-    assert.equal(plan.items[0]?.targetSource, "spotifybu");
-    assert.equal(plan.items[0]?.targetRelativePath, spotifyBuRelativePath);
-  } finally {
-    globalThis.fetch = originalFetch;
-    await fs.rm(root, { force: true, recursive: true });
-  }
-});
-
-test("spotifybu conflicts do not block other SpotifyBU targets", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
-  const originalFetch = globalThis.fetch;
-
-  try {
-    const conflictRelativePath = "Artist/Artist - Album Name (2024)/Artist - Album Name (2024) - 03 - Track.mp3";
-    const readyRelativePath = "Artist/Artist - Other Album (2025)/Artist - Other Album (2025) - 04 - Clean.mp3";
-    const readySpotifyBuRelativePath = "Artist/Artist - Other Album (2026)/Artist - Other Album (2026) - 04 - Clean.mp3";
-    const conflictPath = path.join(root, ...conflictRelativePath.split("/"));
-    const readyPath = path.join(root, ...readyRelativePath.split("/"));
-    const testSettings = settings({
-      libraryPath: root,
-      mode: "spotifybu"
-    });
-
-    testSettings.spotifybu = {
-      baseUrl: "http://spotifybu.local",
-      username: "admin",
-      password: "secret"
-    };
-
-    globalThis.fetch = async () =>
-      new Response(
-        JSON.stringify({
-          conflicts: [
-            {
-              sourceRelativePath: conflictRelativePath,
-              targets: [
-                {
-                  targetRelativePath: "Artist/Artist - Album Name (2025)/Artist - Album Name (2025) - 03 - Track.mp3"
-                },
-                {
-                  targetRelativePath: "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3"
-                }
-              ]
-            }
-          ],
-          requested: 2,
-          skippedStale: 0,
-          targets: [
-            {
-              sourceRelativePath: readyRelativePath,
-              targetRelativePath: readySpotifyBuRelativePath
-            }
-          ],
-          warnings: []
-        }),
-        {
-          headers: {
-            "content-type": "application/json"
-          }
-        }
-      );
-
-    await fs.mkdir(path.dirname(conflictPath), { recursive: true });
-    await fs.mkdir(path.dirname(readyPath), { recursive: true });
-    await fs.writeFile(conflictPath, "audio");
-    await fs.writeFile(readyPath, "audio");
-
-    const plan = await buildOrganizePlan(
-      [
-        track({
-          absolutePath: conflictPath,
-          id: "conflict-track",
-          relativePath: conflictRelativePath,
-          year: 2024
-        }),
-        track({
-          absolutePath: readyPath,
-          album: "Other Album",
-          id: "ready-track",
-          relativePath: readyRelativePath,
-          title: "Clean",
-          trackNumber: 4,
-          year: 2025
-        })
-      ],
-      testSettings
-    );
-    const itemsBySource = new Map(plan.items.map((item) => [item.sourceRelativePath, item]));
-
-    assert.equal(plan.summary.ready, 1);
-    assert.equal(plan.summary.conflicts, 1);
-    assert.equal(plan.warnings.length, 1);
-    assert.match(plan.warnings[0], /conflicting targets for 1 file/);
-    assert.equal(itemsBySource.get(conflictRelativePath)?.status, "conflict");
-    assert.equal(itemsBySource.get(conflictRelativePath)?.targetSource, "spotifybu");
-    assert.equal(
-      itemsBySource.get(conflictRelativePath)?.message,
-      "SpotifyBU returned 2 possible targets for this file"
-    );
-    assert.equal(itemsBySource.get(readyRelativePath)?.status, "ready");
-    assert.equal(itemsBySource.get(readyRelativePath)?.targetSource, "spotifybu");
-    assert.equal(itemsBySource.get(readyRelativePath)?.targetRelativePath, readySpotifyBuRelativePath);
-  } finally {
-    globalThis.fetch = originalFetch;
-    await fs.rm(root, { force: true, recursive: true });
-  }
-});
-
 test("standard folder with a different local year needs organization", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
 
@@ -570,10 +403,18 @@ function settings(overrides: Partial<PrivateSettings["naming"]> = {}): PrivateSe
       username: "",
       password: ""
     },
-    spotifybu: {
-      baseUrl: "",
-      username: "",
-      password: ""
+    catalog: {
+      spotify: {
+        clientId: "",
+        clientSecret: "",
+        market: "US"
+      },
+      providers: {
+        maxConcurrentDownloads: 1
+      },
+      discovery: {
+        requestsPerMinute: 40
+      }
     },
     naming: {
       mode: "standard",

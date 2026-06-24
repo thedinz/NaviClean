@@ -21,8 +21,13 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY package*.json ./
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends gosu \
+  && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    gosu \
+    python3 \
+    python3-pip \
   && rm -rf /var/lib/apt/lists/* \
+  && python3 -m pip install --no-cache-dir --break-system-packages --upgrade --pre "yt-dlp[default]" \
   && npm ci --omit=dev \
   && npm cache clean --force
 
