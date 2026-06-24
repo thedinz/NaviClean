@@ -13,11 +13,23 @@ import {
   trashLibraryTracks
 } from "./library.js";
 import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate, trashOrganizeCandidates } from "./organizer.js";
+import {
+  getSpotifyCatalogDownloadJob,
+  previewSpotifyCatalogDownloads,
+  startSpotifyCatalogDownloadJob
+} from "./providers.js";
 import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin } from "./recycle-bin.js";
 import { scanLibrary } from "./scanner.js";
 import { loadSettings, toSettingsView, updateSettings } from "./settings.js";
 import { fetchNavidromeArtwork, testNavidromeConnection } from "./navidrome.js";
-import { testSpotifyBuConnection } from "./spotifybu.js";
+import {
+  buildSpotifyDownloadPlan,
+  getSpotifyAlbumDetail,
+  getSpotifyArtistDiscography,
+  matchLibraryArtistsToSpotify,
+  searchSpotifyArtists,
+  testSpotifyConnection
+} from "./spotify.js";
 
 const app = express();
 const port = Number(process.env.PORT || 8080);
@@ -83,10 +95,121 @@ app.post("/api/navidrome/test", asyncHandler(async (req, res) => {
   res.json(await testNavidromeConnection(settings, req.body));
 }));
 
-app.post("/api/spotifybu/test", asyncHandler(async (req, res) => {
+app.post("/api/spotify/test", asyncHandler(async (req, res) => {
   const settings = await loadSettings();
-  res.json(await testSpotifyBuConnection(settings, req.body));
+  res.json(await testSpotifyConnection(settings, req.body));
 }));
+
+app.get("/api/spotify/artists/search", asyncHandler(async (req, res) => {
+  res.json({
+    artists: await searchSpotifyArtists(await loadSettingsForPlanning(), String(req.query.query || ""))
+  });
+}));
+
+app.get("/api/spotify/library-artists", asyncHandler(async (req, res) => {
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+  const artists = buildLibraryArtists(catalog.tracks, String(req.query.search || ""));
+  const limit = Number(req.query.limit || 12);
+
+  res.json({
+    matches: await matchLibraryArtistsToSpotify(
+      settings,
+      artists.map((artist) => ({ id: artist.id, name: artist.name })),
+      Number.isFinite(limit) ? limit : 12
+    )
+  });
+}));
+
+app.get("/api/spotify/artists/:artistId/discography", asyncHandler(async (req, res) => {
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+
+  res.json(await getSpotifyArtistDiscography(settings, catalog.tracks, String(req.params.artistId)));
+}));
+
+app.get("/api/spotify/albums/:albumId", asyncHandler(async (req, res) => {
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+
+  res.json({
+    album: await getSpotifyAlbumDetail(settings, catalog.tracks, String(req.params.albumId))
+  });
+}));
+
+app.post("/api/spotify/download-plan", asyncHandler(async (req, res) => {
+  const albumId = String(req.body.spotifyAlbumId || "");
+
+  if (!albumId) {
+    res.status(400).json({ error: "spotifyAlbumId is required" });
+    return;
+  }
+
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+
+  res.json({
+    plan: await buildSpotifyDownloadPlan(
+      settings,
+      catalog.tracks,
+      albumId,
+      Array.isArray(req.body.trackIds) ? req.body.trackIds.map(String) : undefined
+    )
+  });
+}));
+
+app.post("/api/spotify/download-preview", asyncHandler(async (req, res) => {
+  const albumId = String(req.body.spotifyAlbumId || "");
+
+  if (!albumId) {
+    res.status(400).json({ error: "spotifyAlbumId is required" });
+    return;
+  }
+
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+
+  res.json({
+    preview: await previewSpotifyCatalogDownloads(
+      settings,
+      catalog.tracks,
+      albumId,
+      Array.isArray(req.body.trackIds) ? req.body.trackIds.map(String) : undefined
+    )
+  });
+}));
+
+app.post("/api/spotify/download-jobs", asyncHandler(async (req, res) => {
+  const albumId = String(req.body.spotifyAlbumId || "");
+
+  if (!albumId) {
+    res.status(400).json({ error: "spotifyAlbumId is required" });
+    return;
+  }
+
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+
+  res.json(await startSpotifyCatalogDownloadJob({
+    albumId,
+    bulkRiskAccepted: Boolean(req.body.bulkRiskAccepted),
+    localTracks: catalog.tracks,
+    rightsConfirmed: Boolean(req.body.rightsConfirmed),
+    settings,
+    trackIds: Array.isArray(req.body.trackIds) ? req.body.trackIds.map(String) : undefined
+  }));
+}));
+
+app.get("/api/spotify/download-jobs/:jobId", (req, res) => {
+  const job = getSpotifyCatalogDownloadJob(String(req.params.jobId));
+
+  if (!job) {
+    res.status(404).json({ error: "Download job not found" });
+    return;
+  }
+
+  res.json({ job });
+});
 
 app.get("/api/scan/status", (_req, res) => {
   res.json(scanStatus);

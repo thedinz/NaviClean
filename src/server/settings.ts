@@ -14,10 +14,18 @@ export type PrivateSettings = {
     username: string;
     password: string;
   };
-  spotifybu: {
-    baseUrl: string;
-    username: string;
-    password: string;
+  catalog: {
+    spotify: {
+      clientId: string;
+      clientSecret: string;
+      market: string;
+    };
+    providers: {
+      maxConcurrentDownloads: number;
+    };
+    discovery: {
+      requestsPerMinute: number;
+    };
   };
   naming: {
     mode: NamingMode;
@@ -57,10 +65,18 @@ const defaultNaming = {
   replaceIllegalCharacters: true,
   colonReplacementFormat: 4
 };
-const defaultSpotifyBu = {
-  baseUrl: "",
-  username: "",
-  password: ""
+const defaultCatalog = {
+  spotify: {
+    clientId: process.env.SPOTIFY_CLIENT_ID || "",
+    clientSecret: process.env.SPOTIFY_CLIENT_SECRET || "",
+    market: process.env.SPOTIFY_MARKET || "US"
+  },
+  providers: {
+    maxConcurrentDownloads: 1
+  },
+  discovery: {
+    requestsPerMinute: 40
+  }
 };
 
 const dataDir = process.env.NAVICLEAN_DATA_DIR || path.resolve(process.cwd(), ".data");
@@ -106,10 +122,14 @@ export function toSettingsView(settings: PrivateSettings): SettingsView {
       username: settings.navidrome.username,
       passwordSet: settings.navidrome.password.length > 0
     },
-    spotifybu: {
-      baseUrl: settings.spotifybu.baseUrl,
-      username: settings.spotifybu.username,
-      passwordSet: settings.spotifybu.password.length > 0
+    catalog: {
+      spotify: {
+        clientId: settings.catalog.spotify.clientId,
+        clientSecretSet: settings.catalog.spotify.clientSecret.length > 0,
+        market: settings.catalog.spotify.market
+      },
+      providers: settings.catalog.providers,
+      discovery: settings.catalog.discovery
     },
     naming: {
       mode: settings.naming.mode,
@@ -130,7 +150,11 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
   const next: PrivateSettings = {
     auth: { ...current.auth },
     navidrome: { ...current.navidrome },
-    spotifybu: { ...current.spotifybu },
+    catalog: {
+      spotify: { ...current.catalog.spotify },
+      providers: { ...current.catalog.providers },
+      discovery: { ...current.catalog.discovery }
+    },
     naming: { ...current.naming },
     scan: { extensions: [...current.scan.extensions] }
   };
@@ -159,15 +183,27 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
     }
   }
 
-  if (update.spotifybu) {
-    if (typeof update.spotifybu.baseUrl === "string") {
-      next.spotifybu.baseUrl = trimTrailingSlash(update.spotifybu.baseUrl.trim());
+  if (update.catalog?.spotify) {
+    if (typeof update.catalog.spotify.clientId === "string") {
+      next.catalog.spotify.clientId = update.catalog.spotify.clientId.trim();
     }
-    if (typeof update.spotifybu.username === "string") {
-      next.spotifybu.username = update.spotifybu.username.trim();
+    if (typeof update.catalog.spotify.clientSecret === "string" && update.catalog.spotify.clientSecret.length > 0) {
+      next.catalog.spotify.clientSecret = update.catalog.spotify.clientSecret;
     }
-    if (typeof update.spotifybu.password === "string" && update.spotifybu.password.length > 0) {
-      next.spotifybu.password = update.spotifybu.password;
+    if (typeof update.catalog.spotify.market === "string") {
+      next.catalog.spotify.market = normalizeSpotifyMarket(update.catalog.spotify.market, next.catalog.spotify.market);
+    }
+  }
+
+  if (update.catalog?.providers) {
+    if (typeof update.catalog.providers.maxConcurrentDownloads === "number") {
+      next.catalog.providers.maxConcurrentDownloads = clampInteger(update.catalog.providers.maxConcurrentDownloads, 1, 3, 1);
+    }
+  }
+
+  if (update.catalog?.discovery) {
+    if (typeof update.catalog.discovery.requestsPerMinute === "number") {
+      next.catalog.discovery.requestsPerMinute = clampInteger(update.catalog.discovery.requestsPerMinute, 10, 60, 40);
     }
   }
 
@@ -195,7 +231,7 @@ async function createDefaultSettings(): Promise<PrivateSettings> {
       username: "",
       password: ""
     },
-    spotifybu: defaultSpotifyBu,
+    catalog: defaultCatalog,
     naming: defaultNaming,
     scan: {
       extensions: defaultExtensions
@@ -214,7 +250,7 @@ function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
       username: "",
       password: ""
     },
-    spotifybu: defaultSpotifyBu,
+    catalog: defaultCatalog,
     naming: defaultNaming,
     scan: {
       extensions: defaultExtensions
@@ -232,11 +268,7 @@ function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
       username: partial.navidrome?.username || fallback.navidrome.username,
       password: partial.navidrome?.password || fallback.navidrome.password
     },
-    spotifybu: {
-      baseUrl: trimTrailingSlash(partial.spotifybu?.baseUrl || fallback.spotifybu.baseUrl),
-      username: partial.spotifybu?.username || fallback.spotifybu.username,
-      password: partial.spotifybu?.password || fallback.spotifybu.password
-    },
+    catalog: normalizeCatalogSettings(partial.catalog),
     naming: normalizeNamingSettings(fallback.naming, partial.naming),
     scan: {
       extensions: normalizeExtensions(partial.scan?.extensions || fallback.scan.extensions)
@@ -261,7 +293,7 @@ function normalizeNamingSettings(
     colonReplacementFormat
   };
 
-  if (mode === "standard" || mode === "spotifybu") {
+  if (mode === "standard") {
     return {
       ...merged,
       mode,
@@ -277,7 +309,7 @@ function normalizeNamingSettings(
 }
 
 function normalizeNamingMode(value: unknown, fallback: NamingMode): NamingMode {
-  if (value === "standard" || value === "manual" || value === "spotifybu") {
+  if (value === "standard" || value === "manual") {
     return value;
   }
 
@@ -286,6 +318,54 @@ function normalizeNamingMode(value: unknown, fallback: NamingMode): NamingMode {
   }
 
   return fallback;
+}
+
+function normalizeCatalogSettings(
+  partial: Partial<PrivateSettings["catalog"]> | undefined
+): PrivateSettings["catalog"] {
+  const spotify: Partial<PrivateSettings["catalog"]["spotify"]> = partial?.spotify ?? {};
+  const providers: Partial<PrivateSettings["catalog"]["providers"]> = partial?.providers ?? {};
+  const discovery: Partial<PrivateSettings["catalog"]["discovery"]> = partial?.discovery ?? {};
+
+  return {
+    spotify: {
+      clientId:
+        typeof spotify.clientId === "string"
+          ? spotify.clientId.trim()
+          : defaultCatalog.spotify.clientId,
+      clientSecret:
+        typeof spotify.clientSecret === "string"
+          ? spotify.clientSecret
+          : defaultCatalog.spotify.clientSecret,
+      market: normalizeSpotifyMarket(spotify.market, defaultCatalog.spotify.market)
+    },
+    providers: {
+      maxConcurrentDownloads: clampInteger(
+        providers.maxConcurrentDownloads,
+        1,
+        3,
+        defaultCatalog.providers.maxConcurrentDownloads
+      )
+    },
+    discovery: {
+      requestsPerMinute: clampInteger(
+        discovery.requestsPerMinute,
+        10,
+        60,
+        defaultCatalog.discovery.requestsPerMinute
+      )
+    }
+  };
+}
+
+function normalizeSpotifyMarket(value: unknown, fallback: string) {
+  const market = typeof value === "string" ? value.trim().toUpperCase() : "";
+  return /^[A-Z]{2}$/.test(market) ? market : fallback;
+}
+
+function clampInteger(value: unknown, min: number, max: number, fallback: number) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
 }
 
 function normalizeColonReplacementFormat(value: unknown, fallback: number) {
