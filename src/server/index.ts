@@ -64,6 +64,10 @@ app.post("/api/auth/logout", asyncHandler(async (req, res) => {
 }));
 
 app.use("/api", requireAuth);
+app.use("/api/organize", (_req, res, next) => {
+  res.set("Cache-Control", "no-store, max-age=0");
+  next();
+});
 
 app.get("/api/settings", asyncHandler(async (_req, res) => {
   res.json(toSettingsView(await loadSettingsForPlanning()));
@@ -352,13 +356,13 @@ app.post("/api/organize/trash", asyncHandler(async (req, res) => {
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
   const result = await trashOrganizeCandidate(settings, catalog.tracks, itemId, candidateId);
+  const savedCatalog = await saveCatalog(result.tracks);
 
-  await saveCatalog(result.tracks);
   res.json({
     trashed: result.trashed,
     removedTrackIds: result.removedTrackIds,
     errors: result.errors,
-    plan: result.plan
+    plan: await buildOrganizePlan(savedCatalog.tracks, settings)
   });
 }));
 
@@ -382,13 +386,13 @@ app.post("/api/organize/trash/bulk", asyncHandler(async (req, res) => {
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
   const result = await trashOrganizeCandidates(settings, catalog.tracks, selections);
+  const savedCatalog = await saveCatalog(result.tracks);
 
-  await saveCatalog(result.tracks);
   res.json({
     trashed: result.trashed,
     removedTrackIds: result.removedTrackIds,
     errors: result.errors,
-    plan: result.plan
+    plan: await buildOrganizePlan(savedCatalog.tracks, settings)
   });
 }));
 
