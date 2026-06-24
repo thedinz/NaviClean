@@ -24,7 +24,7 @@ import {
   Trash2,
   UserRound
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AuthInfo,
   DuplicateBulkResolveResult,
@@ -1290,6 +1290,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
   const [applyBusy, setApplyBusy] = useState(false);
   const [trashBusyKey, setTrashBusyKey] = useState<string | null>(null);
   const [selectedTrashCandidates, setSelectedTrashCandidates] = useState<Record<string, string>>({});
+  const previewRequestId = useRef(0);
   const organizeItems = plan?.items || [];
   const filterCounts = useMemo(() => countOrganizePreviewFilters(organizeItems), [organizeItems]);
   const filteredItems = useMemo(
@@ -1319,6 +1320,8 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
   };
 
   const load = async ({ clearNotice = true }: { clearNotice?: boolean } = {}) => {
+    const requestId = previewRequestId.current + 1;
+    previewRequestId.current = requestId;
     setPreviewBusy(true);
     if (clearNotice) {
       setNotice(null);
@@ -1326,11 +1329,18 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
     }
 
     try {
-      showPlan(await api<OrganizePlan>("/organize/preview", { method: "POST" }));
+      const nextPlan = await api<OrganizePlan>("/organize/preview", { method: "POST" });
+      if (requestId === previewRequestId.current) {
+        showPlan(nextPlan);
+      }
     } catch (caught) {
-      setNotice((caught as Error).message);
+      if (requestId === previewRequestId.current) {
+        setNotice((caught as Error).message);
+      }
     } finally {
-      setPreviewBusy(false);
+      if (requestId === previewRequestId.current) {
+        setPreviewBusy(false);
+      }
     }
   };
 
@@ -1344,6 +1354,8 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
     }
 
     setApplyBusy(true);
+    previewRequestId.current += 1;
+    setPreviewBusy(false);
     setNotice(null);
     setApplyErrors([]);
     try {
@@ -1375,6 +1387,8 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
     }
 
     setTrashBusyKey("bulk");
+    previewRequestId.current += 1;
+    setPreviewBusy(false);
     setNotice(null);
     setApplyErrors([]);
 
