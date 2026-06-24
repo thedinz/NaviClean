@@ -7,6 +7,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 
   const response = await fetch(apiUrl(path), {
     ...options,
+    cache: options.cache ?? "no-store",
     headers,
     credentials: "include"
   });
@@ -29,4 +30,3 @@ function apiUrl(path: string) {
   const base = document.baseURI.endsWith("/") ? document.baseURI : `${document.baseURI}/`;
   return new URL(`api/${path.replace(/^\/+/, "")}`, base).toString();
 }
-
