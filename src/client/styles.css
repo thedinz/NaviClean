@@ -964,6 +964,109 @@ select:disabled {
   }
 }
 
+.discover-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.catalog-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+.catalog-card {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 56px minmax(0, 1fr);
+  min-height: 76px;
+  padding: 10px;
+  text-align: left;
+}
+
+.catalog-card:hover {
+  border-color: var(--accent);
+}
+
+.catalog-card img {
+  aspect-ratio: 1;
+  border-radius: 6px;
+  object-fit: cover;
+  width: 56px;
+}
+
+.catalog-card span,
+.catalog-card strong,
+.catalog-card em {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-card em {
+  color: var(--muted);
+  font-style: normal;
+  margin-top: 4px;
+}
+
+.compact-toolbar h2 {
+  font-size: 1.2rem;
+  margin: 2px 0 0;
+}
+
+.catalog-tracks .catalog-missing {
+  color: var(--muted);
+}
+
+.catalog-tracks .catalog-missing td {
+  background: color-mix(in srgb, var(--surface) 70%, var(--panel));
+}
+
+.download-preview {
+  display: grid;
+  gap: 12px;
+}
+
+.download-confirmations {
+  display: grid;
+  gap: 8px;
+}
+
+.download-confirmations label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 760;
+}
+
+.provider-pill {
+  display: inline-flex;
+  width: max-content;
+  margin: 0 0 5px;
+  padding: 3px 7px;
+  border: 1px solid #cbded8;
+  border-radius: 999px;
+  background: #f0faf7;
+  color: #126f66;
+  font-size: 0.76rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -979,7 +1082,7 @@ select:disabled {
   }
 
   .nav-list {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(7, minmax(0, 1fr));
   }
 
   .nav-list button,

@@ -74,7 +74,11 @@ async function collectAudioFiles(root: string, extensions: Set<string>, recycleR
       const absolute = path.join(current, entry.name);
 
       if (entry.isDirectory()) {
-        if (path.resolve(absolute) === recycleRoot || entry.name === ".naviclean-trash") {
+        if (
+          path.resolve(absolute) === recycleRoot ||
+          entry.name === ".naviclean" ||
+          entry.name === ".naviclean-trash"
+        ) {
           continue;
         }
         stack.push(absolute);

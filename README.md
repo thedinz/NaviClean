@@ -42,13 +42,17 @@ For Unraid, set `PUID=99` and `PGID=100` so NaviClean can write to `/mnt/user/ap
 
 NaviClean uses one selected naming mode at a time:
 
-- `Standard` is the default for fresh installs and matches SpotifyBU's built-in organizer layout:
+- `Standard` is the default for fresh installs:
   - Artist folder: `{Album Artist Name}`
   - Standard track: `{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}`
   - Multi-disc track: `{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}`
 - `Manual` keeps the editable templates for users who want to define their own folder and file layout.
 
-NaviClean appends the original extension before planning moves. A normal standard target path looks like `Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track`. Missing release years are written as `Unknown Year`. In standard mode, the rendered target path is canonical, so a different year, folder name, or filename is treated as organization work instead of being accepted as close enough. This keeps NaviClean's organizer using the same exact path formula as SpotifyBU.
+NaviClean appends the original extension before planning moves. A normal standard target path looks like `Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track`. Missing release years are written as `Unknown Year`. In standard mode, the rendered target path is canonical, so a different year, folder name, or filename is treated as organization work instead of being accepted as close enough.
+
+## Spotify catalog discovery
+
+The Discover page can connect to Spotify with client credentials, search catalog artists, show album discographies beside local library coverage, and stage missing album tracks for provider download. Spotify is used for metadata and artwork only; downloads come from configured external providers and require the user to confirm they are authorized to download the selected tracks. The Docker image includes `ffmpeg` and current `yt-dlp` for YouTube/JioSaavn provider jobs.
 
 ## Library artwork
 
