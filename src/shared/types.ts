@@ -10,10 +10,186 @@ export type NavidromeSettingsView = {
   passwordSet: boolean;
 };
 
-export type SpotifyBuSettingsView = {
-  baseUrl: string;
-  username: string;
-  passwordSet: boolean;
+export type SpotifySettingsView = {
+  clientId: string;
+  clientSecretSet: boolean;
+  market: string;
+};
+
+export type ProviderSettingsView = {
+  maxConcurrentDownloads: number;
+};
+
+export type DiscoverySettingsView = {
+  requestsPerMinute: number;
+};
+
+export type CatalogSettingsView = {
+  spotify: SpotifySettingsView;
+  providers: ProviderSettingsView;
+  discovery: DiscoverySettingsView;
+};
+
+export type SpotifyArtistSummary = {
+  id: string;
+  name: string;
+  imageUrl: string | null;
+  spotifyUrl: string;
+};
+
+export type SpotifyAlbumSummary = {
+  id: string;
+  name: string;
+  albumType: string;
+  releaseYear: number | null;
+  releaseDate: string;
+  totalTracks: number;
+  imageUrl: string | null;
+  spotifyUrl: string;
+};
+
+export type SpotifyTrackSummary = {
+  id: string;
+  name: string;
+  artists: string[];
+  discNumber: number;
+  trackNumber: number;
+  duration: number;
+  explicit: boolean;
+  spotifyUrl: string;
+  present: boolean;
+};
+
+export type SpotifyAlbumDetail = SpotifyAlbumSummary & {
+  artist: SpotifyArtistSummary;
+  tracks: SpotifyTrackSummary[];
+  localTrackCount: number;
+};
+
+export type SpotifyArtistDiscography = {
+  artist: SpotifyArtistSummary;
+  albums: Array<SpotifyAlbumSummary & { localTrackCount: number }>;
+};
+
+export type SpotifyCatalogMatch = {
+  localArtistId: string;
+  localArtistName: string;
+  spotifyArtist: SpotifyArtistSummary | null;
+  message: string;
+};
+
+export type SpotifyTestResult = {
+  ok: boolean;
+  message: string;
+};
+
+export type SpotifyCatalogArtistSearchResult = {
+  artists: SpotifyArtistSummary[];
+};
+
+export type SpotifyCatalogArtistMatchesResult = {
+  matches: SpotifyCatalogMatch[];
+};
+
+export type SpotifyCatalogDiscographyResult = SpotifyArtistDiscography;
+
+export type SpotifyCatalogAlbumResult = {
+  album: SpotifyAlbumDetail;
+};
+
+export type SpotifyCatalogDownloadSelection = {
+  spotifyAlbumId: string;
+  trackIds?: string[];
+};
+
+export type SpotifyCatalogDownloadPlan = {
+  album: SpotifyAlbumDetail;
+  selectedTracks: SpotifyTrackSummary[];
+  supportedProviders: string[];
+  warnings: string[];
+};
+
+export type SpotifyCatalogDownloadQueueRequest = {
+  spotifyAlbumId: string;
+  trackIds?: string[];
+  rightsConfirmed?: boolean;
+};
+
+export type CatalogProviderId = "jiosaavn" | "youtube";
+
+export type CatalogProviderCandidateScore = {
+  albumScore?: number;
+  artistScore: number;
+  durationDeltaMs?: number;
+  overall: number;
+  titleScore: number;
+};
+
+export type CatalogProviderCandidate = {
+  album?: string;
+  artists: string[];
+  durationMs?: number;
+  id: string;
+  providerId: CatalogProviderId;
+  score: CatalogProviderCandidateScore;
+  title: string;
+  url: string;
+  verified: boolean;
+};
+
+export type SpotifyCatalogDownloadPreviewItem = {
+  candidates: CatalogProviderCandidate[];
+  error?: string;
+  selectedCandidate: CatalogProviderCandidate | null;
+  targetRelativePath: string;
+  track: SpotifyTrackSummary;
+};
+
+export type SpotifyCatalogDownloadPreviewResult = {
+  album: SpotifyAlbumDetail;
+  downloadableCount: number;
+  failedCount: number;
+  generatedAt: string;
+  items: SpotifyCatalogDownloadPreviewItem[];
+  warnings: string[];
+};
+
+export type SpotifyCatalogDownloadJobStatus = "completed" | "failed" | "queued" | "running";
+
+export type SpotifyCatalogDownloadJobItemStatus =
+  | "completed"
+  | "downloading"
+  | "failed"
+  | "pending";
+
+export type SpotifyCatalogDownloadJobItem = {
+  candidate: CatalogProviderCandidate | null;
+  completedAt?: string;
+  destinationPath?: string;
+  error?: string;
+  relativePath?: string;
+  startedAt?: string;
+  status: SpotifyCatalogDownloadJobItemStatus;
+  targetRelativePath: string;
+  track: SpotifyTrackSummary;
+};
+
+export type SpotifyCatalogDownloadJob = {
+  completedAt?: string;
+  completedCount: number;
+  createdAt: string;
+  failedCount: number;
+  id: string;
+  items: SpotifyCatalogDownloadJobItem[];
+  pendingCount: number;
+  status: SpotifyCatalogDownloadJobStatus;
+  totalCount: number;
+  updatedAt: string;
+};
+
+export type SpotifyCatalogDownloadQueueResult = {
+  job: SpotifyCatalogDownloadJob;
+  preview: SpotifyCatalogDownloadPreviewResult;
 };
 
 export type NamingSettings = {
@@ -27,7 +203,7 @@ export type NamingSettings = {
   colonReplacementFormat: number;
 };
 
-export type NamingMode = "standard" | "manual" | "spotifybu";
+export type NamingMode = "standard" | "manual";
 
 export type ScanSettings = {
   extensions: string[];
@@ -39,7 +215,7 @@ export type SettingsView = {
     username: string;
   };
   navidrome: NavidromeSettingsView;
-  spotifybu: SpotifyBuSettingsView;
+  catalog: CatalogSettingsView;
   naming: NamingSettings;
   scan: ScanSettings;
 };
@@ -55,10 +231,14 @@ export type SettingsUpdate = {
     username?: string;
     password?: string;
   };
-  spotifybu?: {
-    baseUrl?: string;
-    username?: string;
-    password?: string;
+  catalog?: {
+    spotify?: {
+      clientId?: string;
+      clientSecret?: string;
+      market?: string;
+    };
+    providers?: Partial<ProviderSettingsView>;
+    discovery?: Partial<DiscoverySettingsView>;
   };
   naming?: Partial<NamingSettings>;
   scan?: Partial<ScanSettings>;
@@ -92,7 +272,7 @@ export type TrackFile = {
   qualityScore: number;
   targetPath: string;
   targetRelativePath: string;
-  targetSource?: "naviclean" | "spotifybu";
+  targetSource?: "naviclean" | "spotify";
   issues: string[];
 };
 
@@ -200,7 +380,7 @@ export type OrganizePlanItem = {
   targetPath: string;
   sourceRelativePath: string;
   targetRelativePath: string;
-  targetSource?: "naviclean" | "spotifybu";
+  targetSource?: "naviclean" | "spotify";
   status: "ready" | "same" | "duplicate-target" | "conflict" | "outside-library" | "missing-source";
   message: string;
   collision?: OrganizeCollision;

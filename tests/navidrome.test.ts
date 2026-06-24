@@ -90,10 +90,18 @@ function settings(libraryPath: string): PrivateSettings {
       username: "admin",
       password: "secret"
     },
-    spotifybu: {
-      baseUrl: "",
-      username: "",
-      password: ""
+    catalog: {
+      spotify: {
+        clientId: "",
+        clientSecret: "",
+        market: "US"
+      },
+      providers: {
+        maxConcurrentDownloads: 1
+      },
+      discovery: {
+        requestsPerMinute: 40
+      }
     },
     naming: {
       mode: "standard",

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { resolveSelectedDuplicates } from "../src/server/duplicates.js";
+import { buildDuplicateGroups, resolveSelectedDuplicates } from "../src/server/duplicates.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 import type { TrackFile } from "../src/shared/types.js";
 
@@ -87,6 +87,27 @@ test("bulk duplicate cleanup keeps at least one track in each selected group", a
   );
 });
 
+test("duplicate scan ignores same song on different releases", () => {
+  const groups = buildDuplicateGroups([
+    track({
+      id: "album-copy",
+      album: "Original Album",
+      title: "Same Song",
+      trackNumber: 2,
+      year: 2020
+    }),
+    track({
+      id: "best-of-copy",
+      album: "Best Of",
+      title: "Same Song",
+      trackNumber: 7,
+      year: 2024
+    })
+  ]);
+
+  assert.equal(groups.length, 0);
+});
+
 function settings(libraryPath: string): PrivateSettings {
   return {
     auth: {
@@ -99,10 +120,18 @@ function settings(libraryPath: string): PrivateSettings {
       username: "",
       password: ""
     },
-    spotifybu: {
-      baseUrl: "",
-      username: "",
-      password: ""
+    catalog: {
+      spotify: {
+        clientId: "",
+        clientSecret: "",
+        market: "US"
+      },
+      providers: {
+        maxConcurrentDownloads: 1
+      },
+      discovery: {
+        requestsPerMinute: 40
+      }
     },
     naming: {
       mode: "standard",
