@@ -22,7 +22,10 @@ test("scanner infers the release year when the parent artist folder stripped tra
     assert.equal(result.tracks.length, 1);
     assert.equal(track?.albumArtist, "Journey Worship Co.");
     assert.equal(track?.album, "Come to the Lord");
+    assert.equal(track?.title, "Come to the Lord");
+    assert.equal(track?.trackNumber, 1);
     assert.equal(track?.year, 2021);
+    assert.equal(track?.targetRelativePath, relativePath);
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }

@@ -1546,7 +1546,10 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
                       </td>
                       <td>
                         {item.targetRelativePath ? (
-                          <PathDiff value={item.targetRelativePath} compareTo={item.sourceRelativePath} />
+                          <>
+                            <PathDiff value={item.targetRelativePath} compareTo={item.sourceRelativePath} />
+                            {item.targetSource === "spotify" && <span className="status-detail">Spotify metadata</span>}
+                          </>
                         ) : (
                           item.message
                         )}

@@ -262,6 +262,7 @@ export type TrackFile = {
   discTotal: number | null;
   year: number | null;
   duration: number | null;
+  isrc?: string | null;
   bitrate: number | null;
   sampleRate: number | null;
   bitsPerSample: number | null;
