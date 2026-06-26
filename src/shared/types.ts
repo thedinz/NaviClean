@@ -203,10 +203,12 @@ export type NamingSettings = {
   colonReplacementFormat: number;
 };
 
-export type NamingMode = "standard" | "manual";
+export type NamingMode = "standard";
 
 export type ScanSettings = {
   extensions: string[];
+  autoScanEnabled: boolean;
+  autoScanTime: string;
 };
 
 export type SettingsView = {
@@ -433,7 +435,7 @@ export type OrganizeApplyResult = {
   skipped: number;
   errors: string[];
   items: Array<OrganizePlanItem & { applied: boolean }>;
-  plan?: OrganizePlan;
+  plan: OrganizePlan;
 };
 
 export type OrganizeTrashResult = {

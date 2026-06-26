@@ -46,6 +46,7 @@ const scanStatus: ScanStatus = {
   audioFiles: 0,
   errors: []
 };
+let autoScanTimer: NodeJS.Timeout | null = null;
 
 app.use(express.json({ limit: "2mb" }));
 
@@ -87,6 +88,7 @@ app.get("/api/settings", asyncHandler(async (_req, res) => {
 
 app.put("/api/settings", asyncHandler(async (req, res) => {
   const next = await updateSettings(req.body as SettingsUpdate);
+  scheduleAutoScan(next);
   res.json(toSettingsView(next));
 }));
 
@@ -216,21 +218,11 @@ app.get("/api/scan/status", (_req, res) => {
 });
 
 app.post("/api/scan/start", asyncHandler(async (_req, res) => {
-  if (scanStatus.running) {
+  if (!startBackgroundScan()) {
     res.status(202).json(scanStatus);
     return;
   }
 
-  Object.assign(scanStatus, {
-    running: true,
-    startedAt: new Date().toISOString(),
-    finishedAt: null,
-    scannedFiles: 0,
-    audioFiles: 0,
-    errors: []
-  });
-
-  void runScan();
   res.status(202).json(scanStatus);
 }));
 
@@ -588,6 +580,9 @@ app.use((error: Error, _req: express.Request, res: express.Response, _next: expr
 
 app.listen(port, () => {
   console.log(`NaviClean listening on ${port}`);
+  void loadSettingsForPlanning()
+    .then(scheduleAutoScan)
+    .catch((error) => console.error("Failed to schedule daily scan:", error));
 });
 
 function trustProxySetting() {
@@ -642,6 +637,77 @@ async function runScan() {
     scanStatus.running = false;
     scanStatus.finishedAt = new Date().toISOString();
   }
+}
+
+function startBackgroundScan() {
+  if (scanStatus.running) {
+    return false;
+  }
+
+  Object.assign(scanStatus, {
+    running: true,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    scannedFiles: 0,
+    audioFiles: 0,
+    errors: []
+  });
+
+  void runScan();
+  return true;
+}
+
+function scheduleAutoScan(settings: Awaited<ReturnType<typeof loadSettings>>) {
+  clearAutoScanTimer();
+
+  if (!settings.scan.autoScanEnabled) {
+    return;
+  }
+
+  const nextScanAt = nextDailyScanDate(settings.scan.autoScanTime);
+  const delay = Math.max(0, nextScanAt.getTime() - Date.now());
+  autoScanTimer = setTimeout(() => {
+    void runScheduledScan();
+  }, delay);
+  console.log(`Daily scan scheduled for ${nextScanAt.toLocaleString()}`);
+}
+
+function clearAutoScanTimer() {
+  if (!autoScanTimer) {
+    return;
+  }
+
+  clearTimeout(autoScanTimer);
+  autoScanTimer = null;
+}
+
+async function runScheduledScan() {
+  autoScanTimer = null;
+
+  try {
+    const settings = await loadSettingsForPlanning();
+
+    if (settings.scan.autoScanEnabled) {
+      const started = startBackgroundScan();
+      console.log(started ? "Starting scheduled daily scan." : "Skipping scheduled daily scan because another scan is running.");
+    }
+
+    scheduleAutoScan(settings);
+  } catch (error) {
+    console.error("Failed to start scheduled daily scan:", error);
+  }
+}
+
+function nextDailyScanDate(time: string, from = new Date()) {
+  const [hour = "2", minute = "0"] = time.split(":");
+  const next = new Date(from);
+  next.setHours(Number(hour), Number(minute), 0, 0);
+
+  if (next.getTime() <= from.getTime()) {
+    next.setDate(next.getDate() + 1);
+  }
+
+  return next;
 }
 
 async function loadSettingsForPlanning() {

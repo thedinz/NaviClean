@@ -33,7 +33,6 @@ import type {
   LibraryArtistSummary,
   LibraryStats,
   LibraryTrashResult,
-  NamingMode,
   OrganizeApplyResult,
   OrganizeCollisionCandidate,
   OrganizePlan,
@@ -71,11 +70,6 @@ const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
   { id: "settings", label: "Settings", icon: Settings }
 ];
 
-const namingModes: Array<{ id: NamingMode; label: string }> = [
-  { id: "standard", label: "Standard" },
-  { id: "manual", label: "Manual" }
-];
-
 const organizePreviewFilters: Array<{ id: OrganizePreviewFilter; label: string }> = [
   { id: "attention", label: "Needs action" },
   { id: "ready", label: "Ready" },
@@ -85,16 +79,6 @@ const organizePreviewFilters: Array<{ id: OrganizePreviewFilter; label: string }
   { id: "same", label: "Organized" },
   { id: "all", label: "All" }
 ];
-
-const standardNamingDefaults = {
-  artistFolderFormat: "{Album Artist Name}",
-  standardTrackFormat:
-    "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}",
-  multiDiscTrackFormat:
-    "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}",
-  replaceIllegalCharacters: true,
-  colonReplacementFormat: 4
-};
 
 export default function App() {
   const [auth, setAuth] = useState<AuthInfo | null>(null);
@@ -1370,11 +1354,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
       setNotice(`${result.moved} moved, ${result.skipped} skipped${errorSuffix}. Preview refreshed.`);
       setApplyErrors(result.errors);
 
-      if (result.plan) {
-        showPlan(result.plan);
-      }
-
-      await load({ clearNotice: false });
+      showPlan(result.plan);
       await onChanged();
     } catch (caught) {
       setNotice((caught as Error).message);
@@ -1408,7 +1388,6 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
       setApplyErrors(result.errors);
       setSelectedTrashCandidates({});
       showPlan(result.plan);
-      await load({ clearNotice: false });
       await onChanged();
     } catch (caught) {
       setNotice((caught as Error).message);
@@ -2118,15 +2097,11 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
             discovery: settings.catalog.discovery
           },
           naming: {
-            mode: settings.naming.mode,
+            mode: "standard",
             libraryPath: settings.naming.libraryPath,
-            recycleBinPath: settings.naming.recycleBinPath,
-            artistFolderFormat: settings.naming.artistFolderFormat,
-            standardTrackFormat: settings.naming.standardTrackFormat,
-            multiDiscTrackFormat: settings.naming.multiDiscTrackFormat,
-            replaceIllegalCharacters: settings.naming.replaceIllegalCharacters,
-            colonReplacementFormat: settings.naming.colonReplacementFormat
-          }
+            recycleBinPath: settings.naming.recycleBinPath
+          },
+          scan: settings.scan
         })
       });
 
@@ -2197,18 +2172,9 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
     }
   };
 
-  const updateNaming = (update: Partial<SettingsView["naming"]>) => {
-    if (!settings) {
-      return;
-    }
-    setSettings({ ...settings, naming: { ...settings.naming, ...update } });
-  };
-
   if (!settings) {
     return <MessageScreen title="Settings" message="Loading" />;
   }
-
-  const canEditFormats = settings.naming.mode === "manual";
 
   return (
     <form className="settings-grid" onSubmit={save}>
@@ -2382,89 +2348,36 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
             }
           />
         </label>
-        <div className="settings-subsection">
-          <span className="subsection-label">Naming mode</span>
-          <div className="segmented-control" role="radiogroup" aria-label="Naming mode">
-            {namingModes.map((mode) => (
-              <button
-                key={mode.id}
-                className={settings.naming.mode === mode.id ? "active" : ""}
-                type="button"
-                role="radio"
-                aria-checked={settings.naming.mode === mode.id}
-                onClick={() =>
-                  updateNaming(
-                    mode.id === "standard"
-                      ? { mode: mode.id, ...standardNamingDefaults }
-                      : { mode: mode.id }
-                  )
-                }
-              >
-                {mode.label}
-              </button>
-            ))}
-          </div>
+        <div className="notice-bar safety">
+          <strong>NaviClean naming</strong>
+          <span>Uses Spotify album metadata in the standard Artist / Album (Year) layout.</span>
         </div>
-        {settings.naming.mode === "standard" && (
-          <div className="notice-bar safety">
-            <strong>Standard naming</strong>
-            <span>Uses Artist / Artist - Album (Year) / Artist - Album (Year) - 01 - Track Title.</span>
-          </div>
-        )}
-        {settings.naming.mode === "manual" && (
-          <div className="notice-bar safety">
-            <strong>Manual naming</strong>
-            <span>Preview organization before applying moves.</span>
-          </div>
-        )}
-        <div className="form-grid two">
-          <label>
-            Artist folder
-            <input
-              value={settings.naming.artistFolderFormat}
-              readOnly={!canEditFormats}
-              onChange={(event) => updateNaming({ artistFolderFormat: event.target.value })}
-            />
-          </label>
-          <label>
-            Standard track
-            <input
-              value={settings.naming.standardTrackFormat}
-              readOnly={!canEditFormats}
-              onChange={(event) => updateNaming({ standardTrackFormat: event.target.value })}
-            />
-          </label>
-        </div>
-        <label>
-          Multi-disc track
-          <input
-            value={settings.naming.multiDiscTrackFormat}
-            readOnly={!canEditFormats}
-            onChange={(event) => updateNaming({ multiDiscTrackFormat: event.target.value })}
-          />
-        </label>
         <label className="toggle-row">
-          <span>Replace illegal characters</span>
+          <span>Daily auto scan</span>
           <input
             type="checkbox"
-            checked={settings.naming.replaceIllegalCharacters}
-            disabled={!canEditFormats}
-            onChange={(event) => updateNaming({ replaceIllegalCharacters: event.target.checked })}
+            checked={settings.scan.autoScanEnabled}
+            onChange={(event) =>
+              setSettings({
+                ...settings,
+                scan: { ...settings.scan, autoScanEnabled: event.target.checked }
+              })
+            }
           />
         </label>
         <label>
-          Colon replacement
-          <select
-            value={settings.naming.colonReplacementFormat}
-            disabled={!canEditFormats}
-            onChange={(event) => updateNaming({ colonReplacementFormat: Number(event.target.value) })}
-          >
-            <option value={4}>Smart</option>
-            <option value={0}>Delete</option>
-            <option value={1}>Dash</option>
-            <option value={2}>Space dash</option>
-            <option value={3}>Space dash space</option>
-          </select>
+          Auto scan time
+          <input
+            type="time"
+            value={settings.scan.autoScanTime}
+            disabled={!settings.scan.autoScanEnabled}
+            onChange={(event) =>
+              setSettings({
+                ...settings,
+                scan: { ...settings.scan, autoScanTime: event.target.value }
+              })
+            }
+          />
         </label>
       </fieldset>
 
