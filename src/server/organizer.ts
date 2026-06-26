@@ -64,7 +64,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       targetPath: target.targetPath,
       sourceRelativePath: track.relativePath,
       targetRelativePath: target.targetRelativePath,
-      targetSource: "naviclean",
+      targetSource: track.targetSource ?? "naviclean",
       status: "ready",
       message: "Ready"
     };
