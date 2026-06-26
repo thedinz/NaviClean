@@ -31,6 +31,7 @@ import {
   searchSpotifyArtists,
   testSpotifyConnection
 } from "./spotify.js";
+import type { SpotifyOrganizeEnrichmentOptions } from "./spotify.js";
 
 const app = express();
 const port = Number(process.env.PORT || 8080);
@@ -724,9 +725,10 @@ async function loadSettingsForPlanning() {
 
 async function buildSpotifyAwareOrganizePlan(
   tracks: Awaited<ReturnType<typeof loadCatalog>>["tracks"],
-  settings: Awaited<ReturnType<typeof loadSettings>>
+  settings: Awaited<ReturnType<typeof loadSettings>>,
+  options?: SpotifyOrganizeEnrichmentOptions
 ) {
-  const enriched = await enrichTracksWithSpotifyOrganizeMetadata(settings, tracks);
+  const enriched = await enrichTracksWithSpotifyOrganizeMetadata(settings, tracks, options);
   const plan = await buildOrganizePlan(enriched.tracks, settings);
 
   return {
@@ -750,7 +752,10 @@ async function buildWorkflowState(
   catalog: Awaited<ReturnType<typeof loadCatalog>>,
   settings: Awaited<ReturnType<typeof loadSettings>>
 ): Promise<WorkflowState> {
-  const plan = await buildOrganizePlan(catalog.tracks, settings);
+  const { plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings, {
+    includeSummaryWarning: false,
+    lookupMissing: false
+  });
   return workflowStateFromPlan(catalog.updatedAt, catalog.tracks.length, plan);
 }
 
@@ -802,7 +807,7 @@ function workflowStateFromPlan(
       pendingMoves,
       organizationConflicts,
       missingFiles,
-      message: `Stage 2: finish organizing first (${pendingMoves} moves, ${organizationConflicts} conflicts, ${missingFiles} missing files).`,
+      message: `Stage 2: review organization (${workflowBlockerSummary(pendingMoves, organizationConflicts, missingFiles)}).`,
       warnings
     };
   }
@@ -814,9 +819,25 @@ function workflowStateFromPlan(
     pendingMoves,
     organizationConflicts,
     missingFiles,
-    message: "Stage 3: duplicate cleanup is available for same-release track matches only.",
+    message: "Stage 3: organization is complete. Duplicate cleanup will show same-release matches when any are found.",
     warnings
   };
+}
+
+function workflowBlockerSummary(pendingMoves: number, organizationConflicts: number, missingFiles: number) {
+  return [
+    countLabel(pendingMoves, "move"),
+    countLabel(organizationConflicts, "conflict"),
+    countLabel(missingFiles, "missing file")
+  ].filter(Boolean).join(", ");
+}
+
+function countLabel(count: number, noun: string) {
+  if (count <= 0) {
+    return "";
+  }
+
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function workflowStateDuringScan(lastScanFinishedAt: string | null): WorkflowState {

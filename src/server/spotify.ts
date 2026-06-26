@@ -110,7 +110,9 @@ type SpotifyOrganizeScore = {
   track: SpotifyOrganizeTrack;
 };
 
-type SpotifyOrganizeEnrichmentOptions = {
+export type SpotifyOrganizeEnrichmentOptions = {
+  includeSummaryWarning?: boolean;
+  lookupMissing?: boolean;
   useCache?: boolean;
 };
 
@@ -287,6 +289,8 @@ export async function enrichTracksWithSpotifyOrganizeMetadata(
   options: SpotifyOrganizeEnrichmentOptions = {}
 ) {
   const useCache = options.useCache ?? true;
+  const lookupMissing = options.lookupMissing ?? true;
+  const includeSummaryWarning = options.includeSummaryWarning ?? true;
   const warnings: string[] = [];
   const credentials = spotifyCredentials(settings);
   const eligibleTracks = tracks.filter(spotifyOrganizeTrackIsEligible);
@@ -299,7 +303,9 @@ export async function enrichTracksWithSpotifyOrganizeMetadata(
   }
 
   if (!credentials.clientId || !credentials.clientSecret) {
-    warnings.push("Spotify organize matching skipped because Spotify client credentials are not configured.");
+    if (includeSummaryWarning) {
+      warnings.push("Spotify organize matching skipped because Spotify client credentials are not configured.");
+    }
     return {
       tracks,
       warnings
@@ -333,6 +339,11 @@ export async function enrichTracksWithSpotifyOrganizeMetadata(
       continue;
     }
 
+    if (!lookupMissing) {
+      noMatch += 1;
+      continue;
+    }
+
     try {
       const result = await findSpotifyOrganizeTrack(settings, track);
 
@@ -361,7 +372,7 @@ export async function enrichTracksWithSpotifyOrganizeMetadata(
     await writeSpotifyOrganizeCache(cache);
   }
 
-  if (!aborted) {
+  if (!aborted && includeSummaryWarning) {
     warnings.push(
       [
         "Spotify organize matching",
@@ -371,7 +382,7 @@ export async function enrichTracksWithSpotifyOrganizeMetadata(
         `${noMatch.toLocaleString()} local fallback`
       ].join("; ")
     );
-  } else if (failed > 0) {
+  } else if (failed > 0 && includeSummaryWarning) {
     warnings.push(`${failed.toLocaleString()} Spotify organize lookup failed before the local fallback was used.`);
   }
 
