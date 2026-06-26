@@ -861,6 +861,9 @@ function DuplicatesPage({
     () => Object.entries(selectedTrashIds).filter(([, selected]) => selected).map(([id]) => id),
     [selectedTrashIds]
   );
+  const workflow = stats?.workflow;
+  const duplicateGateIcon = workflow?.stage === "scan" ? Database : LockKeyhole;
+  const blockerSummary = workflowBlockerSummary(workflow);
 
   const load = async () => {
     setLoading(true);
@@ -953,25 +956,27 @@ function DuplicatesPage({
     });
   };
 
-  if (!stats?.workflow.duplicateScanReady) {
+  if (!workflow?.duplicateScanReady) {
     return (
       <section className="stack">
         <div className="notice-bar safety">
-          <strong>Duplicates locked</strong>
-          <span>{stats?.workflow.message || "Scan and organize the library before duplicate cleanup."}</span>
-          {stats?.workflow && (
-            <span>
-              {stats.workflow.pendingMoves} moves, {stats.workflow.organizationConflicts} conflicts, {stats.workflow.missingFiles} missing files
-            </span>
-          )}
+          <strong>{duplicateGateNoticeTitle(workflow)}</strong>
+          <span>{workflow?.message || "Scan and review organization before duplicate cleanup."}</span>
+          {blockerSummary && <span>{blockerSummary}</span>}
         </div>
-        <div className="button-row">
-          <button className="secondary-button" type="button" onClick={onOpenOrganize}>
-            <FolderInput size={18} />
-            <span>Review blockers</span>
-          </button>
-        </div>
-        <EmptyState icon={LockKeyhole} title="Finish organization first" />
+        {workflow?.stage === "organize" && (
+          <div className="button-row">
+            <button className="secondary-button" type="button" onClick={onOpenOrganize}>
+              <FolderInput size={18} />
+              <span>Review organization</span>
+            </button>
+          </div>
+        )}
+        <EmptyState
+          icon={duplicateGateIcon}
+          title={duplicateGateEmptyTitle(workflow)}
+          description={duplicateGateEmptyDescription(workflow)}
+        />
       </section>
     );
   }
@@ -1014,7 +1019,13 @@ function DuplicatesPage({
           {resolveErrors.length > 8 && <span>{resolveErrors.length - 8} more errors</span>}
         </div>
       )}
-      {!loading && groups.length === 0 && <EmptyState icon={Check} title="No duplicate groups" />}
+      {!loading && groups.length === 0 && (
+        <EmptyState
+          icon={Check}
+          title="No duplicate groups found"
+          description="Organization is complete; there are no same-release duplicate matches to clean up."
+        />
+      )}
       {groups.map((group) => {
         const groupSelectedRemoveIds = selectedDuplicateTrashIdsForGroup(group);
 
@@ -1399,8 +1410,8 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
   return (
     <section className="panel">
       <div className="notice-bar safety">
-        <strong>Stage 2: organize first</strong>
-        <span>Files move into the active album layout before duplicate cleanup unlocks.</span>
+        <strong>Organization review</strong>
+        <span>Preview moves, conflicts, and missing files. Duplicate cleanup opens automatically once organization is clear.</span>
       </div>
       <div className="toolbar">
         <div className="summary-chips">
@@ -1454,7 +1465,13 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
           {applyErrors.length > 8 && <span>{applyErrors.length - 8} more errors</span>}
         </div>
       )}
-      {!previewBusy && !plan && <EmptyState icon={FolderInput} title="No preview loaded" />}
+      {!previewBusy && !plan && (
+        <EmptyState
+          icon={FolderInput}
+          title="Run organization preview"
+          description="Preview checks the library for moves, conflicts, and missing files before duplicate cleanup."
+        />
+      )}
       {plan && (
         <>
           <div className="organize-preview-tools">
@@ -1499,7 +1516,15 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
             </div>
           </div>
           {filteredItems.length === 0 ? (
-            <EmptyState icon={Check} title="No preview items" />
+            <EmptyState
+              icon={Check}
+              title={organizeItems.length === 0 ? "No tracks to organize" : "No items in this filter"}
+              description={
+                organizeItems.length === 0
+                  ? "Scan the library to load tracks before organizing."
+                  : "Switch filters to see organized tracks, ready moves, or duplicate-target candidates."
+              }
+            />
           ) : (
             <div className="table-wrap">
               <table>
@@ -2422,11 +2447,70 @@ function ActionProgress({ label }: { label: string }) {
   );
 }
 
-function EmptyState({ icon: Icon, title }: { icon: typeof Database; title: string }) {
+function duplicateGateNoticeTitle(workflow?: LibraryStats["workflow"]) {
+  if (!workflow) {
+    return "Duplicate cleanup unavailable";
+  }
+
+  if (workflow.stage === "scan") {
+    return workflow.scanned ? "Duplicates waiting on scan" : "Duplicates need a library scan";
+  }
+
+  return "Duplicates waiting on organization";
+}
+
+function duplicateGateEmptyTitle(workflow?: LibraryStats["workflow"]) {
+  if (!workflow) {
+    return "Duplicate cleanup not ready";
+  }
+
+  if (workflow.stage === "scan") {
+    return workflow.scanned ? "Scan still running" : "Scan library first";
+  }
+
+  return "Organization needs attention";
+}
+
+function duplicateGateEmptyDescription(workflow?: LibraryStats["workflow"]) {
+  if (!workflow) {
+    return "Refresh stats, then review scan and organization status.";
+  }
+
+  if (workflow.stage === "scan") {
+    return workflow.scanned
+      ? "Duplicate cleanup unlocks after the current scan finishes and organization is clear."
+      : "Scan the library, then review organization before checking duplicates.";
+  }
+
+  return "Review the organizer; duplicates unlock once moves, conflicts, and missing files are clear.";
+}
+
+function workflowBlockerSummary(workflow?: LibraryStats["workflow"]) {
+  if (!workflow || workflow.stage !== "organize") {
+    return "";
+  }
+
+  return [
+    countWorkflowItem(workflow.pendingMoves, "move"),
+    countWorkflowItem(workflow.organizationConflicts, "conflict"),
+    countWorkflowItem(workflow.missingFiles, "missing file")
+  ].filter(Boolean).join(", ");
+}
+
+function countWorkflowItem(count: number, noun: string) {
+  if (count <= 0) {
+    return "";
+  }
+
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function EmptyState({ icon: Icon, title, description }: { icon: typeof Database; title: string; description?: string }) {
   return (
     <div className="empty-state">
       <Icon size={24} />
       <strong>{title}</strong>
+      {description && <span>{description}</span>}
     </div>
   );
 }

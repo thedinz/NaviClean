@@ -934,10 +934,22 @@ select:disabled {
 .empty-state {
   display: grid;
   min-height: 180px;
+  padding: 18px;
   place-items: center;
   align-content: center;
   gap: 8px;
   color: #66736f;
+  text-align: center;
+}
+
+.empty-state strong,
+.empty-state span {
+  max-width: 520px;
+}
+
+.empty-state span {
+  font-size: 0.92rem;
+  line-height: 1.4;
 }
 
 .spin {
