@@ -24,6 +24,7 @@ import { loadSettings, toSettingsView, updateSettings } from "./settings.js";
 import { fetchNavidromeArtwork, testNavidromeConnection } from "./navidrome.js";
 import {
   buildSpotifyDownloadPlan,
+  enrichTracksWithSpotifyOrganizeMetadata,
   getSpotifyAlbumDetail,
   getSpotifyArtistDiscography,
   matchLibraryArtistsToSpotify,
@@ -428,19 +429,21 @@ app.delete("/api/recycle-bin/items", asyncHandler(async (req, res) => {
 app.post("/api/organize/preview", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  res.json(await buildOrganizePlan(catalog.tracks, settings));
+  const { plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
+  res.json(plan);
 }));
 
 app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const plan = await buildOrganizePlan(catalog.tracks, settings);
+  const planned = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
+  const plan = planned.plan;
   const result = await applyOrganizePlan(plan);
-  let tracks = catalog.tracks;
+  let tracks = planned.tracks;
 
   if (result.moved > 0) {
     const movedById = new Map(result.items.filter((item) => item.applied).map((item) => [item.id, item]));
-    tracks = catalog.tracks.map((track) => {
+    tracks = planned.tracks.map((track) => {
       const moved = movedById.get(track.id);
       if (!moved) {
         return track;
@@ -456,7 +459,8 @@ app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
     await saveCatalog(tracks);
   }
 
-  res.json({ ...result, plan: await buildOrganizePlan(tracks, settings) });
+  const refreshed = await buildSpotifyAwareOrganizePlan(tracks, settings);
+  res.json({ ...result, plan: refreshed.plan });
 }));
 
 app.post("/api/organize/trash", asyncHandler(async (req, res) => {
@@ -470,14 +474,16 @@ app.post("/api/organize/trash", asyncHandler(async (req, res) => {
 
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const result = await trashOrganizeCandidate(settings, catalog.tracks, itemId, candidateId);
+  const planned = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
+  const result = await trashOrganizeCandidate(settings, planned.tracks, itemId, candidateId);
   const savedCatalog = await saveCatalog(result.tracks);
+  const refreshed = await buildSpotifyAwareOrganizePlan(savedCatalog.tracks, settings);
 
   res.json({
     trashed: result.trashed,
     removedTrackIds: result.removedTrackIds,
     errors: result.errors,
-    plan: await buildOrganizePlan(savedCatalog.tracks, settings)
+    plan: refreshed.plan
   });
 }));
 
@@ -500,14 +506,16 @@ app.post("/api/organize/trash/bulk", asyncHandler(async (req, res) => {
 
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const result = await trashOrganizeCandidates(settings, catalog.tracks, selections);
+  const planned = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
+  const result = await trashOrganizeCandidates(settings, planned.tracks, selections);
   const savedCatalog = await saveCatalog(result.tracks);
+  const refreshed = await buildSpotifyAwareOrganizePlan(savedCatalog.tracks, settings);
 
   res.json({
     trashed: result.trashed,
     removedTrackIds: result.removedTrackIds,
     errors: result.errors,
-    plan: await buildOrganizePlan(savedCatalog.tracks, settings)
+    plan: refreshed.plan
   });
 }));
 
@@ -712,6 +720,22 @@ function nextDailyScanDate(time: string, from = new Date()) {
 
 async function loadSettingsForPlanning() {
   return loadSettings();
+}
+
+async function buildSpotifyAwareOrganizePlan(
+  tracks: Awaited<ReturnType<typeof loadCatalog>>["tracks"],
+  settings: Awaited<ReturnType<typeof loadSettings>>
+) {
+  const enriched = await enrichTracksWithSpotifyOrganizeMetadata(settings, tracks);
+  const plan = await buildOrganizePlan(enriched.tracks, settings);
+
+  return {
+    tracks: enriched.tracks,
+    plan: {
+      ...plan,
+      warnings: [...enriched.warnings, ...plan.warnings]
+    } satisfies OrganizePlan
+  };
 }
 
 function asyncHandler(
