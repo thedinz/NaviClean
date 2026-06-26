@@ -30,16 +30,18 @@ test("standard mode includes disc number for multi-disc albums", () => {
   );
 });
 
-test("manual mode honors custom tokens", () => {
+test("custom naming templates are ignored", () => {
   const target = targetForTrack(
     track({ albumType: "single", trackTotal: 5 }),
     settings({
-      mode: "manual",
       standardTrackFormat: "{Album Artist Name}/{Album Type} - {Album Title}/{track:00} - {Track Title}"
     })
   );
 
-  assert.equal(target.targetRelativePath, "Artist/Artist/EP - Album Name/03 - Track.mp3");
+  assert.equal(
+    target.targetRelativePath,
+    "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3"
+  );
 });
 
 test("standard folder with a different local year needs organization", async () => {
@@ -428,7 +430,9 @@ function settings(overrides: Partial<PrivateSettings["naming"]> = {}): PrivateSe
       ...overrides
     },
     scan: {
-      extensions: [".mp3"]
+      extensions: [".mp3"],
+      autoScanEnabled: true,
+      autoScanTime: "02:00"
     }
   };
 }
