@@ -878,6 +878,10 @@ function DuplicatesPage({
   };
 
   useEffect(() => {
+    onChanged().catch((caught) => setNotice((caught as Error).message));
+  }, []);
+
+  useEffect(() => {
     if (!stats?.workflow.duplicateScanReady) {
       setGroups([]);
       setSelectedTrashIds({});
@@ -1333,6 +1337,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
       const nextPlan = await api<OrganizePlan>("/organize/preview", { method: "POST" });
       if (requestId === previewRequestId.current) {
         showPlan(nextPlan);
+        await onChanged();
       }
     } catch (caught) {
       if (requestId === previewRequestId.current) {
