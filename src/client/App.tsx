@@ -13,6 +13,7 @@ import {
   Loader2,
   LockKeyhole,
   LogOut,
+  Moon,
   Music2,
   Play,
   RefreshCw,
@@ -21,6 +22,7 @@ import {
   Settings,
   Shield,
   SlidersHorizontal,
+  Sun,
   Trash2,
   UserRound
 } from "lucide-react";
@@ -54,11 +56,13 @@ import { api } from "./api";
 import { appVersion } from "./version";
 
 type Page = "dashboard" | "library" | "discover" | "duplicates" | "organize" | "trash" | "settings";
+type AppTheme = "light" | "dark";
 type OrganizePreviewFilter = "attention" | "ready" | "duplicate-target" | "conflict" | "missing" | "same" | "all";
 type OrganizePreviewItem = OrganizePlan["items"][number];
 
 const libraryArtistPageSize = 25;
 const organizePreviewPageSize = 150;
+const themeStorageKey = "naviclean-theme";
 
 const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
@@ -83,6 +87,17 @@ const organizePreviewFilters: Array<{ id: OrganizePreviewFilter; label: string }
 export default function App() {
   const [auth, setAuth] = useState<AuthInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [theme, setTheme] = useState<AppTheme>(() => initialTheme());
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    try {
+      window.localStorage.setItem(themeStorageKey, theme);
+    } catch {
+      // Theme still applies for the current session.
+    }
+  }, [theme]);
 
   useEffect(() => {
     api<AuthInfo>("/auth/me")
@@ -102,10 +117,20 @@ export default function App() {
     return <LoginScreen onLogin={setAuth} />;
   }
 
-  return <Shell auth={auth} onAuthChange={setAuth} />;
+  return <Shell auth={auth} onAuthChange={setAuth} theme={theme} onThemeChange={setTheme} />;
 }
 
-function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: AuthInfo) => void }) {
+function Shell({
+  auth,
+  onAuthChange,
+  theme,
+  onThemeChange
+}: {
+  auth: AuthInfo;
+  onAuthChange: (auth: AuthInfo) => void;
+  theme: AppTheme;
+  onThemeChange: (theme: AppTheme) => void;
+}) {
   const [page, setPage] = useState<Page>("dashboard");
   const [scan, setScan] = useState<ScanStatus | null>(null);
   const [stats, setStats] = useState<LibraryStats | null>(null);
@@ -187,7 +212,12 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
     }
   };
 
+  const toggleTheme = () => {
+    onThemeChange(theme === "dark" ? "light" : "dark");
+  };
+
   const active = navItems.find((item) => item.id === page) || navItems[0];
+  const ThemeIcon = theme === "dark" ? Sun : Moon;
 
   return (
     <div className="app-shell">
@@ -218,10 +248,22 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
           })}
         </nav>
 
-        <button className="ghost-button" type="button" onClick={signOut} disabled={signOutBusy} title="Sign out">
-          {signOutBusy ? <Loader2 className="spin" size={18} /> : <LogOut size={18} />}
-          <span>{signOutBusy ? "Signing out" : "Sign out"}</span>
-        </button>
+        <div className="sidebar-actions">
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={toggleTheme}
+            aria-pressed={theme === "dark"}
+            title={theme === "dark" ? "Use light mode" : "Use dark mode"}
+          >
+            <ThemeIcon size={18} />
+            <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
+          </button>
+          <button className="ghost-button" type="button" onClick={signOut} disabled={signOutBusy} title="Sign out">
+            {signOutBusy ? <Loader2 className="spin" size={18} /> : <LogOut size={18} />}
+            <span>{signOutBusy ? "Signing out" : "Sign out"}</span>
+          </button>
+        </div>
       </aside>
 
       <main className="main-panel">
@@ -2479,6 +2521,22 @@ function PathDiff({ value, compareTo }: { value: string; compareTo: string }) {
       )}
     </span>
   );
+}
+
+function initialTheme(): AppTheme {
+  let stored: string | null = null;
+
+  try {
+    stored = window.localStorage.getItem(themeStorageKey);
+  } catch {
+    stored = null;
+  }
+
+  if (stored === "light" || stored === "dark") {
+    return stored;
+  }
+
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 function ActionProgress({ label }: { label: string }) {
