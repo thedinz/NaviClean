@@ -59,6 +59,7 @@ const scanStatus: ScanStatus = {
 };
 let autoScanTimer: NodeJS.Timeout | null = null;
 let cachedOrganizeEvaluation: OrganizeEvaluation | null = null;
+let pendingOrganizeEvaluation: { key: string; promise: Promise<OrganizeEvaluation> } | null = null;
 
 app.use(express.json({ limit: "2mb" }));
 
@@ -766,10 +767,31 @@ async function getOrganizeEvaluation(catalog: CatalogSnapshot, settings: Plannin
 
 async function buildAndCacheOrganizeEvaluation(catalog: CatalogSnapshot, settings: PlanningSettings): Promise<OrganizeEvaluation> {
   const key = organizeEvaluationKey(catalog, settings);
-  const { tracks, plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
-  const evaluation = organizeEvaluationFromPlan(key, catalog, tracks, plan);
-  cachedOrganizeEvaluation = evaluation;
-  return evaluation;
+
+  if (cachedOrganizeEvaluation?.key === key) {
+    return cachedOrganizeEvaluation;
+  }
+
+  if (pendingOrganizeEvaluation?.key === key) {
+    return pendingOrganizeEvaluation.promise;
+  }
+
+  const promise = (async () => {
+    const { tracks, plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
+    const evaluation = organizeEvaluationFromPlan(key, catalog, tracks, plan);
+    cachedOrganizeEvaluation = evaluation;
+    return evaluation;
+  })();
+
+  pendingOrganizeEvaluation = { key, promise };
+
+  try {
+    return await promise;
+  } finally {
+    if (pendingOrganizeEvaluation?.promise === promise) {
+      pendingOrganizeEvaluation = null;
+    }
+  }
 }
 
 function organizeEvaluationFromPlan(

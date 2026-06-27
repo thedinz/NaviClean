@@ -245,7 +245,7 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
         {page === "duplicates" && (
           <DuplicatesPage stats={stats} onChanged={refreshStats} onOpenOrganize={() => setPage("organize")} />
         )}
-        {page === "organize" && <OrganizePage onChanged={refreshStats} />}
+        {page === "organize" && <OrganizePage stats={stats} onChanged={refreshStats} />}
         {page === "trash" && <TrashPage />}
         {page === "settings" && <SettingsPage onAuthChange={onAuthChange} />}
         <VersionFooter />
@@ -1311,7 +1311,7 @@ function TrashPage() {
   );
 }
 
-function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
+function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChanged: () => Promise<void> }) {
   const [plan, setPlan] = useState<OrganizePlan | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [applyErrors, setApplyErrors] = useState<string[]>([]);
@@ -1322,6 +1322,8 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
   const [trashBusyKey, setTrashBusyKey] = useState<string | null>(null);
   const [selectedTrashCandidates, setSelectedTrashCandidates] = useState<Record<string, string>>({});
   const previewRequestId = useRef(0);
+  const workflow = stats?.workflow;
+  const workflowSummary = workflowBlockerSummary(workflow);
   const organizeItems = plan?.items || [];
   const filterCounts = useMemo(() => countOrganizePreviewFilters(organizeItems), [organizeItems]);
   const filteredItems = useMemo(
@@ -1455,8 +1457,17 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
               <span>{plan.summary.missing} missing</span>
               <span>{selectedTrashSelections.length} selected</span>
             </>
+          ) : workflow?.stage === "organize" ? (
+            <>
+              <span>{workflow.pendingMoves} {pluralize("move", workflow.pendingMoves)}</span>
+              <span>{workflow.organizationConflicts} {pluralize("conflict", workflow.organizationConflicts)}</span>
+              <span>{workflow.missingFiles} missing</span>
+              <span>Preview needed</span>
+            </>
+          ) : workflow?.duplicateScanReady ? (
+            <span>Organization clear</span>
           ) : (
-            <span>{previewBusy ? "Previewing" : "Preview not loaded"}</span>
+            <span>{previewBusy ? "Previewing" : "Preview needed"}</span>
           )}
         </div>
         <div className="button-row">
@@ -1505,8 +1516,8 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
       {!previewBusy && !plan && (
         <EmptyState
           icon={notice ? CircleAlert : FolderInput}
-          title={notice ? "Preview failed" : "Run organization preview"}
-          description={notice || "Preview checks the library for moves, conflicts, and missing files before duplicate cleanup."}
+          title={notice ? "Preview failed" : organizePreviewEmptyTitle(workflow)}
+          description={notice || organizePreviewEmptyDescription(workflow, workflowSummary)}
         />
       )}
       {plan && (
@@ -2482,6 +2493,42 @@ function ActionProgress({ label }: { label: string }) {
       </div>
     </div>
   );
+}
+
+function organizePreviewEmptyTitle(workflow?: LibraryStats["workflow"]) {
+  if (!workflow) {
+    return "Run organization preview";
+  }
+
+  if (workflow.stage === "organize") {
+    return "Preview needed to review organization";
+  }
+
+  if (workflow.duplicateScanReady) {
+    return "Organization clear";
+  }
+
+  return workflow.scanned ? "Scan status changed" : "Scan library first";
+}
+
+function organizePreviewEmptyDescription(workflow?: LibraryStats["workflow"], blockerSummary = "") {
+  if (!workflow) {
+    return "Preview checks the library for moves, conflicts, and missing files before duplicate cleanup.";
+  }
+
+  if (workflow.stage === "organize") {
+    return blockerSummary
+      ? `NaviClean found ${blockerSummary}. Generate the preview to review and apply the organization plan.`
+      : "Generate the preview to review the current organization plan.";
+  }
+
+  if (workflow.duplicateScanReady) {
+    return "There are no pending moves, conflicts, or missing files. You can check duplicate cleanup.";
+  }
+
+  return workflow.scanned
+    ? "Refresh after the current scan settles, then generate an organization preview."
+    : "Scan the library before generating an organization preview.";
 }
 
 function duplicateGateNoticeTitle(workflow?: LibraryStats["workflow"]) {
