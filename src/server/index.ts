@@ -443,14 +443,17 @@ app.delete("/api/recycle-bin/items", asyncHandler(async (req, res) => {
 app.post("/api/organize/preview", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const evaluation = await buildAndCacheOrganizeEvaluation(catalog, settings);
+  const quick = _req.query.quick === "1" || (_req.body as { quick?: boolean } | undefined)?.quick === true;
+  const evaluation = quick
+    ? await getOrganizeEvaluation(catalog, settings)
+    : await buildAndCacheOrganizeEvaluation(catalog, settings);
   res.json(evaluation.plan);
 }));
 
 app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const planned = await buildAndCacheOrganizeEvaluation(catalog, settings);
+  const planned = await getOrganizeEvaluation(catalog, settings);
   const plan = planned.plan;
   const result = await applyOrganizePlan(plan);
   let tracks = planned.tracks;
@@ -474,7 +477,7 @@ app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
     latestCatalog = await saveCatalog(tracks);
   }
 
-  const refreshed = await buildAndCacheOrganizeEvaluation({ ...latestCatalog, tracks }, settings);
+  const refreshed = await getOrganizeEvaluation({ ...latestCatalog, tracks }, settings);
   res.json({ ...result, plan: refreshed.plan });
 }));
 
@@ -489,10 +492,10 @@ app.post("/api/organize/trash", asyncHandler(async (req, res) => {
 
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const planned = await buildAndCacheOrganizeEvaluation(catalog, settings);
+  const planned = await getOrganizeEvaluation(catalog, settings);
   const result = await trashOrganizeCandidate(settings, planned.tracks, itemId, candidateId);
   const savedCatalog = await saveCatalog(result.tracks);
-  const refreshed = await buildAndCacheOrganizeEvaluation(savedCatalog, settings);
+  const refreshed = await getOrganizeEvaluation(savedCatalog, settings);
 
   res.json({
     trashed: result.trashed,
@@ -521,10 +524,10 @@ app.post("/api/organize/trash/bulk", asyncHandler(async (req, res) => {
 
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const planned = await buildAndCacheOrganizeEvaluation(catalog, settings);
+  const planned = await getOrganizeEvaluation(catalog, settings);
   const result = await trashOrganizeCandidates(settings, planned.tracks, selections);
   const savedCatalog = await saveCatalog(result.tracks);
-  const refreshed = await buildAndCacheOrganizeEvaluation(savedCatalog, settings);
+  const refreshed = await getOrganizeEvaluation(savedCatalog, settings);
 
   res.json({
     trashed: result.trashed,
@@ -762,7 +765,9 @@ async function getOrganizeEvaluation(catalog: CatalogSnapshot, settings: Plannin
   }
 
   const plan = await buildOrganizePlan(catalog.tracks, settings);
-  return organizeEvaluationFromPlan(key, catalog, catalog.tracks, plan);
+  const evaluation = organizeEvaluationFromPlan(key, catalog, catalog.tracks, plan);
+  cachedOrganizeEvaluation = evaluation;
+  return evaluation;
 }
 
 async function buildAndCacheOrganizeEvaluation(catalog: CatalogSnapshot, settings: PlanningSettings): Promise<OrganizeEvaluation> {
