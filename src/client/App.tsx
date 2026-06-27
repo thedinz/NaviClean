@@ -1394,7 +1394,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
     setSelectedTrashCandidates((current) => pruneSelectedTrashCandidates(nextPlan.items, current));
   };
 
-  const load = async ({ clearNotice = true }: { clearNotice?: boolean } = {}) => {
+  const load = async ({ clearNotice = true, quick = false }: { clearNotice?: boolean; quick?: boolean } = {}) => {
     const requestId = previewRequestId.current + 1;
     previewRequestId.current = requestId;
     setPreviewBusy(true);
@@ -1404,7 +1404,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
     }
 
     try {
-      const nextPlan = await api<OrganizePlan>("/organize/preview", { method: "POST" });
+      const nextPlan = await api<OrganizePlan>(quick ? "/organize/preview?quick=1" : "/organize/preview", { method: "POST" });
       if (requestId === previewRequestId.current) {
         showPlan(nextPlan);
         await onChanged();
@@ -1421,7 +1421,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
   };
 
   useEffect(() => {
-    void load();
+    void load({ quick: true });
   }, []);
 
   const apply = async () => {
