@@ -857,6 +857,7 @@ function DuplicatesPage({
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [resolveErrors, setResolveErrors] = useState<string[]>([]);
+  const [workflowRefreshing, setWorkflowRefreshing] = useState(true);
   const selectedRemoveIds = useMemo(
     () => Object.entries(selectedTrashIds).filter(([, selected]) => selected).map(([id]) => id),
     [selectedTrashIds]
@@ -878,7 +879,19 @@ function DuplicatesPage({
   };
 
   useEffect(() => {
-    onChanged().catch((caught) => setNotice((caught as Error).message));
+    let mounted = true;
+    setWorkflowRefreshing(true);
+    onChanged()
+      .catch((caught) => setNotice((caught as Error).message))
+      .finally(() => {
+        if (mounted) {
+          setWorkflowRefreshing(false);
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -959,6 +972,19 @@ function DuplicatesPage({
       return next;
     });
   };
+
+  if (!workflow?.duplicateScanReady && workflowRefreshing) {
+    return (
+      <section className="stack">
+        <ActionProgress label="Checking organization status" />
+        <EmptyState
+          icon={RefreshCw}
+          title="Checking duplicate readiness"
+          description="NaviClean is refreshing the organization preview before deciding whether duplicate cleanup is available."
+        />
+      </section>
+    );
+  }
 
   if (!workflow?.duplicateScanReady) {
     return (
@@ -1420,12 +1446,18 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
       </div>
       <div className="toolbar">
         <div className="summary-chips">
-          <span>{plan?.summary.ready || 0} ready</span>
-          <span>{plan?.summary.same || 0} organized</span>
-          <span>{plan?.summary.duplicateTargets || 0} duplicates</span>
-          <span>{plan?.summary.conflicts || 0} conflicts</span>
-          <span>{plan?.summary.missing || 0} missing</span>
-          <span>{selectedTrashSelections.length} selected</span>
+          {plan ? (
+            <>
+              <span>{plan.summary.ready} ready</span>
+              <span>{plan.summary.same} organized</span>
+              <span>{plan.summary.duplicateTargets} duplicates</span>
+              <span>{plan.summary.conflicts} conflicts</span>
+              <span>{plan.summary.missing} missing</span>
+              <span>{selectedTrashSelections.length} selected</span>
+            </>
+          ) : (
+            <span>{previewBusy ? "Previewing" : "Preview not loaded"}</span>
+          )}
         </div>
         <div className="button-row">
           <button className="secondary-button" type="button" onClick={() => load()} disabled={previewBusy || applyBusy || Boolean(trashBusyKey)}>

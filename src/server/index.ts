@@ -753,8 +753,7 @@ async function buildWorkflowState(
   settings: Awaited<ReturnType<typeof loadSettings>>
 ): Promise<WorkflowState> {
   const { plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings, {
-    includeSummaryWarning: false,
-    lookupMissing: false
+    includeSummaryWarning: false
   });
   return workflowStateFromPlan(catalog.updatedAt, catalog.tracks.length, plan);
 }
