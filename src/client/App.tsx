@@ -1504,9 +1504,9 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
       )}
       {!previewBusy && !plan && (
         <EmptyState
-          icon={FolderInput}
-          title="Run organization preview"
-          description="Preview checks the library for moves, conflicts, and missing files before duplicate cleanup."
+          icon={notice ? CircleAlert : FolderInput}
+          title={notice ? "Preview failed" : "Run organization preview"}
+          description={notice || "Preview checks the library for moves, conflicts, and missing files before duplicate cleanup."}
         />
       )}
       {plan && (
