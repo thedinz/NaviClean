@@ -1,7 +1,7 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OrganizePlan, OrganizeTrashSelection, ScanStatus, SettingsUpdate, WorkflowState } from "../shared/types.js";
+import type { OrganizePlan, OrganizeTrashSelection, ScanStatus, SettingsUpdate, TrackFile, WorkflowState } from "../shared/types.js";
 import { clearSessionCookie, getAuthInfo, login, logout, requireAuth, setSessionCookie } from "./auth.js";
 import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
 import { buildDuplicateGroups, resolveDuplicates, resolveSelectedDuplicates } from "./duplicates.js";
@@ -40,6 +40,15 @@ const defaultLibraryArtistPageSize = 25;
 const maxLibraryArtistPageSize = 100;
 app.set("trust proxy", trustProxySetting());
 
+type CatalogSnapshot = Awaited<ReturnType<typeof loadCatalog>>;
+type PlanningSettings = Awaited<ReturnType<typeof loadSettings>>;
+type OrganizeEvaluation = {
+  key: string;
+  plan: OrganizePlan;
+  tracks: TrackFile[];
+  workflow: WorkflowState;
+};
+
 const scanStatus: ScanStatus = {
   running: false,
   startedAt: null,
@@ -49,6 +58,7 @@ const scanStatus: ScanStatus = {
   errors: []
 };
 let autoScanTimer: NodeJS.Timeout | null = null;
+let cachedOrganizeEvaluation: OrganizeEvaluation | null = null;
 
 app.use(express.json({ limit: "2mb" }));
 
@@ -382,14 +392,15 @@ app.delete("/api/library/tracks/:trackId", asyncHandler(async (req, res) => {
 app.get("/api/duplicates", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const workflow = await buildWorkflowState(catalog, settings);
+  const evaluation = await getOrganizeEvaluation(catalog, settings);
+  const workflow = evaluation.workflow;
 
   if (!workflow.duplicateScanReady) {
     res.status(409).json({ error: workflow.message, workflow });
     return;
   }
 
-  res.json({ groups: buildDuplicateGroups(catalog.tracks) });
+  res.json({ groups: buildDuplicateGroups(evaluation.tracks) });
 }));
 
 app.get("/api/stats", asyncHandler(async (_req, res) => {
@@ -402,8 +413,9 @@ app.get("/api/stats", asyncHandler(async (_req, res) => {
   }
 
   const settings = await loadSettingsForPlanning();
-  const workflow = await buildWorkflowState(catalog, settings);
-  const groups = workflow.duplicateScanReady ? buildDuplicateGroups(catalog.tracks) : [];
+  const evaluation = await getOrganizeEvaluation(catalog, settings);
+  const workflow = evaluation.workflow;
+  const groups = workflow.duplicateScanReady ? buildDuplicateGroups(evaluation.tracks) : [];
   const duplicateTracks = groups.reduce((total, group) => total + group.tracks.length, 0);
   res.json(createStats(catalog.tracks, groups.length, duplicateTracks, catalog.updatedAt, workflow));
 }));
@@ -430,17 +442,18 @@ app.delete("/api/recycle-bin/items", asyncHandler(async (req, res) => {
 app.post("/api/organize/preview", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const { plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
-  res.json(plan);
+  const evaluation = await buildAndCacheOrganizeEvaluation(catalog, settings);
+  res.json(evaluation.plan);
 }));
 
 app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const planned = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
+  const planned = await buildAndCacheOrganizeEvaluation(catalog, settings);
   const plan = planned.plan;
   const result = await applyOrganizePlan(plan);
   let tracks = planned.tracks;
+  let latestCatalog = catalog;
 
   if (result.moved > 0) {
     const movedById = new Map(result.items.filter((item) => item.applied).map((item) => [item.id, item]));
@@ -457,10 +470,10 @@ app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
         targetRelativePath: moved.targetRelativePath
       };
     });
-    await saveCatalog(tracks);
+    latestCatalog = await saveCatalog(tracks);
   }
 
-  const refreshed = await buildSpotifyAwareOrganizePlan(tracks, settings);
+  const refreshed = await buildAndCacheOrganizeEvaluation({ ...latestCatalog, tracks }, settings);
   res.json({ ...result, plan: refreshed.plan });
 }));
 
@@ -475,10 +488,10 @@ app.post("/api/organize/trash", asyncHandler(async (req, res) => {
 
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const planned = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
+  const planned = await buildAndCacheOrganizeEvaluation(catalog, settings);
   const result = await trashOrganizeCandidate(settings, planned.tracks, itemId, candidateId);
   const savedCatalog = await saveCatalog(result.tracks);
-  const refreshed = await buildSpotifyAwareOrganizePlan(savedCatalog.tracks, settings);
+  const refreshed = await buildAndCacheOrganizeEvaluation(savedCatalog, settings);
 
   res.json({
     trashed: result.trashed,
@@ -507,10 +520,10 @@ app.post("/api/organize/trash/bulk", asyncHandler(async (req, res) => {
 
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const planned = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
+  const planned = await buildAndCacheOrganizeEvaluation(catalog, settings);
   const result = await trashOrganizeCandidates(settings, planned.tracks, selections);
   const savedCatalog = await saveCatalog(result.tracks);
-  const refreshed = await buildSpotifyAwareOrganizePlan(savedCatalog.tracks, settings);
+  const refreshed = await buildAndCacheOrganizeEvaluation(savedCatalog, settings);
 
   res.json({
     trashed: result.trashed,
@@ -740,6 +753,48 @@ async function buildSpotifyAwareOrganizePlan(
   };
 }
 
+async function getOrganizeEvaluation(catalog: CatalogSnapshot, settings: PlanningSettings): Promise<OrganizeEvaluation> {
+  const key = organizeEvaluationKey(catalog, settings);
+
+  if (cachedOrganizeEvaluation?.key === key) {
+    return cachedOrganizeEvaluation;
+  }
+
+  const plan = await buildOrganizePlan(catalog.tracks, settings);
+  return organizeEvaluationFromPlan(key, catalog, catalog.tracks, plan);
+}
+
+async function buildAndCacheOrganizeEvaluation(catalog: CatalogSnapshot, settings: PlanningSettings): Promise<OrganizeEvaluation> {
+  const key = organizeEvaluationKey(catalog, settings);
+  const { tracks, plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
+  const evaluation = organizeEvaluationFromPlan(key, catalog, tracks, plan);
+  cachedOrganizeEvaluation = evaluation;
+  return evaluation;
+}
+
+function organizeEvaluationFromPlan(
+  key: string,
+  catalog: CatalogSnapshot,
+  tracks: TrackFile[],
+  plan: OrganizePlan
+): OrganizeEvaluation {
+  return {
+    key,
+    plan,
+    tracks,
+    workflow: workflowStateFromPlan(catalog.updatedAt, catalog.tracks.length, plan)
+  };
+}
+
+function organizeEvaluationKey(catalog: CatalogSnapshot, settings: PlanningSettings) {
+  return JSON.stringify({
+    catalogUpdatedAt: catalog.updatedAt,
+    trackCount: catalog.tracks.length,
+    naming: settings.naming,
+    spotify: settings.catalog.spotify
+  });
+}
+
 function asyncHandler(
   handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<void>
 ) {
@@ -752,10 +807,7 @@ async function buildWorkflowState(
   catalog: Awaited<ReturnType<typeof loadCatalog>>,
   settings: Awaited<ReturnType<typeof loadSettings>>
 ): Promise<WorkflowState> {
-  const { plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings, {
-    includeSummaryWarning: false
-  });
-  return workflowStateFromPlan(catalog.updatedAt, catalog.tracks.length, plan);
+  return (await getOrganizeEvaluation(catalog, settings)).workflow;
 }
 
 function workflowStateFromPlan(
