@@ -12,6 +12,7 @@ import type {
   TrackFile
 } from "../shared/types.js";
 import { duplicateKeyForTrack } from "./matching.js";
+import { standardNamingFormatDefaults } from "./settings.js";
 import type { PrivateSettings } from "./settings.js";
 import { isInsidePath, toPosixRelative } from "./utils.js";
 
@@ -28,6 +29,7 @@ type PlannedOrganizeItem = {
   targetKey: string;
   track: TrackFile;
 };
+type OrganizeMoveResult = Omit<OrganizeApplyResult, "plan">;
 
 export function targetForTrack(track: TrackFile, settings: PrivateSettings) {
   return targetForRelativePath(track, settings, templateRelativePath(track, settings, track.extension.startsWith(".") ? track.extension : `.${track.extension}`));
@@ -258,8 +260,8 @@ function compareCollisionCandidates(left: OrganizeCollisionCandidate, right: Org
   return (right.size ?? 0) - (left.size ?? 0);
 }
 
-export async function applyOrganizePlan(plan: OrganizePlan): Promise<OrganizeApplyResult> {
-  const result: OrganizeApplyResult = {
+export async function applyOrganizePlan(plan: OrganizePlan): Promise<OrganizeMoveResult> {
+  const result: OrganizeMoveResult = {
     moved: 0,
     skipped: 0,
     errors: [],
@@ -385,28 +387,25 @@ export function trackNeedsMove(track: TrackFile) {
 
 function templateRelativePath(track: TrackFile, settings: PrivateSettings, extension: string) {
   const tokens = toTemplateTokens(track);
-  const artistFormat = settings.naming.artistFolderFormat || "{Artist Name}";
-  const trackFormat = selectTrackFormat(track, settings);
-  const renderedArtist = renderTemplate(artistFormat, tokens);
-  const renderedTrack = renderTemplate(trackFormat, tokens);
+  const naming = { ...settings.naming, ...standardNamingFormatDefaults };
+  const renderedArtist = renderTemplate(standardNamingFormatDefaults.artistFolderFormat, tokens);
+  const renderedTrack = renderTemplate(selectTrackFormat(track), tokens);
   const segments = [
-    ...pathSegmentsFromTemplate(renderedArtist, settings.naming),
-    ...pathSegmentsFromTemplate(renderedTrack, settings.naming)
+    ...pathSegmentsFromTemplate(renderedArtist, naming),
+    ...pathSegmentsFromTemplate(renderedTrack, naming)
   ];
   const filename = segments.pop() || "Unknown Track";
   return path.posix.join(...segments, `${filename}${extension}`);
 }
 
-function selectTrackFormat(track: TrackFile, settings: PrivateSettings) {
-  const isMultiDisc =
-    (typeof track.discTotal === "number" && track.discTotal > 1) ||
-    (typeof track.discNumber === "number" && track.discNumber > 1);
+function selectTrackFormat(track: TrackFile) {
+  const isMultiDisc = typeof track.discNumber === "number" && track.discNumber > 1;
 
-  if (isMultiDisc && settings.naming.multiDiscTrackFormat) {
-    return settings.naming.multiDiscTrackFormat;
+  if (isMultiDisc) {
+    return standardNamingFormatDefaults.multiDiscTrackFormat;
   }
 
-  return settings.naming.standardTrackFormat || "{track:00} - {Track Title}";
+  return standardNamingFormatDefaults.standardTrackFormat;
 }
 
 function toTemplateTokens(track: TrackFile) {
@@ -554,6 +553,7 @@ function sanitizeTemplateSegment(value: string, naming: PrivateSettings["naming"
   }
 
   segment = segment.replace(controlCharacters, "").replace(/\s+/g, " ").replace(/\.+$/g, "").trim();
+  segment = cleanupRenderedTemplateSegment(segment);
 
   if (!segment || segment === "." || segment === "..") {
     return "";

@@ -39,6 +39,8 @@ export type PrivateSettings = {
   };
   scan: {
     extensions: string[];
+    autoScanEnabled: boolean;
+    autoScanTime: string;
   };
 };
 
@@ -55,15 +57,23 @@ const defaultExtensions = [
   ".alac",
   ".wma"
 ];
-const defaultNaming = {
-  mode: "standard" as const,
-  libraryPath: process.env.NAVICLEAN_MUSIC_DIR || "/music",
-  recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash"),
+const defaultScan = {
+  extensions: defaultExtensions,
+  autoScanEnabled: true,
+  autoScanTime: "02:00"
+};
+export const standardNamingFormatDefaults = {
   artistFolderFormat: "{Album Artist Name}",
   standardTrackFormat: "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}",
   multiDiscTrackFormat: "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}",
   replaceIllegalCharacters: true,
   colonReplacementFormat: 4
+} as const;
+const defaultNaming = {
+  mode: "standard" as const,
+  libraryPath: process.env.NAVICLEAN_MUSIC_DIR || "/music",
+  recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash"),
+  ...standardNamingFormatDefaults
 };
 const defaultCatalog = {
   spotify: {
@@ -156,7 +166,7 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
       discovery: { ...current.catalog.discovery }
     },
     naming: { ...current.naming },
-    scan: { extensions: [...current.scan.extensions] }
+    scan: { ...current.scan, extensions: [...current.scan.extensions] }
   };
 
   if (update.auth) {
@@ -211,8 +221,8 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
     next.naming = normalizeNamingSettings(next.naming, update.naming);
   }
 
-  if (update.scan?.extensions) {
-    next.scan.extensions = normalizeExtensions(update.scan.extensions);
+  if (update.scan) {
+    next.scan = normalizeScanSettings(next.scan, update.scan);
   }
 
   await saveSettings(next);
@@ -233,9 +243,7 @@ async function createDefaultSettings(): Promise<PrivateSettings> {
     },
     catalog: defaultCatalog,
     naming: defaultNaming,
-    scan: {
-      extensions: defaultExtensions
-    }
+    scan: defaultScan
   };
 }
 
@@ -252,9 +260,7 @@ function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
     },
     catalog: defaultCatalog,
     naming: defaultNaming,
-    scan: {
-      extensions: defaultExtensions
-    }
+    scan: defaultScan
   };
 
   return {
@@ -270,54 +276,21 @@ function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
     },
     catalog: normalizeCatalogSettings(partial.catalog),
     naming: normalizeNamingSettings(fallback.naming, partial.naming),
-    scan: {
-      extensions: normalizeExtensions(partial.scan?.extensions || fallback.scan.extensions)
-    }
+    scan: normalizeScanSettings(fallback.scan, partial.scan)
   };
 }
 
 function normalizeNamingSettings(
   fallback: PrivateSettings["naming"],
   partial: Partial<PrivateSettings["naming"]> | undefined
-) {
+): PrivateSettings["naming"] {
   const compacted = compactStringValues(partial ?? {});
-  const mode = normalizeNamingMode(compacted.mode, fallback.mode);
-  const colonReplacementFormat = normalizeColonReplacementFormat(
-    compacted.colonReplacementFormat,
-    fallback.colonReplacementFormat
-  );
-  const merged: PrivateSettings["naming"] = {
+  return {
     ...fallback,
     ...compacted,
-    mode,
-    colonReplacementFormat
+    mode: "standard" as const,
+    ...standardNamingFormatDefaults
   };
-
-  if (mode === "standard") {
-    return {
-      ...merged,
-      mode,
-      artistFolderFormat: defaultNaming.artistFolderFormat,
-      standardTrackFormat: defaultNaming.standardTrackFormat,
-      multiDiscTrackFormat: defaultNaming.multiDiscTrackFormat,
-      replaceIllegalCharacters: defaultNaming.replaceIllegalCharacters,
-      colonReplacementFormat: defaultNaming.colonReplacementFormat
-    };
-  }
-
-  return merged;
-}
-
-function normalizeNamingMode(value: unknown, fallback: NamingMode): NamingMode {
-  if (value === "standard" || value === "manual") {
-    return value;
-  }
-
-  if (value === "lidarr") {
-    return "manual";
-  }
-
-  return fallback;
 }
 
 function normalizeCatalogSettings(
@@ -358,19 +331,31 @@ function normalizeCatalogSettings(
   };
 }
 
+function normalizeScanSettings(
+  fallback: PrivateSettings["scan"],
+  partial: Partial<PrivateSettings["scan"]> | undefined
+): PrivateSettings["scan"] {
+  return {
+    extensions: normalizeExtensions(partial?.extensions || fallback.extensions),
+    autoScanEnabled:
+      typeof partial?.autoScanEnabled === "boolean" ? partial.autoScanEnabled : fallback.autoScanEnabled,
+    autoScanTime: normalizeAutoScanTime(partial?.autoScanTime, fallback.autoScanTime)
+  };
+}
+
 function normalizeSpotifyMarket(value: unknown, fallback: string) {
   const market = typeof value === "string" ? value.trim().toUpperCase() : "";
   return /^[A-Z]{2}$/.test(market) ? market : fallback;
 }
 
+function normalizeAutoScanTime(value: unknown, fallback: string) {
+  const time = typeof value === "string" ? value.trim() : "";
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(time) ? time : fallback;
+}
+
 function clampInteger(value: unknown, min: number, max: number, fallback: number) {
   const parsed = Number(value);
   return Number.isInteger(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
-}
-
-function normalizeColonReplacementFormat(value: unknown, fallback: number) {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 4 ? parsed : fallback;
 }
 
 function normalizeExtensions(extensions: string[]) {

@@ -136,7 +136,9 @@ function settings(libraryPath: string): PrivateSettings {
       colonReplacementFormat: 4
     },
     scan: {
-      extensions: [".mp3", ".flac"]
+      extensions: [".mp3", ".flac"],
+      autoScanEnabled: true,
+      autoScanTime: "02:00"
     }
   };
 }

@@ -1,7 +1,7 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OrganizePlan, OrganizeTrashSelection, ScanStatus, SettingsUpdate, WorkflowState } from "../shared/types.js";
+import type { OrganizePlan, OrganizeTrashSelection, ScanStatus, SettingsUpdate, TrackFile, WorkflowState } from "../shared/types.js";
 import { clearSessionCookie, getAuthInfo, login, logout, requireAuth, setSessionCookie } from "./auth.js";
 import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
 import { buildDuplicateGroups, resolveDuplicates, resolveSelectedDuplicates } from "./duplicates.js";
@@ -31,6 +31,7 @@ import {
   searchSpotifyArtists,
   testSpotifyConnection
 } from "./spotify.js";
+import type { SpotifyOrganizeEnrichmentOptions } from "./spotify.js";
 
 const app = express();
 const port = Number(process.env.PORT || 8080);
@@ -39,14 +40,27 @@ const defaultLibraryArtistPageSize = 25;
 const maxLibraryArtistPageSize = 100;
 app.set("trust proxy", trustProxySetting());
 
+type CatalogSnapshot = Awaited<ReturnType<typeof loadCatalog>>;
+type PlanningSettings = Awaited<ReturnType<typeof loadSettings>>;
+type OrganizeEvaluation = {
+  key: string;
+  plan: OrganizePlan;
+  tracks: TrackFile[];
+  workflow: WorkflowState;
+};
+
 const scanStatus: ScanStatus = {
   running: false,
   startedAt: null,
   finishedAt: null,
   scannedFiles: 0,
   audioFiles: 0,
-  errors: []
+  errors: [],
+  warnings: []
 };
+let autoScanTimer: NodeJS.Timeout | null = null;
+let cachedOrganizeEvaluation: OrganizeEvaluation | null = null;
+let organizeEvaluationCacheToken = 0;
 
 app.use(express.json({ limit: "2mb" }));
 
@@ -88,6 +102,7 @@ app.get("/api/settings", asyncHandler(async (_req, res) => {
 
 app.put("/api/settings", asyncHandler(async (req, res) => {
   const next = await updateSettings(req.body as SettingsUpdate);
+  scheduleAutoScan(next);
   res.json(toSettingsView(next));
 }));
 
@@ -217,21 +232,11 @@ app.get("/api/scan/status", (_req, res) => {
 });
 
 app.post("/api/scan/start", asyncHandler(async (_req, res) => {
-  if (scanStatus.running) {
+  if (!startBackgroundScan()) {
     res.status(202).json(scanStatus);
     return;
   }
 
-  Object.assign(scanStatus, {
-    running: true,
-    startedAt: new Date().toISOString(),
-    finishedAt: null,
-    scannedFiles: 0,
-    audioFiles: 0,
-    errors: []
-  });
-
-  void runScan();
   res.status(202).json(scanStatus);
 }));
 
@@ -350,6 +355,7 @@ app.delete("/api/library/artists/:artistId", asyncHandler(async (req, res) => {
   const result = await trashLibraryTracks(await loadSettingsForPlanning(), catalog.tracks, tracks.map((track) => track.id));
 
   await saveCatalog(result.tracks);
+  invalidateOrganizeEvaluationCache();
   res.json(libraryTrashResponse(result));
 }));
 
@@ -367,6 +373,7 @@ app.delete("/api/library/artists/:artistId/albums/:albumId", asyncHandler(async 
   const result = await trashLibraryTracks(await loadSettingsForPlanning(), catalog.tracks, tracks.map((track) => track.id));
 
   await saveCatalog(result.tracks);
+  invalidateOrganizeEvaluationCache();
   res.json(libraryTrashResponse(result));
 }));
 
@@ -383,20 +390,22 @@ app.delete("/api/library/tracks/:trackId", asyncHandler(async (req, res) => {
   const result = await trashLibraryTracks(await loadSettingsForPlanning(), catalog.tracks, [track.id]);
 
   await saveCatalog(result.tracks);
+  invalidateOrganizeEvaluationCache();
   res.json(libraryTrashResponse(result));
 }));
 
 app.get("/api/duplicates", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const workflow = await buildWorkflowState(catalog, settings);
+  const evaluation = await getOrganizeEvaluation(catalog, settings);
+  const workflow = evaluation.workflow;
 
   if (!workflow.duplicateScanReady) {
     res.status(409).json({ error: workflow.message, workflow });
     return;
   }
 
-  res.json({ groups: buildDuplicateGroups(catalog.tracks) });
+  res.json({ groups: buildDuplicateGroups(evaluation.tracks) });
 }));
 
 app.get("/api/stats", asyncHandler(async (_req, res) => {
@@ -409,8 +418,9 @@ app.get("/api/stats", asyncHandler(async (_req, res) => {
   }
 
   const settings = await loadSettingsForPlanning();
-  const workflow = await buildWorkflowState(catalog, settings);
-  const groups = workflow.duplicateScanReady ? buildDuplicateGroups(catalog.tracks) : [];
+  const evaluation = await getOrganizeEvaluation(catalog, settings);
+  const workflow = evaluation.workflow;
+  const groups = workflow.duplicateScanReady ? buildDuplicateGroups(evaluation.tracks) : [];
   const duplicateTracks = groups.reduce((total, group) => total + group.tracks.length, 0);
   res.json(createStats(catalog.tracks, groups.length, duplicateTracks, catalog.updatedAt, workflow));
 }));
@@ -437,17 +447,19 @@ app.delete("/api/recycle-bin/items", asyncHandler(async (req, res) => {
 app.post("/api/organize/preview", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const { plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
-  res.json(plan);
+  const quick = _req.query.quick === "1" || (_req.body as { quick?: boolean } | undefined)?.quick === true;
+  const evaluation = quick ? await getOrganizeEvaluation(catalog, settings) : await rebuildOrganizeEvaluation(catalog, settings);
+  res.json(evaluation.plan);
 }));
 
 app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const planned = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
+  const planned = await getOrganizeEvaluation(catalog, settings);
   const plan = planned.plan;
   const result = await applyOrganizePlan(plan);
   let tracks = planned.tracks;
+  let latestCatalog = catalog;
 
   if (result.moved > 0) {
     const movedById = new Map(result.items.filter((item) => item.applied).map((item) => [item.id, item]));
@@ -464,10 +476,14 @@ app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
         targetRelativePath: moved.targetRelativePath
       };
     });
-    await saveCatalog(tracks);
+    latestCatalog = await saveCatalog(tracks);
+    invalidateOrganizeEvaluationCache();
   }
 
-  const refreshed = await buildSpotifyAwareOrganizePlan(tracks, settings);
+  const refreshed = await rebuildOrganizeEvaluation({ ...latestCatalog, tracks }, settings, {
+    includeSummaryWarning: false,
+    lookupMissing: false
+  });
   res.json({ ...result, plan: refreshed.plan });
 }));
 
@@ -482,10 +498,14 @@ app.post("/api/organize/trash", asyncHandler(async (req, res) => {
 
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const planned = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
+  const planned = await getOrganizeEvaluation(catalog, settings);
   const result = await trashOrganizeCandidate(settings, planned.tracks, itemId, candidateId);
   const savedCatalog = await saveCatalog(result.tracks);
-  const refreshed = await buildSpotifyAwareOrganizePlan(savedCatalog.tracks, settings);
+  invalidateOrganizeEvaluationCache();
+  const refreshed = await rebuildOrganizeEvaluation(savedCatalog, settings, {
+    includeSummaryWarning: false,
+    lookupMissing: false
+  });
 
   res.json({
     trashed: result.trashed,
@@ -514,10 +534,14 @@ app.post("/api/organize/trash/bulk", asyncHandler(async (req, res) => {
 
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const planned = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
+  const planned = await getOrganizeEvaluation(catalog, settings);
   const result = await trashOrganizeCandidates(settings, planned.tracks, selections);
   const savedCatalog = await saveCatalog(result.tracks);
-  const refreshed = await buildSpotifyAwareOrganizePlan(savedCatalog.tracks, settings);
+  invalidateOrganizeEvaluationCache();
+  const refreshed = await rebuildOrganizeEvaluation(savedCatalog, settings, {
+    includeSummaryWarning: false,
+    lookupMissing: false
+  });
 
   res.json({
     trashed: result.trashed,
@@ -548,6 +572,7 @@ app.post("/api/duplicates/resolve", asyncHandler(async (req, res) => {
   const result = await resolveDuplicates(settings, catalog.tracks, keepId, removeIds);
 
   await saveCatalog(result.tracks);
+  invalidateOrganizeEvaluationCache();
   res.json({
     keptId: result.keptId,
     trashed: result.trashed,
@@ -575,6 +600,7 @@ app.post("/api/duplicates/resolve/bulk", asyncHandler(async (req, res) => {
   const result = await resolveSelectedDuplicates(settings, catalog.tracks, removeIds);
 
   await saveCatalog(result.tracks);
+  invalidateOrganizeEvaluationCache();
   res.json({
     trashed: result.trashed,
     removedTrackIds: result.removedTrackIds,
@@ -596,6 +622,9 @@ app.use((error: Error, _req: express.Request, res: express.Response, _next: expr
 
 app.listen(port, () => {
   console.log(`NaviClean listening on ${port}`);
+  void loadSettingsForPlanning()
+    .then(scheduleAutoScan)
+    .catch((error) => console.error("Failed to schedule daily scan:", error));
 });
 
 function trustProxySetting() {
@@ -643,13 +672,88 @@ async function runScan() {
     const result = await scanLibrary(settings, (update) => {
       Object.assign(scanStatus, update);
     });
+    invalidateOrganizeEvaluationCache();
     scanStatus.errors = result.errors;
+    scanStatus.warnings = result.warnings;
   } catch (error) {
     scanStatus.errors = [(error as Error).message];
+    scanStatus.warnings = [];
   } finally {
     scanStatus.running = false;
     scanStatus.finishedAt = new Date().toISOString();
   }
+}
+
+function startBackgroundScan() {
+  if (scanStatus.running) {
+    return false;
+  }
+
+  Object.assign(scanStatus, {
+    running: true,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    scannedFiles: 0,
+    audioFiles: 0,
+    errors: [],
+    warnings: []
+  });
+
+  void runScan();
+  return true;
+}
+
+function scheduleAutoScan(settings: Awaited<ReturnType<typeof loadSettings>>) {
+  clearAutoScanTimer();
+
+  if (!settings.scan.autoScanEnabled) {
+    return;
+  }
+
+  const nextScanAt = nextDailyScanDate(settings.scan.autoScanTime);
+  const delay = Math.max(0, nextScanAt.getTime() - Date.now());
+  autoScanTimer = setTimeout(() => {
+    void runScheduledScan();
+  }, delay);
+  console.log(`Daily scan scheduled for ${nextScanAt.toLocaleString()}`);
+}
+
+function clearAutoScanTimer() {
+  if (!autoScanTimer) {
+    return;
+  }
+
+  clearTimeout(autoScanTimer);
+  autoScanTimer = null;
+}
+
+async function runScheduledScan() {
+  autoScanTimer = null;
+
+  try {
+    const settings = await loadSettingsForPlanning();
+
+    if (settings.scan.autoScanEnabled) {
+      const started = startBackgroundScan();
+      console.log(started ? "Starting scheduled daily scan." : "Skipping scheduled daily scan because another scan is running.");
+    }
+
+    scheduleAutoScan(settings);
+  } catch (error) {
+    console.error("Failed to start scheduled daily scan:", error);
+  }
+}
+
+function nextDailyScanDate(time: string, from = new Date()) {
+  const [hour = "2", minute = "0"] = time.split(":");
+  const next = new Date(from);
+  next.setHours(Number(hour), Number(minute), 0, 0);
+
+  if (next.getTime() <= from.getTime()) {
+    next.setDate(next.getDate() + 1);
+  }
+
+  return next;
 }
 
 async function loadSettingsForPlanning() {
@@ -658,9 +762,10 @@ async function loadSettingsForPlanning() {
 
 async function buildSpotifyAwareOrganizePlan(
   tracks: Awaited<ReturnType<typeof loadCatalog>>["tracks"],
-  settings: Awaited<ReturnType<typeof loadSettings>>
+  settings: Awaited<ReturnType<typeof loadSettings>>,
+  options?: SpotifyOrganizeEnrichmentOptions
 ) {
-  const enriched = await enrichTracksWithSpotifyOrganizeMetadata(settings, tracks);
+  const enriched = await enrichTracksWithSpotifyOrganizeMetadata(settings, tracks, options);
   const plan = await buildOrganizePlan(enriched.tracks, settings);
 
   return {
@@ -670,6 +775,64 @@ async function buildSpotifyAwareOrganizePlan(
       warnings: [...enriched.warnings, ...plan.warnings]
     } satisfies OrganizePlan
   };
+}
+
+async function getOrganizeEvaluation(catalog: CatalogSnapshot, settings: PlanningSettings): Promise<OrganizeEvaluation> {
+  const key = organizeEvaluationKey(catalog, settings);
+
+  if (cachedOrganizeEvaluation?.key === key) {
+    return cachedOrganizeEvaluation;
+  }
+
+  return rebuildOrganizeEvaluation(catalog, settings, {
+    includeSummaryWarning: false,
+    lookupMissing: false
+  });
+}
+
+async function rebuildOrganizeEvaluation(
+  catalog: CatalogSnapshot,
+  settings: PlanningSettings,
+  options?: SpotifyOrganizeEnrichmentOptions,
+  cacheToken = organizeEvaluationCacheToken
+): Promise<OrganizeEvaluation> {
+  const key = organizeEvaluationKey(catalog, settings);
+  const { tracks, plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings, options);
+  const evaluation = organizeEvaluationFromPlan(key, catalog, tracks, plan);
+
+  if (cacheToken === organizeEvaluationCacheToken) {
+    cachedOrganizeEvaluation = evaluation;
+  }
+
+  return evaluation;
+}
+
+function invalidateOrganizeEvaluationCache() {
+  cachedOrganizeEvaluation = null;
+  organizeEvaluationCacheToken += 1;
+}
+
+function organizeEvaluationFromPlan(
+  key: string,
+  catalog: CatalogSnapshot,
+  tracks: TrackFile[],
+  plan: OrganizePlan
+): OrganizeEvaluation {
+  return {
+    key,
+    plan,
+    tracks,
+    workflow: workflowStateFromPlan(catalog.updatedAt, catalog.tracks.length, plan)
+  };
+}
+
+function organizeEvaluationKey(catalog: CatalogSnapshot, settings: PlanningSettings) {
+  return JSON.stringify({
+    catalogUpdatedAt: catalog.updatedAt,
+    trackCount: catalog.tracks.length,
+    naming: settings.naming,
+    spotify: settings.catalog.spotify
+  });
 }
 
 function asyncHandler(
@@ -684,8 +847,7 @@ async function buildWorkflowState(
   catalog: Awaited<ReturnType<typeof loadCatalog>>,
   settings: Awaited<ReturnType<typeof loadSettings>>
 ): Promise<WorkflowState> {
-  const plan = await buildOrganizePlan(catalog.tracks, settings);
-  return workflowStateFromPlan(catalog.updatedAt, catalog.tracks.length, plan);
+  return (await getOrganizeEvaluation(catalog, settings)).workflow;
 }
 
 function workflowStateFromPlan(
@@ -736,7 +898,7 @@ function workflowStateFromPlan(
       pendingMoves,
       organizationConflicts,
       missingFiles,
-      message: `Stage 2: finish organizing first (${pendingMoves} moves, ${organizationConflicts} conflicts, ${missingFiles} missing files).`,
+      message: `Stage 2: review organization (${workflowBlockerSummary(pendingMoves, organizationConflicts, missingFiles)}).`,
       warnings
     };
   }
@@ -748,9 +910,25 @@ function workflowStateFromPlan(
     pendingMoves,
     organizationConflicts,
     missingFiles,
-    message: "Stage 3: duplicate cleanup is available for same-release track matches only.",
+    message: "Stage 3: organization is complete. Duplicate cleanup will show same-release matches when any are found.",
     warnings
   };
+}
+
+function workflowBlockerSummary(pendingMoves: number, organizationConflicts: number, missingFiles: number) {
+  return [
+    countLabel(pendingMoves, "move"),
+    countLabel(organizationConflicts, "conflict"),
+    countLabel(missingFiles, "missing file")
+  ].filter(Boolean).join(", ");
+}
+
+function countLabel(count: number, noun: string) {
+  if (count <= 0) {
+    return "";
+  }
+
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function workflowStateDuringScan(lastScanFinishedAt: string | null): WorkflowState {

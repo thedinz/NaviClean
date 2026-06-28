@@ -13,6 +13,7 @@ import {
   Loader2,
   LockKeyhole,
   LogOut,
+  Moon,
   Music2,
   Play,
   RefreshCw,
@@ -21,6 +22,7 @@ import {
   Settings,
   Shield,
   SlidersHorizontal,
+  Sun,
   Trash2,
   UserRound
 } from "lucide-react";
@@ -33,7 +35,6 @@ import type {
   LibraryArtistSummary,
   LibraryStats,
   LibraryTrashResult,
-  NamingMode,
   OrganizeApplyResult,
   OrganizeCollisionCandidate,
   OrganizePlan,
@@ -55,11 +56,13 @@ import { api } from "./api";
 import { appVersion } from "./version";
 
 type Page = "dashboard" | "library" | "discover" | "duplicates" | "organize" | "trash" | "settings";
+type AppTheme = "light" | "dark";
 type OrganizePreviewFilter = "attention" | "ready" | "duplicate-target" | "conflict" | "missing" | "same" | "all";
 type OrganizePreviewItem = OrganizePlan["items"][number];
 
 const libraryArtistPageSize = 25;
 const organizePreviewPageSize = 150;
+const themeStorageKey = "naviclean-theme";
 
 const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
@@ -69,11 +72,6 @@ const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
   { id: "duplicates", label: "Duplicates", icon: CopyX },
   { id: "trash", label: "Trash", icon: Trash2 },
   { id: "settings", label: "Settings", icon: Settings }
-];
-
-const namingModes: Array<{ id: NamingMode; label: string }> = [
-  { id: "standard", label: "Standard" },
-  { id: "manual", label: "Manual" }
 ];
 
 const organizePreviewFilters: Array<{ id: OrganizePreviewFilter; label: string }> = [
@@ -86,19 +84,20 @@ const organizePreviewFilters: Array<{ id: OrganizePreviewFilter; label: string }
   { id: "all", label: "All" }
 ];
 
-const standardNamingDefaults = {
-  artistFolderFormat: "{Album Artist Name}",
-  standardTrackFormat:
-    "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}",
-  multiDiscTrackFormat:
-    "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}",
-  replaceIllegalCharacters: true,
-  colonReplacementFormat: 4
-};
-
 export default function App() {
   const [auth, setAuth] = useState<AuthInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [theme, setTheme] = useState<AppTheme>(() => initialTheme());
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    try {
+      window.localStorage.setItem(themeStorageKey, theme);
+    } catch {
+      // Theme still applies for the current session.
+    }
+  }, [theme]);
 
   useEffect(() => {
     api<AuthInfo>("/auth/me")
@@ -118,10 +117,20 @@ export default function App() {
     return <LoginScreen onLogin={setAuth} />;
   }
 
-  return <Shell auth={auth} onAuthChange={setAuth} />;
+  return <Shell auth={auth} onAuthChange={setAuth} theme={theme} onThemeChange={setTheme} />;
 }
 
-function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: AuthInfo) => void }) {
+function Shell({
+  auth,
+  onAuthChange,
+  theme,
+  onThemeChange
+}: {
+  auth: AuthInfo;
+  onAuthChange: (auth: AuthInfo) => void;
+  theme: AppTheme;
+  onThemeChange: (theme: AppTheme) => void;
+}) {
   const [page, setPage] = useState<Page>("dashboard");
   const [scan, setScan] = useState<ScanStatus | null>(null);
   const [stats, setStats] = useState<LibraryStats | null>(null);
@@ -203,7 +212,12 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
     }
   };
 
+  const toggleTheme = () => {
+    onThemeChange(theme === "dark" ? "light" : "dark");
+  };
+
   const active = navItems.find((item) => item.id === page) || navItems[0];
+  const ThemeIcon = theme === "dark" ? Sun : Moon;
 
   return (
     <div className="app-shell">
@@ -234,10 +248,22 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
           })}
         </nav>
 
-        <button className="ghost-button" type="button" onClick={signOut} disabled={signOutBusy} title="Sign out">
-          {signOutBusy ? <Loader2 className="spin" size={18} /> : <LogOut size={18} />}
-          <span>{signOutBusy ? "Signing out" : "Sign out"}</span>
-        </button>
+        <div className="sidebar-actions">
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={toggleTheme}
+            aria-pressed={theme === "dark"}
+            title={theme === "dark" ? "Use light mode" : "Use dark mode"}
+          >
+            <ThemeIcon size={18} />
+            <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
+          </button>
+          <button className="ghost-button" type="button" onClick={signOut} disabled={signOutBusy} title="Sign out">
+            {signOutBusy ? <Loader2 className="spin" size={18} /> : <LogOut size={18} />}
+            <span>{signOutBusy ? "Signing out" : "Sign out"}</span>
+          </button>
+        </div>
       </aside>
 
       <main className="main-panel">
@@ -261,7 +287,7 @@ function Shell({ auth, onAuthChange }: { auth: AuthInfo; onAuthChange: (auth: Au
         {page === "duplicates" && (
           <DuplicatesPage stats={stats} onChanged={refreshStats} onOpenOrganize={() => setPage("organize")} />
         )}
-        {page === "organize" && <OrganizePage onChanged={refreshStats} />}
+        {page === "organize" && <OrganizePage stats={stats} onChanged={refreshStats} />}
         {page === "trash" && <TrashPage />}
         {page === "settings" && <SettingsPage onAuthChange={onAuthChange} />}
         <VersionFooter />
@@ -357,6 +383,15 @@ function Dashboard({ stats, scan }: { stats: LibraryStats | null; scan: ScanStat
           <span>{stats?.lastScanFinishedAt ? formatDate(stats.lastScanFinishedAt) : "No completed scan"}</span>
         </div>
         {scan?.running && <ActionProgress label="Scanning library" />}
+        {scan?.warnings.length ? (
+          <div className="notice-bar safety">
+            <strong>Scan notes</strong>
+            {scan.warnings.slice(0, 5).map((item) => (
+              <span key={item}>{item}</span>
+            ))}
+            {scan.warnings.length > 5 && <span>{scan.warnings.length - 5} more notes</span>}
+          </div>
+        ) : null}
         {scan?.errors.length ? (
           <div className="error-list">
             {scan.errors.slice(0, 5).map((item) => (
@@ -873,10 +908,14 @@ function DuplicatesPage({
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [resolveErrors, setResolveErrors] = useState<string[]>([]);
+  const [workflowRefreshing, setWorkflowRefreshing] = useState(true);
   const selectedRemoveIds = useMemo(
     () => Object.entries(selectedTrashIds).filter(([, selected]) => selected).map(([id]) => id),
     [selectedTrashIds]
   );
+  const workflow = stats?.workflow;
+  const duplicateGateIcon = workflow?.stage === "scan" ? Database : LockKeyhole;
+  const blockerSummary = workflowBlockerSummary(workflow);
 
   const load = async () => {
     setLoading(true);
@@ -889,6 +928,22 @@ function DuplicatesPage({
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    let mounted = true;
+    setWorkflowRefreshing(true);
+    onChanged()
+      .catch((caught) => setNotice((caught as Error).message))
+      .finally(() => {
+        if (mounted) {
+          setWorkflowRefreshing(false);
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!stats?.workflow.duplicateScanReady) {
@@ -969,25 +1024,40 @@ function DuplicatesPage({
     });
   };
 
-  if (!stats?.workflow.duplicateScanReady) {
+  if (!workflow?.duplicateScanReady && workflowRefreshing) {
+    return (
+      <section className="stack">
+        <ActionProgress label="Checking organization status" />
+        <EmptyState
+          icon={RefreshCw}
+          title="Checking duplicate readiness"
+          description="NaviClean is refreshing the organization preview before deciding whether duplicate cleanup is available."
+        />
+      </section>
+    );
+  }
+
+  if (!workflow?.duplicateScanReady) {
     return (
       <section className="stack">
         <div className="notice-bar safety">
-          <strong>Duplicates locked</strong>
-          <span>{stats?.workflow.message || "Scan and organize the library before duplicate cleanup."}</span>
-          {stats?.workflow && (
-            <span>
-              {stats.workflow.pendingMoves} moves, {stats.workflow.organizationConflicts} conflicts, {stats.workflow.missingFiles} missing files
-            </span>
-          )}
+          <strong>{duplicateGateNoticeTitle(workflow)}</strong>
+          <span>{workflow?.message || "Scan and review organization before duplicate cleanup."}</span>
+          {blockerSummary && <span>{blockerSummary}</span>}
         </div>
-        <div className="button-row">
-          <button className="secondary-button" type="button" onClick={onOpenOrganize}>
-            <FolderInput size={18} />
-            <span>Review blockers</span>
-          </button>
-        </div>
-        <EmptyState icon={LockKeyhole} title="Finish organization first" />
+        {workflow?.stage === "organize" && (
+          <div className="button-row">
+            <button className="secondary-button" type="button" onClick={onOpenOrganize}>
+              <FolderInput size={18} />
+              <span>Review organization</span>
+            </button>
+          </div>
+        )}
+        <EmptyState
+          icon={duplicateGateIcon}
+          title={duplicateGateEmptyTitle(workflow)}
+          description={duplicateGateEmptyDescription(workflow)}
+        />
       </section>
     );
   }
@@ -1030,7 +1100,13 @@ function DuplicatesPage({
           {resolveErrors.length > 8 && <span>{resolveErrors.length - 8} more errors</span>}
         </div>
       )}
-      {!loading && groups.length === 0 && <EmptyState icon={Check} title="No duplicate groups" />}
+      {!loading && groups.length === 0 && (
+        <EmptyState
+          icon={Check}
+          title="No duplicate groups found"
+          description="Organization is complete; there are no same-release duplicate matches to clean up."
+        />
+      )}
       {groups.map((group) => {
         const groupSelectedRemoveIds = selectedDuplicateTrashIdsForGroup(group);
 
@@ -1286,7 +1362,7 @@ function TrashPage() {
   );
 }
 
-function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
+function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChanged: () => Promise<void> }) {
   const [plan, setPlan] = useState<OrganizePlan | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [applyErrors, setApplyErrors] = useState<string[]>([]);
@@ -1297,6 +1373,8 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
   const [trashBusyKey, setTrashBusyKey] = useState<string | null>(null);
   const [selectedTrashCandidates, setSelectedTrashCandidates] = useState<Record<string, string>>({});
   const previewRequestId = useRef(0);
+  const workflow = stats?.workflow;
+  const workflowSummary = workflowBlockerSummary(workflow);
   const organizeItems = plan?.items || [];
   const filterCounts = useMemo(() => countOrganizePreviewFilters(organizeItems), [organizeItems]);
   const filteredItems = useMemo(
@@ -1325,19 +1403,30 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
     setSelectedTrashCandidates((current) => pruneSelectedTrashCandidates(nextPlan.items, current));
   };
 
-  const load = async ({ clearNotice = true }: { clearNotice?: boolean } = {}) => {
+  const load = async ({
+    clearNotice = true,
+    quick = false,
+    resetPlan = false
+  }: { clearNotice?: boolean; quick?: boolean; resetPlan?: boolean } = {}) => {
     const requestId = previewRequestId.current + 1;
     previewRequestId.current = requestId;
     setPreviewBusy(true);
+    if (resetPlan) {
+      setPlan(null);
+      setPageIndex(0);
+      setSelectedTrashCandidates({});
+    }
     if (clearNotice) {
       setNotice(null);
       setApplyErrors([]);
     }
 
     try {
-      const nextPlan = await api<OrganizePlan>("/organize/preview", { method: "POST" });
+      const path = quick ? "/organize/preview?quick=1" : `/organize/preview?refresh=${Date.now()}`;
+      const nextPlan = await api<OrganizePlan>(path, { method: "POST" });
       if (requestId === previewRequestId.current) {
         showPlan(nextPlan);
+        await onChanged();
       }
     } catch (caught) {
       if (requestId === previewRequestId.current) {
@@ -1351,7 +1440,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
   };
 
   useEffect(() => {
-    void load();
+    void load({ quick: true });
   }, []);
 
   const apply = async () => {
@@ -1370,12 +1459,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
       setNotice(`${result.moved} moved, ${result.skipped} skipped${errorSuffix}. Preview refreshed.`);
       setApplyErrors(result.errors);
 
-      if (result.plan) {
-        showPlan(result.plan);
-      }
-
-      await load({ clearNotice: false });
-      await onChanged();
+      await load({ clearNotice: false, resetPlan: true });
     } catch (caught) {
       setNotice((caught as Error).message);
     } finally {
@@ -1406,10 +1490,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
       const errorSuffix = result.errors.length ? `, ${result.errors.length} errors` : "";
       setNotice(`${result.trashed} moved to recycle bin${errorSuffix}. Preview refreshed.`);
       setApplyErrors(result.errors);
-      setSelectedTrashCandidates({});
-      showPlan(result.plan);
-      await load({ clearNotice: false });
-      await onChanged();
+      await load({ clearNotice: false, resetPlan: true });
     } catch (caught) {
       setNotice((caught as Error).message);
     } finally {
@@ -1420,20 +1501,35 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
   return (
     <section className="panel">
       <div className="notice-bar safety">
-        <strong>Stage 2: organize first</strong>
-        <span>Files move into the active album layout before duplicate cleanup unlocks.</span>
+        <strong>Organization review</strong>
+        <span>Preview moves, conflicts, and missing files. Duplicate cleanup opens automatically once organization is clear.</span>
       </div>
       <div className="toolbar">
         <div className="summary-chips">
-          <span>{plan?.summary.ready || 0} ready</span>
-          <span>{plan?.summary.same || 0} organized</span>
-          <span>{plan?.summary.duplicateTargets || 0} duplicates</span>
-          <span>{plan?.summary.conflicts || 0} conflicts</span>
-          <span>{plan?.summary.missing || 0} missing</span>
-          <span>{selectedTrashSelections.length} selected</span>
+          {plan ? (
+            <>
+              <span>{plan.summary.ready} ready</span>
+              <span>{plan.summary.same} organized</span>
+              <span>{plan.summary.duplicateTargets} duplicates</span>
+              <span>{plan.summary.conflicts} conflicts</span>
+              <span>{plan.summary.missing} missing</span>
+              <span>{selectedTrashSelections.length} selected</span>
+            </>
+          ) : workflow?.stage === "organize" ? (
+            <>
+              <span>{workflow.pendingMoves} {pluralize("move", workflow.pendingMoves)}</span>
+              <span>{workflow.organizationConflicts} {pluralize("conflict", workflow.organizationConflicts)}</span>
+              <span>{workflow.missingFiles} missing</span>
+              <span>Preview needed</span>
+            </>
+          ) : workflow?.duplicateScanReady ? (
+            <span>Organization clear</span>
+          ) : (
+            <span>{previewBusy ? "Previewing" : "Preview needed"}</span>
+          )}
         </div>
         <div className="button-row">
-          <button className="secondary-button" type="button" onClick={() => load()} disabled={previewBusy || applyBusy || Boolean(trashBusyKey)}>
+          <button className="secondary-button" type="button" onClick={() => load({ resetPlan: true })} disabled={previewBusy || applyBusy || Boolean(trashBusyKey)}>
             {previewBusy ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
             <span>{previewBusy ? "Previewing" : "Preview"}</span>
           </button>
@@ -1475,7 +1571,13 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
           {applyErrors.length > 8 && <span>{applyErrors.length - 8} more errors</span>}
         </div>
       )}
-      {!previewBusy && !plan && <EmptyState icon={FolderInput} title="No preview loaded" />}
+      {!previewBusy && !plan && (
+        <EmptyState
+          icon={notice ? CircleAlert : FolderInput}
+          title={notice ? "Preview failed" : organizePreviewEmptyTitle(workflow)}
+          description={notice || organizePreviewEmptyDescription(workflow, workflowSummary)}
+        />
+      )}
       {plan && (
         <>
           <div className="organize-preview-tools">
@@ -1520,7 +1622,15 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
             </div>
           </div>
           {filteredItems.length === 0 ? (
-            <EmptyState icon={Check} title="No preview items" />
+            <EmptyState
+              icon={Check}
+              title={organizeItems.length === 0 ? "No tracks to organize" : "No items in this filter"}
+              description={
+                organizeItems.length === 0
+                  ? "Scan the library to load tracks before organizing."
+                  : "Switch filters to see organized tracks, ready moves, or duplicate-target candidates."
+              }
+            />
           ) : (
             <div className="table-wrap">
               <table>
@@ -1548,6 +1658,7 @@ function OrganizePage({ onChanged }: { onChanged: () => Promise<void> }) {
                         {item.targetRelativePath ? (
                           <>
                             <PathDiff value={item.targetRelativePath} compareTo={item.sourceRelativePath} />
+                            {item.targetSource === "navidrome" && <span className="status-detail">Navidrome metadata</span>}
                             {item.targetSource === "spotify" && <span className="status-detail">Spotify metadata</span>}
                           </>
                         ) : (
@@ -2121,15 +2232,11 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
             discovery: settings.catalog.discovery
           },
           naming: {
-            mode: settings.naming.mode,
+            mode: "standard",
             libraryPath: settings.naming.libraryPath,
-            recycleBinPath: settings.naming.recycleBinPath,
-            artistFolderFormat: settings.naming.artistFolderFormat,
-            standardTrackFormat: settings.naming.standardTrackFormat,
-            multiDiscTrackFormat: settings.naming.multiDiscTrackFormat,
-            replaceIllegalCharacters: settings.naming.replaceIllegalCharacters,
-            colonReplacementFormat: settings.naming.colonReplacementFormat
-          }
+            recycleBinPath: settings.naming.recycleBinPath
+          },
+          scan: settings.scan
         })
       });
 
@@ -2200,18 +2307,9 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
     }
   };
 
-  const updateNaming = (update: Partial<SettingsView["naming"]>) => {
-    if (!settings) {
-      return;
-    }
-    setSettings({ ...settings, naming: { ...settings.naming, ...update } });
-  };
-
   if (!settings) {
     return <MessageScreen title="Settings" message="Loading" />;
   }
-
-  const canEditFormats = settings.naming.mode === "manual";
 
   return (
     <form className="settings-grid" onSubmit={save}>
@@ -2385,89 +2483,36 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
             }
           />
         </label>
-        <div className="settings-subsection">
-          <span className="subsection-label">Naming mode</span>
-          <div className="segmented-control" role="radiogroup" aria-label="Naming mode">
-            {namingModes.map((mode) => (
-              <button
-                key={mode.id}
-                className={settings.naming.mode === mode.id ? "active" : ""}
-                type="button"
-                role="radio"
-                aria-checked={settings.naming.mode === mode.id}
-                onClick={() =>
-                  updateNaming(
-                    mode.id === "standard"
-                      ? { mode: mode.id, ...standardNamingDefaults }
-                      : { mode: mode.id }
-                  )
-                }
-              >
-                {mode.label}
-              </button>
-            ))}
-          </div>
+        <div className="notice-bar safety">
+          <strong>NaviClean naming</strong>
+          <span>Uses Spotify album metadata in the standard Artist / Album (Year) layout.</span>
         </div>
-        {settings.naming.mode === "standard" && (
-          <div className="notice-bar safety">
-            <strong>Standard naming</strong>
-            <span>Uses Artist / Artist - Album (Year) / Artist - Album (Year) - 01 - Track Title.</span>
-          </div>
-        )}
-        {settings.naming.mode === "manual" && (
-          <div className="notice-bar safety">
-            <strong>Manual naming</strong>
-            <span>Preview organization before applying moves.</span>
-          </div>
-        )}
-        <div className="form-grid two">
-          <label>
-            Artist folder
-            <input
-              value={settings.naming.artistFolderFormat}
-              readOnly={!canEditFormats}
-              onChange={(event) => updateNaming({ artistFolderFormat: event.target.value })}
-            />
-          </label>
-          <label>
-            Standard track
-            <input
-              value={settings.naming.standardTrackFormat}
-              readOnly={!canEditFormats}
-              onChange={(event) => updateNaming({ standardTrackFormat: event.target.value })}
-            />
-          </label>
-        </div>
-        <label>
-          Multi-disc track
-          <input
-            value={settings.naming.multiDiscTrackFormat}
-            readOnly={!canEditFormats}
-            onChange={(event) => updateNaming({ multiDiscTrackFormat: event.target.value })}
-          />
-        </label>
         <label className="toggle-row">
-          <span>Replace illegal characters</span>
+          <span>Daily auto scan</span>
           <input
             type="checkbox"
-            checked={settings.naming.replaceIllegalCharacters}
-            disabled={!canEditFormats}
-            onChange={(event) => updateNaming({ replaceIllegalCharacters: event.target.checked })}
+            checked={settings.scan.autoScanEnabled}
+            onChange={(event) =>
+              setSettings({
+                ...settings,
+                scan: { ...settings.scan, autoScanEnabled: event.target.checked }
+              })
+            }
           />
         </label>
         <label>
-          Colon replacement
-          <select
-            value={settings.naming.colonReplacementFormat}
-            disabled={!canEditFormats}
-            onChange={(event) => updateNaming({ colonReplacementFormat: Number(event.target.value) })}
-          >
-            <option value={4}>Smart</option>
-            <option value={0}>Delete</option>
-            <option value={1}>Dash</option>
-            <option value={2}>Space dash</option>
-            <option value={3}>Space dash space</option>
-          </select>
+          Auto scan time
+          <input
+            type="time"
+            value={settings.scan.autoScanTime}
+            disabled={!settings.scan.autoScanEnabled}
+            onChange={(event) =>
+              setSettings({
+                ...settings,
+                scan: { ...settings.scan, autoScanTime: event.target.value }
+              })
+            }
+          />
         </label>
       </fieldset>
 
@@ -2495,6 +2540,22 @@ function PathDiff({ value, compareTo }: { value: string; compareTo: string }) {
   );
 }
 
+function initialTheme(): AppTheme {
+  let stored: string | null = null;
+
+  try {
+    stored = window.localStorage.getItem(themeStorageKey);
+  } catch {
+    stored = null;
+  }
+
+  if (stored === "light" || stored === "dark") {
+    return stored;
+  }
+
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 function ActionProgress({ label }: { label: string }) {
   return (
     <div className="action-progress" role="status" aria-live="polite">
@@ -2509,11 +2570,106 @@ function ActionProgress({ label }: { label: string }) {
   );
 }
 
-function EmptyState({ icon: Icon, title }: { icon: typeof Database; title: string }) {
+function organizePreviewEmptyTitle(workflow?: LibraryStats["workflow"]) {
+  if (!workflow) {
+    return "Run organization preview";
+  }
+
+  if (workflow.stage === "organize") {
+    return "Preview needed to review organization";
+  }
+
+  if (workflow.duplicateScanReady) {
+    return "Organization clear";
+  }
+
+  return workflow.scanned ? "Scan status changed" : "Scan library first";
+}
+
+function organizePreviewEmptyDescription(workflow?: LibraryStats["workflow"], blockerSummary = "") {
+  if (!workflow) {
+    return "Preview checks the library for moves, conflicts, and missing files before duplicate cleanup.";
+  }
+
+  if (workflow.stage === "organize") {
+    return blockerSummary
+      ? `NaviClean found ${blockerSummary}. Generate the preview to review and apply the organization plan.`
+      : "Generate the preview to review the current organization plan.";
+  }
+
+  if (workflow.duplicateScanReady) {
+    return "There are no pending moves, conflicts, or missing files. You can check duplicate cleanup.";
+  }
+
+  return workflow.scanned
+    ? "Refresh after the current scan settles, then generate an organization preview."
+    : "Scan the library before generating an organization preview.";
+}
+
+function duplicateGateNoticeTitle(workflow?: LibraryStats["workflow"]) {
+  if (!workflow) {
+    return "Duplicate cleanup unavailable";
+  }
+
+  if (workflow.stage === "scan") {
+    return workflow.scanned ? "Duplicates waiting on scan" : "Duplicates need a library scan";
+  }
+
+  return "Duplicates waiting on organization";
+}
+
+function duplicateGateEmptyTitle(workflow?: LibraryStats["workflow"]) {
+  if (!workflow) {
+    return "Duplicate cleanup not ready";
+  }
+
+  if (workflow.stage === "scan") {
+    return workflow.scanned ? "Scan still running" : "Scan library first";
+  }
+
+  return "Organization needs attention";
+}
+
+function duplicateGateEmptyDescription(workflow?: LibraryStats["workflow"]) {
+  if (!workflow) {
+    return "Refresh stats, then review scan and organization status.";
+  }
+
+  if (workflow.stage === "scan") {
+    return workflow.scanned
+      ? "Duplicate cleanup unlocks after the current scan finishes and organization is clear."
+      : "Scan the library, then review organization before checking duplicates.";
+  }
+
+  return "Review the organizer; duplicates unlock once moves, conflicts, and missing files are clear.";
+}
+
+function workflowBlockerSummary(workflow?: LibraryStats["workflow"]) {
+  if (!workflow || workflow.stage !== "organize") {
+    return "";
+  }
+
+  return [
+    countWorkflowItem(workflow.pendingMoves, "move"),
+    countWorkflowItem(workflow.organizationConflicts, "conflict"),
+    countWorkflowItem(workflow.missingFiles, "missing file")
+  ].filter(Boolean).join(", ");
+}
+
+function countWorkflowItem(count: number, noun: string) {
+  if (count <= 0) {
+    return "";
+  }
+
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function EmptyState({ icon: Icon, title, description }: { icon: typeof Database; title: string; description?: string }) {
   return (
     <div className="empty-state">
       <Icon size={24} />
       <strong>{title}</strong>
+      {description && <span>{description}</span>}
     </div>
   );
 }

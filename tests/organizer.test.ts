@@ -30,16 +30,27 @@ test("standard mode includes disc number for multi-disc albums", () => {
   );
 });
 
-test("manual mode honors custom tokens", () => {
+test("standard mode keeps disc one tracks in standard numbering", () => {
+  const target = targetForTrack(track({ discNumber: 1, discTotal: 2 }), settings({ mode: "standard" }));
+
+  assert.equal(
+    target.targetRelativePath,
+    "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3"
+  );
+});
+
+test("custom naming templates are ignored", () => {
   const target = targetForTrack(
     track({ albumType: "single", trackTotal: 5 }),
     settings({
-      mode: "manual",
       standardTrackFormat: "{Album Artist Name}/{Album Type} - {Album Title}/{track:00} - {Track Title}"
     })
   );
 
-  assert.equal(target.targetRelativePath, "Artist/Artist/EP - Album Name/03 - Track.mp3");
+  assert.equal(
+    target.targetRelativePath,
+    "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3"
+  );
 });
 
 test("standard folder with a different local year needs organization", async () => {
@@ -389,6 +400,109 @@ test("trashing multiple organize collision candidates recycles them in one plan 
   }
 });
 
+test("trashing an organize duplicate-target candidate refreshes the plan", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const testSettings = settings({
+      libraryPath: root,
+      mode: "standard"
+    });
+    const firstRelativePath = "Incoming/Track One.mp3";
+    const secondRelativePath = "Incoming/Track Two.mp3";
+    const firstPath = path.join(root, ...firstRelativePath.split("/"));
+    const secondPath = path.join(root, ...secondRelativePath.split("/"));
+    const tracks = [
+      track({
+        id: "copy-one",
+        absolutePath: firstPath,
+        relativePath: firstRelativePath,
+        size: 20
+      }),
+      track({
+        id: "copy-two",
+        absolutePath: secondPath,
+        relativePath: secondRelativePath,
+        size: 10
+      })
+    ];
+
+    await fs.mkdir(path.dirname(firstPath), { recursive: true });
+    await fs.writeFile(firstPath, "audio-one");
+    await fs.writeFile(secondPath, "audio-two");
+
+    const plan = await buildOrganizePlan(tracks, testSettings);
+    const sourceItem = plan.items.find((item) => item.id === "copy-one");
+    const duplicateCandidate = sourceItem?.collision?.candidates.find((candidate) => candidate.trackId === "copy-two");
+
+    assert.equal(plan.summary.duplicateTargets, 2);
+    assert.equal(sourceItem?.status, "duplicate-target");
+    assert.ok(duplicateCandidate);
+
+    const result = await trashOrganizeCandidate(testSettings, tracks, "copy-one", duplicateCandidate.id);
+
+    await fs.access(firstPath);
+    await assert.rejects(fs.access(secondPath), /ENOENT/);
+    assert.equal(result.trashed, 1);
+    assert.deepEqual(result.removedTrackIds, ["copy-two"]);
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.tracks.map((resultTrack) => resultTrack.id), ["copy-one"]);
+    assert.equal(result.plan.summary.duplicateTargets, 0);
+    assert.equal(result.plan.summary.ready, 1);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("trashing an organize existing-file conflict refreshes the plan", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const testSettings = settings({
+      libraryPath: root,
+      mode: "standard"
+    });
+    const targetRelativePath = "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3";
+    const sourceRelativePath = "Incoming/Track Copy.mp3";
+    const targetPath = path.join(root, ...targetRelativePath.split("/"));
+    const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
+    const tracks = [
+      track({
+        id: "copy",
+        absolutePath: sourcePath,
+        relativePath: sourceRelativePath,
+        size: 10
+      })
+    ];
+
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(targetPath, "existing-target");
+    await fs.writeFile(sourcePath, "audio");
+
+    const plan = await buildOrganizePlan(tracks, testSettings);
+    const sourceItem = plan.items.find((item) => item.id === "copy");
+    const existingTargetCandidate = sourceItem?.collision?.candidates.find((candidate) => candidate.role === "existing-target");
+
+    assert.equal(plan.summary.conflicts, 1);
+    assert.equal(sourceItem?.status, "conflict");
+    assert.ok(existingTargetCandidate);
+
+    const result = await trashOrganizeCandidate(testSettings, tracks, "copy", existingTargetCandidate.id);
+
+    await assert.rejects(fs.access(targetPath), /ENOENT/);
+    await fs.access(sourcePath);
+    assert.equal(result.trashed, 1);
+    assert.deepEqual(result.removedTrackIds, []);
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.tracks.map((resultTrack) => resultTrack.id), ["copy"]);
+    assert.equal(result.plan.summary.conflicts, 0);
+    assert.equal(result.plan.summary.ready, 1);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 function settings(overrides: Partial<PrivateSettings["naming"]> = {}): PrivateSettings {
   const libraryPath = overrides.libraryPath ?? path.resolve("C:/music");
 
@@ -428,7 +542,9 @@ function settings(overrides: Partial<PrivateSettings["naming"]> = {}): PrivateSe
       ...overrides
     },
     scan: {
-      extensions: [".mp3"]
+      extensions: [".mp3"],
+      autoScanEnabled: true,
+      autoScanTime: "02:00"
     }
   };
 }
