@@ -34,6 +34,7 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
   const files = await collectAudioFiles(root, extensions, recycleRoot, onProgress);
   const tracks: TrackFile[] = [];
   const errors: string[] = [];
+  const warnings: string[] = [];
 
   for (const filePath of files) {
     try {
@@ -56,10 +57,7 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
   const navidromeEnriched = await enrichTracksWithNavidromeMetadata(settings, tracks);
 
   for (const warning of navidromeEnriched.warnings) {
-    errors.push(warning);
-    if (errors.length > 100) {
-      errors.shift();
-    }
+    warnings.push(warning);
   }
 
   const enriched = await enrichTracksWithSpotifyOrganizeMetadata(settings, navidromeEnriched.tracks, {
@@ -69,14 +67,11 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
   const finalTracks = enriched.tracks;
 
   for (const warning of enriched.warnings) {
-    errors.push(warning);
-    if (errors.length > 100) {
-      errors.shift();
-    }
+    warnings.push(warning);
   }
 
   await saveCatalog(finalTracks);
-  return { tracks: finalTracks, errors };
+  return { tracks: finalTracks, errors, warnings };
 }
 
 async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, tracks: TrackFile[]) {
@@ -106,19 +101,34 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
 
   const index = buildNavidromeTrackIndex(navidromeTracks);
   let matched = 0;
+  const unmatchedExamples: string[] = [];
   const enrichedTracks = tracks.map((track) => {
     const navidromeTrack = findNavidromeTrackForFile(index, track);
 
     if (!navidromeTrack) {
+      if (unmatchedExamples.length < 5) {
+        unmatchedExamples.push(track.relativePath);
+      }
       return track;
     }
 
     matched += 1;
     return trackFileFromNavidromeTrack(track, navidromeTrack, settings);
   });
+  const tracksWithUsablePaths = navidromeTracks.filter((track) => track.sourceAbsolutePath || track.sourceRelativePath).length;
 
-  if (matched === 0) {
-    warnings.push("Navidrome metadata was available, but no indexed tracks matched files under the library path.");
+  warnings.push(
+    `Navidrome metadata: ${matched.toLocaleString()} matched / ${tracks.length.toLocaleString()} files (${navidromeTracks.length.toLocaleString()} indexed tracks).`
+  );
+
+  if (tracksWithUsablePaths < navidromeTracks.length) {
+    warnings.push(
+      `Navidrome metadata: ${(navidromeTracks.length - tracksWithUsablePaths).toLocaleString()} indexed tracks did not expose a usable path under the library mount.`
+    );
+  }
+
+  if (matched < tracks.length && unmatchedExamples.length > 0) {
+    warnings.push(`Navidrome unmatched examples (no matching indexed path): ${unmatchedExamples.join("; ")}`);
   }
 
   return {
