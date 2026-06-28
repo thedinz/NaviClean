@@ -194,6 +194,88 @@ test("spotify organize enrichment reuses durable cached metadata without a looku
   }
 });
 
+test("spotify organize enrichment keeps same song on a different album local", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-spotify-cross-album-"));
+  const originalFetch = globalThis.fetch;
+  let searchCalls = 0;
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.hostname === "accounts.spotify.com") {
+      return jsonResponse({
+        access_token: "test-token",
+        expires_in: 3600
+      });
+    }
+
+    if (url.hostname === "api.spotify.com" && url.pathname === "/v1/search") {
+      searchCalls += 1;
+      return jsonResponse({
+        tracks: {
+          items: [
+            {
+              album: {
+                album_type: "album",
+                artists: [{ id: "artist-best", name: "Album Artist" }],
+                external_urls: { spotify: "https://open.spotify.com/album/original-album" },
+                id: "original-album",
+                images: [],
+                name: "Original Album",
+                release_date: "1997-01-01",
+                total_tracks: 12
+              },
+              artists: [{ id: "artist-best", name: "Album Artist" }],
+              disc_number: 1,
+              duration_ms: 275000,
+              explicit: false,
+              external_ids: { isrc: "USABC9700009" },
+              external_urls: { spotify: "https://open.spotify.com/track/original-track" },
+              id: "original-track",
+              name: "Shared Song",
+              track_number: 2
+            }
+          ]
+        }
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
+
+  try {
+    const relativePath =
+      "Album Artist/Album Artist - Best Of (2020)/Album Artist - Best Of (2020) - 09 - Shared Song.mp3";
+    const absolutePath = path.join(root, ...relativePath.split("/"));
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    await fs.writeFile(absolutePath, "audio");
+
+    const inputTrack = track({
+      absolutePath,
+      relativePath,
+      album: "Best Of",
+      albumArtist: "Album Artist",
+      artist: "Album Artist",
+      title: "Shared Song",
+      trackNumber: 9,
+      year: 2020,
+      duration: 275,
+      isrc: "USABC9700009"
+    });
+    const result = await enrichTracksWithSpotifyOrganizeMetadata(settings(root), [inputTrack], {
+      useCache: false
+    });
+
+    assert.equal(searchCalls > 0, true);
+    assert.equal(result.tracks[0]?.targetSource, undefined);
+    assert.equal(result.tracks[0]?.album, "Best Of");
+    assert.equal(result.tracks[0]?.trackNumber, 9);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     headers: {

@@ -31,6 +31,34 @@ test("scanner infers the release year when the parent artist folder stripped tra
   }
 });
 
+test("scanner does not block on uncached Spotify lookups", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-spotify-"));
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async () => {
+    throw new Error("Scan should not call Spotify for uncached organize metadata.");
+  };
+
+  try {
+    const relativePath =
+      "Compilation Artist/Compilation Artist - Best Of (2020)/Compilation Artist - Best Of (2020) - 01 - Known Song.mp3";
+    const filePath = path.join(root, ...relativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "not real audio");
+
+    const scanSettings = settings(root);
+    scanSettings.catalog.spotify.clientId = "client-id";
+    scanSettings.catalog.spotify.clientSecret = "client-secret";
+    const result = await scanLibrary(scanSettings);
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(result.tracks[0]?.targetSource, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 function settings(libraryPath: string): PrivateSettings {
   return {
     auth: {
