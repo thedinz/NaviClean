@@ -551,6 +551,10 @@ function spotifyCredentials(
 }
 
 function spotifyOrganizeTrackIsEligible(track: TrackFile) {
+  if (track.targetSource === "navidrome") {
+    return false;
+  }
+
   return spotifyOrganizeHints(track).some(
     (hint) => !isUnknownSpotifyOrganizeValue(hint.title) && !isUnknownSpotifyOrganizeValue(hint.albumArtist || hint.artist)
   );

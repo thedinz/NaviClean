@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import type { PrivateSettings } from "./settings.js";
-import { normalizeForMatch } from "./utils.js";
+import { isInsidePath, normalizeForMatch, toPosixRelative } from "./utils.js";
 
 type SubsonicResponse<T> = {
   "subsonic-response"?: T & {
@@ -15,6 +16,12 @@ type SubsonicResponse<T> = {
 type SearchResult3 = {
   searchResult3?: {
     artist?: NavidromeArtist[];
+    album?: NavidromeAlbum[];
+  };
+};
+
+type AlbumList2 = {
+  albumList2?: {
     album?: NavidromeAlbum[];
   };
 };
@@ -38,6 +45,50 @@ type NavidromeAlbum = {
   artist?: string;
   coverArt?: string;
   year?: number;
+  song?: NavidromeSong[];
+  songCount?: number;
+};
+
+type NavidromeAlbumDetail = {
+  album?: NavidromeAlbum;
+};
+
+type NavidromeSong = {
+  id?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  albumArtist?: string;
+  track?: number | string;
+  discNumber?: number | string;
+  year?: number | string;
+  duration?: number | string;
+  bitRate?: number | string;
+  size?: number | string;
+  suffix?: string;
+  path?: string;
+  isrc?: string;
+};
+
+export type NavidromeLibraryTrack = {
+  id: string;
+  sourceAbsolutePath: string | null;
+  sourceRelativePath: string | null;
+  artist: string;
+  albumArtist: string;
+  album: string;
+  albumType: string;
+  title: string;
+  trackNumber: number | null;
+  trackTotal: number | null;
+  discNumber: number | null;
+  discTotal: number | null;
+  year: number | null;
+  duration: number | null;
+  bitrate: number | null;
+  size: number | null;
+  suffix: string;
+  isrc: string | null;
 };
 
 export type NavidromeArtworkLookup =
@@ -145,6 +196,119 @@ export async function fetchNavidromeArtwork(
   return {
     contentType,
     data: Buffer.from(await response.arrayBuffer())
+  };
+}
+
+export async function fetchNavidromeLibraryTracks(settings: PrivateSettings): Promise<NavidromeLibraryTrack[]> {
+  if (!settings.navidrome.baseUrl || !settings.navidrome.username || !settings.navidrome.password) {
+    return [];
+  }
+
+  const albums = await fetchNavidromeAlbums(settings);
+  const tracks: NavidromeLibraryTrack[] = [];
+
+  for (const albumBatch of chunks(albums, 8)) {
+    const details = await Promise.all(albumBatch.map((album) => fetchNavidromeAlbum(settings, album.id)));
+
+    for (const detail of details) {
+      const album = detail?.album;
+
+      if (!album) {
+        continue;
+      }
+
+      for (const song of asArray(album.song)) {
+        tracks.push(navidromeLibraryTrackFromSong(settings, album, song));
+      }
+    }
+  }
+
+  return tracks;
+}
+
+async function fetchNavidromeAlbums(settings: PrivateSettings) {
+  const albums: NavidromeAlbum[] = [];
+  const pageSize = 500;
+
+  for (let offset = 0; offset < 100_000; offset += pageSize) {
+    const body = await subsonicJson<AlbumList2>(settings, "rest/getAlbumList2.view", {
+      type: "alphabeticalByName",
+      size: String(pageSize),
+      offset: String(offset)
+    });
+    const page = asArray(body?.albumList2?.album);
+
+    albums.push(...page);
+
+    if (page.length < pageSize) {
+      break;
+    }
+  }
+
+  return albums;
+}
+
+async function fetchNavidromeAlbum(settings: PrivateSettings, albumId: string | undefined) {
+  if (!albumId) {
+    return null;
+  }
+
+  return subsonicJson<NavidromeAlbumDetail>(settings, "rest/getAlbum.view", {
+    id: albumId
+  });
+}
+
+function navidromeLibraryTrackFromSong(
+  settings: PrivateSettings,
+  album: NavidromeAlbum,
+  song: NavidromeSong
+): NavidromeLibraryTrack {
+  const source = navidromeSongSourcePath(settings, song.path);
+  const albumTitle = stringValue(song.album) || stringValue(album.name) || stringValue(album.title);
+  const albumArtist = stringValue(song.albumArtist) || stringValue(album.artist) || stringValue(song.artist);
+  const artist = stringValue(song.artist) || albumArtist;
+
+  return {
+    id: stringValue(song.id) || crypto.createHash("sha1").update(JSON.stringify(song)).digest("hex"),
+    sourceAbsolutePath: source?.absolutePath ?? null,
+    sourceRelativePath: source?.relativePath ?? null,
+    artist,
+    albumArtist: albumArtist || artist,
+    album: albumTitle,
+    albumType: "Album",
+    title: stringValue(song.title),
+    trackNumber: positiveInteger(song.track),
+    trackTotal: positiveInteger(album.songCount),
+    discNumber: positiveInteger(song.discNumber),
+    discTotal: null,
+    year: positiveInteger(song.year) ?? positiveInteger(album.year),
+    duration: positiveInteger(song.duration),
+    bitrate: kilobitsToBits(positiveInteger(song.bitRate)),
+    size: positiveInteger(song.size),
+    suffix: stringValue(song.suffix),
+    isrc: stringValue(song.isrc) || null
+  };
+}
+
+function navidromeSongSourcePath(settings: PrivateSettings, songPath: unknown) {
+  const value = stringValue(songPath);
+
+  if (!value) {
+    return null;
+  }
+
+  const root = path.resolve(settings.naming.libraryPath);
+  const absolutePath = path.isAbsolute(value)
+    ? path.resolve(value)
+    : path.resolve(root, ...value.split(/[\\/]+/).filter(Boolean));
+
+  if (!isInsidePath(root, absolutePath)) {
+    return null;
+  }
+
+  return {
+    absolutePath,
+    relativePath: toPosixRelative(root, absolutePath)
   };
 }
 
@@ -288,6 +452,16 @@ function firstCoverArt(albums: NavidromeAlbum[]) {
   return album?.coverArt || album?.id || null;
 }
 
+function chunks<T>(items: T[], size: number) {
+  const result: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size));
+  }
+
+  return result;
+}
+
 function asArray<T>(value: T[] | T | undefined) {
   if (!value) {
     return [];
@@ -298,4 +472,22 @@ function asArray<T>(value: T[] | T | undefined) {
 
 function normalized(value: unknown) {
   return normalizeForMatch(typeof value === "string" ? value : "", { removeBracketedText: false });
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function positiveInteger(value: unknown) {
+  const parsed = typeof value === "number" ? value : Number(value);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return Math.floor(parsed);
+}
+
+function kilobitsToBits(value: number | null) {
+  return value ? value * 1000 : null;
 }

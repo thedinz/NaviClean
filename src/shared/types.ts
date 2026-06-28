@@ -275,7 +275,7 @@ export type TrackFile = {
   qualityScore: number;
   targetPath: string;
   targetRelativePath: string;
-  targetSource?: "naviclean" | "spotify";
+  targetSource?: "naviclean" | "navidrome" | "spotify";
   issues: string[];
 };
 
@@ -383,7 +383,7 @@ export type OrganizePlanItem = {
   targetPath: string;
   sourceRelativePath: string;
   targetRelativePath: string;
-  targetSource?: "naviclean" | "spotify";
+  targetSource?: "naviclean" | "navidrome" | "spotify";
   status: "ready" | "same" | "duplicate-target" | "conflict" | "outside-library" | "missing-source";
   message: string;
   collision?: OrganizeCollision;

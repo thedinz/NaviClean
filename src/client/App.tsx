@@ -1642,6 +1642,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
                         {item.targetRelativePath ? (
                           <>
                             <PathDiff value={item.targetRelativePath} compareTo={item.sourceRelativePath} />
+                            {item.targetSource === "navidrome" && <span className="status-detail">Navidrome metadata</span>}
                             {item.targetSource === "spotify" && <span className="status-detail">Spotify metadata</span>}
                           </>
                         ) : (

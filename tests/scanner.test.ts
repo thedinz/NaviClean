@@ -59,6 +59,102 @@ test("scanner does not block on uncached Spotify lookups", async () => {
   }
 });
 
+test("scanner uses Navidrome indexed metadata for target naming", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath = "loose/random-file.mp3";
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/rest/getAlbumList2.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          albumList2: {
+            album: [
+              {
+                id: "album-1",
+                name: "Best Of",
+                artist: "Album Artist",
+                year: 2020,
+                songCount: 1
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    if (url.pathname.endsWith("/rest/getAlbum.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          album: {
+            id: "album-1",
+            name: "Best Of",
+            artist: "Album Artist",
+            year: 2020,
+            songCount: 1,
+            song: [
+              {
+                id: "song-1",
+                title: "Shared Song",
+                artist: "Album Artist",
+                albumArtist: "Album Artist",
+                album: "Best Of",
+                track: 9,
+                year: 2020,
+                duration: 275,
+                path: sourceRelativePath,
+                suffix: "mp3"
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "not real audio");
+
+    const scanSettings = settings(root);
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, "navidrome");
+    assert.equal(track?.albumArtist, "Album Artist");
+    assert.equal(track?.album, "Best Of");
+    assert.equal(track?.title, "Shared Song");
+    assert.equal(track?.trackNumber, 9);
+    assert.equal(
+      track?.targetRelativePath,
+      "Album Artist/Album Artist - Best Of (2020)/Album Artist - Best Of (2020) - 09 - Shared Song.mp3"
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    headers: {
+      "content-type": "application/json"
+    },
+    status
+  });
+}
+
 function settings(libraryPath: string): PrivateSettings {
   return {
     auth: {
