@@ -10,6 +10,7 @@ import type {
   TrackFile
 } from "../shared/types.js";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { buildDuplicateKey } from "./matching.js";
 import { getDataDir, type PrivateSettings } from "./settings.js";
@@ -81,7 +82,7 @@ type SpotifyOrganizeTrack = {
 type SpotifyOrganizeCache = {
   matches: Record<string, SpotifyOrganizeCacheEntry>;
   updatedAt: string;
-  version: 1;
+  version: 2;
 };
 
 type SpotifyOrganizeCacheEntry = {
@@ -119,11 +120,24 @@ export type SpotifyOrganizeEnrichmentOptions = {
 let cachedToken: SpotifyToken | null = null;
 let requestWindowStartedAt = 0;
 let requestWindowCount = 0;
+type SqliteDatabase = {
+  close(): void;
+  exec(sql: string): void;
+  prepare(sql: string): {
+    all(...params: unknown[]): unknown[];
+    run(...params: unknown[]): unknown;
+  };
+};
 
-const spotifyOrganizeCachePath = path.join(getDataDir(), "spotify-organize-cache.json");
-const spotifyOrganizeCacheVersion = 1;
+const require = createRequire(import.meta.url);
+let spotifyOrganizeDatabase: SqliteDatabase | null = null;
+
+const spotifyOrganizeJsonCachePath = path.join(getDataDir(), "spotify-organize-cache.json");
+const spotifyOrganizeDatabasePath = path.join(getDataDir(), "spotify-organize.sqlite");
+const spotifyOrganizeCacheVersion = 2;
+const spotifyOrganizeLegacyCacheVersion = 1;
 const spotifyOrganizeNoMatchTtlMs = 7 * 24 * 60 * 60 * 1000;
-const spotifyOrganizeMatchTtlMs = 30 * 24 * 60 * 60 * 1000;
+const spotifyOrganizeMatchTtlMs = 90 * 24 * 60 * 60 * 1000;
 
 export async function testSpotifyConnection(
   settings: PrivateSettings,
@@ -322,16 +336,15 @@ export async function enrichTracksWithSpotifyOrganizeMetadata(
   let aborted = false;
 
   for (const track of eligibleTracks) {
-    const cacheKey = spotifyOrganizeCacheKey(settings, track);
-    const cacheEntry = cache.matches[cacheKey];
-    const freshCacheEntry = cacheEntry && spotifyOrganizeCacheEntryIsFresh(cacheEntry);
+    const cacheKeys = spotifyOrganizeCacheKeys(settings, track);
+    const freshCacheEntry = firstFreshSpotifyOrganizeCacheEntry(cache, cacheKeys);
 
     checked += 1;
 
     if (freshCacheEntry) {
       cached += 1;
-      if (cacheEntry.status === "matched" && cacheEntry.track) {
-        enrichedById.set(track.id, trackFileFromSpotifyOrganizeTrack(track, cacheEntry.track));
+      if (freshCacheEntry.status === "matched" && freshCacheEntry.track) {
+        enrichedById.set(track.id, trackFileFromSpotifyOrganizeTrack(track, freshCacheEntry.track));
         matched += 1;
       } else {
         noMatch += 1;
@@ -346,13 +359,16 @@ export async function enrichTracksWithSpotifyOrganizeMetadata(
 
     try {
       const result = await findSpotifyOrganizeTrack(settings, track);
-
-      cache.matches[cacheKey] = {
+      const entry = {
         matchedAt: new Date().toISOString(),
         score: result?.score,
         status: result ? "matched" : "none",
         track: result?.track
-      };
+      } satisfies SpotifyOrganizeCacheEntry;
+
+      for (const cacheKey of cacheKeys) {
+        cache.matches[cacheKey] = entry;
+      }
 
       if (result) {
         enrichedById.set(track.id, trackFileFromSpotifyOrganizeTrack(track, result.track));
@@ -942,13 +958,36 @@ function trackFileFromSpotifyOrganizeTrack(track: TrackFile, spotifyTrack: Spoti
   };
 }
 
-function spotifyOrganizeCacheKey(settings: PrivateSettings, track: TrackFile) {
+function spotifyOrganizeCacheKeys(settings: PrivateSettings, track: TrackFile) {
+  const keys = spotifyOrganizeHints(track).map((hint) => sha1(JSON.stringify({
+    hint: spotifyOrganizeHintKey(hint),
+    market: settings.catalog.spotify.market,
+    version: spotifyOrganizeCacheVersion
+  })));
+
+  keys.push(spotifyOrganizeLegacyCacheKey(settings, track));
+
+  return Array.from(new Set(keys));
+}
+
+function spotifyOrganizeLegacyCacheKey(settings: PrivateSettings, track: TrackFile) {
   return sha1(JSON.stringify({
     market: settings.catalog.spotify.market,
     hints: spotifyOrganizeHints(track).map(spotifyOrganizeHintKey),
     relativePath: track.relativePath,
-    version: spotifyOrganizeCacheVersion
+    version: spotifyOrganizeLegacyCacheVersion
   }));
+}
+
+function firstFreshSpotifyOrganizeCacheEntry(cache: SpotifyOrganizeCache, keys: string[]) {
+  for (const key of keys) {
+    const entry = cache.matches[key];
+    if (entry && spotifyOrganizeCacheEntryIsFresh(entry)) {
+      return entry;
+    }
+  }
+
+  return null;
 }
 
 function spotifyOrganizeHintKey(hint: SpotifyOrganizeHint) {
@@ -977,39 +1016,67 @@ function spotifyOrganizeCacheEntryIsFresh(entry: SpotifyOrganizeCacheEntry) {
 }
 
 async function readSpotifyOrganizeCache(): Promise<SpotifyOrganizeCache> {
-  try {
-    const raw = await fs.readFile(spotifyOrganizeCachePath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<SpotifyOrganizeCache>;
+  const cache = emptySpotifyOrganizeCache();
 
-    if (parsed.version !== spotifyOrganizeCacheVersion || !parsed.matches) {
-      return emptySpotifyOrganizeCache();
-    }
-
-    return {
-      matches: parsed.matches,
-      updatedAt: parsed.updatedAt || new Date(0).toISOString(),
-      version: spotifyOrganizeCacheVersion
-    };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return emptySpotifyOrganizeCache();
-    }
-
-    return emptySpotifyOrganizeCache();
+  for (const [key, entry] of Object.entries(await readLegacySpotifyOrganizeCacheEntries())) {
+    cache.matches[key] = entry;
   }
+
+  try {
+    await ensureSpotifyOrganizeDatabaseDirectory();
+    const rows = spotifyOrganizeDb()
+      .prepare(
+        `SELECT lookup_key, matched_at, score, status, track_json
+         FROM spotify_organize_matches
+         WHERE version = ?`
+      )
+      .all(spotifyOrganizeCacheVersion) as SpotifyOrganizeCacheRow[];
+
+    for (const row of rows) {
+      const entry = spotifyOrganizeCacheEntryFromRow(row);
+      if (entry) {
+        cache.matches[row.lookup_key] = entry;
+      }
+    }
+  } catch {
+    return cache;
+  }
+
+  return cache;
 }
 
 async function writeSpotifyOrganizeCache(cache: SpotifyOrganizeCache) {
-  await fs.mkdir(path.dirname(spotifyOrganizeCachePath), { recursive: true });
-  const tempPath = `${spotifyOrganizeCachePath}.tmp`;
-  const payload = {
-    ...cache,
-    updatedAt: new Date().toISOString(),
-    version: spotifyOrganizeCacheVersion
-  } satisfies SpotifyOrganizeCache;
+  await ensureSpotifyOrganizeDatabaseDirectory();
+  const db = spotifyOrganizeDb();
+  const statement = db.prepare(
+    `INSERT INTO spotify_organize_matches
+      (lookup_key, version, matched_at, score, status, track_json)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(lookup_key) DO UPDATE SET
+      version = excluded.version,
+      matched_at = excluded.matched_at,
+      score = excluded.score,
+      status = excluded.status,
+      track_json = excluded.track_json`
+  );
 
-  await fs.writeFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-  await fs.rename(tempPath, spotifyOrganizeCachePath);
+  db.exec("BEGIN");
+  try {
+    for (const [lookupKey, entry] of Object.entries(cache.matches)) {
+      statement.run(
+        lookupKey,
+        spotifyOrganizeCacheVersion,
+        entry.matchedAt,
+        entry.score ?? null,
+        entry.status,
+        entry.track ? JSON.stringify(entry.track) : null
+      );
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function emptySpotifyOrganizeCache(): SpotifyOrganizeCache {
@@ -1018,6 +1085,85 @@ function emptySpotifyOrganizeCache(): SpotifyOrganizeCache {
     updatedAt: new Date(0).toISOString(),
     version: spotifyOrganizeCacheVersion
   };
+}
+
+type SpotifyOrganizeCacheRow = {
+  lookup_key: string;
+  matched_at: string;
+  score: number | null;
+  status: string;
+  track_json: string | null;
+};
+
+async function ensureSpotifyOrganizeDatabaseDirectory() {
+  await fs.mkdir(path.dirname(spotifyOrganizeDatabasePath), { recursive: true });
+}
+
+function spotifyOrganizeDb() {
+  if (!spotifyOrganizeDatabase) {
+    spotifyOrganizeDatabase = createSpotifyOrganizeDatabase();
+    spotifyOrganizeDatabase.exec(`
+      CREATE TABLE IF NOT EXISTS spotify_organize_matches (
+        lookup_key TEXT PRIMARY KEY,
+        version INTEGER NOT NULL,
+        matched_at TEXT NOT NULL,
+        score REAL,
+        status TEXT NOT NULL,
+        track_json TEXT
+      );
+      CREATE INDEX IF NOT EXISTS spotify_organize_matches_version_idx
+        ON spotify_organize_matches(version);
+    `);
+  }
+
+  return spotifyOrganizeDatabase;
+}
+
+function createSpotifyOrganizeDatabase(): SqliteDatabase {
+  try {
+    const BetterSqlite3 = require("better-sqlite3") as new (databasePath: string) => SqliteDatabase;
+    return new BetterSqlite3(spotifyOrganizeDatabasePath);
+  } catch {
+    const nodeSqlite = require("node:sqlite") as { DatabaseSync: new (databasePath: string) => SqliteDatabase };
+    return new nodeSqlite.DatabaseSync(spotifyOrganizeDatabasePath);
+  }
+}
+
+function spotifyOrganizeCacheEntryFromRow(row: SpotifyOrganizeCacheRow): SpotifyOrganizeCacheEntry | null {
+  if (row.status !== "matched" && row.status !== "none") {
+    return null;
+  }
+
+  try {
+    return {
+      matchedAt: row.matched_at,
+      score: row.score ?? undefined,
+      status: row.status,
+      track: row.track_json ? JSON.parse(row.track_json) as SpotifyOrganizeTrack : undefined
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function readLegacySpotifyOrganizeCacheEntries() {
+  try {
+    const raw = await fs.readFile(spotifyOrganizeJsonCachePath, "utf8");
+    const parsed = JSON.parse(raw) as Partial<{ matches: Record<string, SpotifyOrganizeCacheEntry>; version: number }>;
+
+    if (parsed.version !== spotifyOrganizeLegacyCacheVersion || !parsed.matches) {
+      return {};
+    }
+
+    return parsed.matches;
+  } catch {
+    return {};
+  }
+}
+
+export function closeSpotifyOrganizeStoreForTests() {
+  spotifyOrganizeDatabase?.close();
+  spotifyOrganizeDatabase = null;
 }
 
 function normalizeSpotifyAlbumType(value: string) {

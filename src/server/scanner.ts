@@ -7,6 +7,7 @@ import { saveCatalog } from "./catalog.js";
 import { buildDuplicateKey } from "./matching.js";
 import { targetForTrack } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
+import { enrichTracksWithSpotifyOrganizeMetadata } from "./spotify.js";
 import { cleanDisplayValue, sha1, titleFromFilename, toPosixRelative } from "./utils.js";
 
 type ProgressHandler = (status: Partial<ScanStatus>) => void;
@@ -51,8 +52,20 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
     });
   }
 
-  await saveCatalog(tracks);
-  return { tracks, errors };
+  const enriched = await enrichTracksWithSpotifyOrganizeMetadata(settings, tracks, {
+    includeSummaryWarning: false
+  });
+  const finalTracks = enriched.tracks;
+
+  for (const warning of enriched.warnings) {
+    errors.push(warning);
+    if (errors.length > 100) {
+      errors.shift();
+    }
+  }
+
+  await saveCatalog(finalTracks);
+  return { tracks: finalTracks, errors };
 }
 
 async function collectAudioFiles(root: string, extensions: Set<string>, recycleRoot: string, onProgress?: ProgressHandler) {

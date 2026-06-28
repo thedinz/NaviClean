@@ -764,8 +764,11 @@ async function getOrganizeEvaluation(catalog: CatalogSnapshot, settings: Plannin
     return cachedOrganizeEvaluation;
   }
 
-  const plan = await buildOrganizePlan(catalog.tracks, settings);
-  const evaluation = organizeEvaluationFromPlan(key, catalog, catalog.tracks, plan);
+  const { tracks, plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings, {
+    includeSummaryWarning: false,
+    lookupMissing: false
+  });
+  const evaluation = organizeEvaluationFromPlan(key, catalog, tracks, plan);
   cachedOrganizeEvaluation = evaluation;
   return evaluation;
 }
