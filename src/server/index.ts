@@ -60,7 +60,7 @@ const scanStatus: ScanStatus = {
 };
 let autoScanTimer: NodeJS.Timeout | null = null;
 let cachedOrganizeEvaluation: OrganizeEvaluation | null = null;
-let pendingOrganizeEvaluation: { key: string; promise: Promise<OrganizeEvaluation> } | null = null;
+let organizeEvaluationCacheToken = 0;
 
 app.use(express.json({ limit: "2mb" }));
 
@@ -448,9 +448,7 @@ app.post("/api/organize/preview", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
   const quick = _req.query.quick === "1" || (_req.body as { quick?: boolean } | undefined)?.quick === true;
-  const evaluation = quick
-    ? await getOrganizeEvaluation(catalog, settings)
-    : await buildAndCacheOrganizeEvaluation(catalog, settings);
+  const evaluation = quick ? await getOrganizeEvaluation(catalog, settings) : await rebuildOrganizeEvaluation(catalog, settings);
   res.json(evaluation.plan);
 }));
 
@@ -482,7 +480,10 @@ app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
     invalidateOrganizeEvaluationCache();
   }
 
-  const refreshed = await getOrganizeEvaluation({ ...latestCatalog, tracks }, settings);
+  const refreshed = await rebuildOrganizeEvaluation({ ...latestCatalog, tracks }, settings, {
+    includeSummaryWarning: false,
+    lookupMissing: false
+  });
   res.json({ ...result, plan: refreshed.plan });
 }));
 
@@ -501,7 +502,10 @@ app.post("/api/organize/trash", asyncHandler(async (req, res) => {
   const result = await trashOrganizeCandidate(settings, planned.tracks, itemId, candidateId);
   const savedCatalog = await saveCatalog(result.tracks);
   invalidateOrganizeEvaluationCache();
-  const refreshed = await getOrganizeEvaluation(savedCatalog, settings);
+  const refreshed = await rebuildOrganizeEvaluation(savedCatalog, settings, {
+    includeSummaryWarning: false,
+    lookupMissing: false
+  });
 
   res.json({
     trashed: result.trashed,
@@ -534,7 +538,10 @@ app.post("/api/organize/trash/bulk", asyncHandler(async (req, res) => {
   const result = await trashOrganizeCandidates(settings, planned.tracks, selections);
   const savedCatalog = await saveCatalog(result.tracks);
   invalidateOrganizeEvaluationCache();
-  const refreshed = await getOrganizeEvaluation(savedCatalog, settings);
+  const refreshed = await rebuildOrganizeEvaluation(savedCatalog, settings, {
+    includeSummaryWarning: false,
+    lookupMissing: false
+  });
 
   res.json({
     trashed: result.trashed,
@@ -777,47 +784,32 @@ async function getOrganizeEvaluation(catalog: CatalogSnapshot, settings: Plannin
     return cachedOrganizeEvaluation;
   }
 
-  const { tracks, plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings, {
+  return rebuildOrganizeEvaluation(catalog, settings, {
     includeSummaryWarning: false,
     lookupMissing: false
   });
-  const evaluation = organizeEvaluationFromPlan(key, catalog, tracks, plan);
-  cachedOrganizeEvaluation = evaluation;
-  return evaluation;
 }
 
-async function buildAndCacheOrganizeEvaluation(catalog: CatalogSnapshot, settings: PlanningSettings): Promise<OrganizeEvaluation> {
+async function rebuildOrganizeEvaluation(
+  catalog: CatalogSnapshot,
+  settings: PlanningSettings,
+  options?: SpotifyOrganizeEnrichmentOptions,
+  cacheToken = organizeEvaluationCacheToken
+): Promise<OrganizeEvaluation> {
   const key = organizeEvaluationKey(catalog, settings);
+  const { tracks, plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings, options);
+  const evaluation = organizeEvaluationFromPlan(key, catalog, tracks, plan);
 
-  if (cachedOrganizeEvaluation?.key === key) {
-    return cachedOrganizeEvaluation;
-  }
-
-  if (pendingOrganizeEvaluation?.key === key) {
-    return pendingOrganizeEvaluation.promise;
-  }
-
-  const promise = (async () => {
-    const { tracks, plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings);
-    const evaluation = organizeEvaluationFromPlan(key, catalog, tracks, plan);
+  if (cacheToken === organizeEvaluationCacheToken) {
     cachedOrganizeEvaluation = evaluation;
-    return evaluation;
-  })();
-
-  pendingOrganizeEvaluation = { key, promise };
-
-  try {
-    return await promise;
-  } finally {
-    if (pendingOrganizeEvaluation?.promise === promise) {
-      pendingOrganizeEvaluation = null;
-    }
   }
+
+  return evaluation;
 }
 
 function invalidateOrganizeEvaluationCache() {
   cachedOrganizeEvaluation = null;
-  pendingOrganizeEvaluation = null;
+  organizeEvaluationCacheToken += 1;
 }
 
 function organizeEvaluationFromPlan(

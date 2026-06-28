@@ -1450,7 +1450,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
       setApplyErrors(result.errors);
 
       showPlan(result.plan);
-      await onChanged();
+      await load({ clearNotice: false });
     } catch (caught) {
       setNotice((caught as Error).message);
     } finally {
@@ -1483,7 +1483,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
       setApplyErrors(result.errors);
       setSelectedTrashCandidates({});
       showPlan(result.plan);
-      await onChanged();
+      await load({ clearNotice: false });
     } catch (caught) {
       setNotice((caught as Error).message);
     } finally {
