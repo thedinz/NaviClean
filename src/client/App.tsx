@@ -1403,17 +1403,27 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
     setSelectedTrashCandidates((current) => pruneSelectedTrashCandidates(nextPlan.items, current));
   };
 
-  const load = async ({ clearNotice = true, quick = false }: { clearNotice?: boolean; quick?: boolean } = {}) => {
+  const load = async ({
+    clearNotice = true,
+    quick = false,
+    resetPlan = false
+  }: { clearNotice?: boolean; quick?: boolean; resetPlan?: boolean } = {}) => {
     const requestId = previewRequestId.current + 1;
     previewRequestId.current = requestId;
     setPreviewBusy(true);
+    if (resetPlan) {
+      setPlan(null);
+      setPageIndex(0);
+      setSelectedTrashCandidates({});
+    }
     if (clearNotice) {
       setNotice(null);
       setApplyErrors([]);
     }
 
     try {
-      const nextPlan = await api<OrganizePlan>(quick ? "/organize/preview?quick=1" : "/organize/preview", { method: "POST" });
+      const path = quick ? "/organize/preview?quick=1" : `/organize/preview?refresh=${Date.now()}`;
+      const nextPlan = await api<OrganizePlan>(path, { method: "POST" });
       if (requestId === previewRequestId.current) {
         showPlan(nextPlan);
         await onChanged();
@@ -1449,8 +1459,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
       setNotice(`${result.moved} moved, ${result.skipped} skipped${errorSuffix}. Preview refreshed.`);
       setApplyErrors(result.errors);
 
-      showPlan(result.plan);
-      await load({ clearNotice: false });
+      await load({ clearNotice: false, resetPlan: true });
     } catch (caught) {
       setNotice((caught as Error).message);
     } finally {
@@ -1481,9 +1490,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
       const errorSuffix = result.errors.length ? `, ${result.errors.length} errors` : "";
       setNotice(`${result.trashed} moved to recycle bin${errorSuffix}. Preview refreshed.`);
       setApplyErrors(result.errors);
-      setSelectedTrashCandidates({});
-      showPlan(result.plan);
-      await load({ clearNotice: false });
+      await load({ clearNotice: false, resetPlan: true });
     } catch (caught) {
       setNotice((caught as Error).message);
     } finally {
@@ -1522,7 +1529,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
           )}
         </div>
         <div className="button-row">
-          <button className="secondary-button" type="button" onClick={() => load()} disabled={previewBusy || applyBusy || Boolean(trashBusyKey)}>
+          <button className="secondary-button" type="button" onClick={() => load({ resetPlan: true })} disabled={previewBusy || applyBusy || Boolean(trashBusyKey)}>
             {previewBusy ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
             <span>{previewBusy ? "Previewing" : "Preview"}</span>
           </button>
