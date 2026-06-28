@@ -5,10 +5,11 @@ import path from "node:path";
 import type { ScanStatus, TrackFile } from "../shared/types.js";
 import { saveCatalog } from "./catalog.js";
 import { buildDuplicateKey } from "./matching.js";
+import { fetchNavidromeLibraryTracks, type NavidromeLibraryTrack } from "./navidrome.js";
 import { targetForTrack } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
 import { enrichTracksWithSpotifyOrganizeMetadata } from "./spotify.js";
-import { cleanDisplayValue, sha1, titleFromFilename, toPosixRelative } from "./utils.js";
+import { cleanDisplayValue, normalizeForMatch, sha1, titleFromFilename, toPosixRelative } from "./utils.js";
 
 type ProgressHandler = (status: Partial<ScanStatus>) => void;
 
@@ -52,7 +53,16 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
     });
   }
 
-  const enriched = await enrichTracksWithSpotifyOrganizeMetadata(settings, tracks, {
+  const navidromeEnriched = await enrichTracksWithNavidromeMetadata(settings, tracks);
+
+  for (const warning of navidromeEnriched.warnings) {
+    errors.push(warning);
+    if (errors.length > 100) {
+      errors.shift();
+    }
+  }
+
+  const enriched = await enrichTracksWithSpotifyOrganizeMetadata(settings, navidromeEnriched.tracks, {
     includeSummaryWarning: false,
     lookupMissing: false
   });
@@ -67,6 +77,222 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
 
   await saveCatalog(finalTracks);
   return { tracks: finalTracks, errors };
+}
+
+async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, tracks: TrackFile[]) {
+  const warnings: string[] = [];
+
+  if (!settings.navidrome.baseUrl || !settings.navidrome.username || !settings.navidrome.password) {
+    return { tracks, warnings };
+  }
+
+  let navidromeTracks: NavidromeLibraryTrack[];
+
+  try {
+    navidromeTracks = await fetchNavidromeLibraryTracks(settings);
+  } catch (error) {
+    return {
+      tracks,
+      warnings: [`Navidrome metadata scan skipped: ${(error as Error).message}`]
+    };
+  }
+
+  if (navidromeTracks.length === 0) {
+    return {
+      tracks,
+      warnings: ["Navidrome metadata scan returned no tracks; local file metadata was used."]
+    };
+  }
+
+  const index = buildNavidromeTrackIndex(navidromeTracks);
+  let matched = 0;
+  const enrichedTracks = tracks.map((track) => {
+    const navidromeTrack = findNavidromeTrackForFile(index, track);
+
+    if (!navidromeTrack) {
+      return track;
+    }
+
+    matched += 1;
+    return trackFileFromNavidromeTrack(track, navidromeTrack, settings);
+  });
+
+  if (matched === 0) {
+    warnings.push("Navidrome metadata was available, but no indexed tracks matched files under the library path.");
+  }
+
+  return {
+    tracks: enrichedTracks,
+    warnings
+  };
+}
+
+type NavidromeTrackIndex = {
+  byAbsolutePath: Map<string, NavidromeLibraryTrack>;
+  byRelativePath: Map<string, NavidromeLibraryTrack>;
+  byFilenameAndSize: Map<string, NavidromeLibraryTrack | null>;
+  byMetadata: Map<string, NavidromeLibraryTrack | null>;
+};
+
+function buildNavidromeTrackIndex(tracks: NavidromeLibraryTrack[]): NavidromeTrackIndex {
+  const index: NavidromeTrackIndex = {
+    byAbsolutePath: new Map(),
+    byRelativePath: new Map(),
+    byFilenameAndSize: new Map(),
+    byMetadata: new Map()
+  };
+
+  for (const track of tracks) {
+    if (track.sourceAbsolutePath) {
+      index.byAbsolutePath.set(pathKey(track.sourceAbsolutePath), track);
+    }
+
+    if (track.sourceRelativePath) {
+      index.byRelativePath.set(relativePathKey(track.sourceRelativePath), track);
+      addUniqueNavidromeMatch(index.byFilenameAndSize, filenameSizeKey(track.sourceRelativePath, track.size), track);
+    }
+
+    addUniqueNavidromeMatch(index.byMetadata, navidromeMetadataKey(track), track);
+  }
+
+  return index;
+}
+
+function findNavidromeTrackForFile(index: NavidromeTrackIndex, track: TrackFile) {
+  return (
+    index.byAbsolutePath.get(pathKey(track.absolutePath)) ??
+    index.byRelativePath.get(relativePathKey(track.relativePath)) ??
+    uniqueNavidromeMatch(index.byFilenameAndSize.get(filenameSizeKey(track.relativePath, track.size))) ??
+    uniqueNavidromeMatch(index.byMetadata.get(trackMetadataKey(track))) ??
+    null
+  );
+}
+
+function trackFileFromNavidromeTrack(
+  track: TrackFile,
+  navidromeTrack: NavidromeLibraryTrack,
+  settings: PrivateSettings
+): TrackFile {
+  const artist = cleanDisplayValue(navidromeTrack.artist, track.artist);
+  const albumArtist = cleanDisplayValue(navidromeTrack.albumArtist || navidromeTrack.artist, track.albumArtist || artist);
+  const album = cleanDisplayValue(navidromeTrack.album, track.album);
+  const title = cleanDisplayValue(navidromeTrack.title, track.title);
+  const albumType = cleanDisplayValue(navidromeTrack.albumType, track.albumType || "Album");
+  const trackNumber = navidromeTrack.trackNumber ?? track.trackNumber;
+  const trackTotal = navidromeTrack.trackTotal ?? track.trackTotal;
+  const discNumber = navidromeTrack.discNumber ?? track.discNumber;
+  const discTotal = navidromeTrack.discTotal ?? track.discTotal;
+  const year = navidromeTrack.year ?? track.year;
+  const duration = navidromeTrack.duration ?? track.duration;
+  const isrc = navidromeTrack.isrc ?? track.isrc ?? null;
+  const issues = track.issues.filter((issue) => {
+    if (issue === "Missing artist" && artist) {
+      return false;
+    }
+    if (issue === "Missing album" && album) {
+      return false;
+    }
+    if (issue === "Missing track number" && trackNumber) {
+      return false;
+    }
+    return true;
+  });
+  const partialTrack = {
+    ...track,
+    artist,
+    albumArtist,
+    album,
+    albumType,
+    title,
+    trackNumber,
+    trackTotal,
+    discNumber,
+    discTotal,
+    year,
+    duration,
+    isrc,
+    bitrate: track.bitrate ?? navidromeTrack.bitrate,
+    duplicateKey: buildDuplicateKey({
+      artist: albumArtist || artist,
+      album,
+      albumType: albumType || "Album",
+      title,
+      trackNumber,
+      discNumber,
+      year,
+      duration,
+      isrc
+    }),
+    issues,
+    targetSource: "navidrome"
+  } satisfies TrackFile;
+  const target = targetForTrack(partialTrack, settings);
+
+  return {
+    ...partialTrack,
+    targetPath: target.targetPath,
+    targetRelativePath: target.targetRelativePath
+  };
+}
+
+function addUniqueNavidromeMatch(
+  map: Map<string, NavidromeLibraryTrack | null>,
+  key: string,
+  track: NavidromeLibraryTrack
+) {
+  if (!key) {
+    return;
+  }
+
+  map.set(key, map.has(key) ? null : track);
+}
+
+function uniqueNavidromeMatch(track: NavidromeLibraryTrack | null | undefined) {
+  return track ?? null;
+}
+
+function pathKey(value: string) {
+  return path.resolve(value).toLowerCase();
+}
+
+function relativePathKey(value: string) {
+  return value.replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
+}
+
+function filenameSizeKey(relativePath: string | null, size: number | null) {
+  if (!relativePath || !size) {
+    return "";
+  }
+
+  return `${path.posix.basename(relativePath.replace(/\\/g, "/")).toLowerCase()}|${size}`;
+}
+
+function navidromeMetadataKey(track: NavidromeLibraryTrack) {
+  return [
+    normalizeForMatch(track.albumArtist || track.artist, { removeBracketedText: false }),
+    normalizeForMatch(track.album, { removeBracketedText: false }),
+    normalizeForMatch(track.title, { removeBracketedText: false }),
+    track.discNumber ?? 1,
+    track.trackNumber ?? "",
+    durationBucket(track.duration),
+    track.size ?? ""
+  ].join("|");
+}
+
+function trackMetadataKey(track: TrackFile) {
+  return [
+    normalizeForMatch(track.albumArtist || track.artist, { removeBracketedText: false }),
+    normalizeForMatch(track.album, { removeBracketedText: false }),
+    normalizeForMatch(track.title, { removeBracketedText: false }),
+    track.discNumber ?? 1,
+    track.trackNumber ?? "",
+    durationBucket(track.duration),
+    track.size ?? ""
+  ].join("|");
+}
+
+function durationBucket(duration: number | null) {
+  return duration ? Math.round(duration / 2) * 2 : "";
 }
 
 async function collectAudioFiles(root: string, extensions: Set<string>, recycleRoot: string, onProgress?: ProgressHandler) {
