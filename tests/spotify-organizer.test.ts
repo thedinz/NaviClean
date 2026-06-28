@@ -6,7 +6,7 @@ import { test } from "node:test";
 import type { TrackFile } from "../src/shared/types.js";
 import { buildOrganizePlan } from "../src/server/organizer.js";
 import type { PrivateSettings } from "../src/server/settings.js";
-import { enrichTracksWithSpotifyOrganizeMetadata } from "../src/server/spotify.js";
+import { closeSpotifyOrganizeStoreForTests, enrichTracksWithSpotifyOrganizeMetadata } from "../src/server/spotify.js";
 
 test("spotify organize enrichment uses Spotify album metadata for target naming", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-spotify-organizer-"));
@@ -93,6 +93,103 @@ test("spotify organize enrichment uses Spotify album metadata for target naming"
     assert.equal(plan.items[0]?.targetRelativePath, relativePath);
   } finally {
     globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("spotify organize enrichment reuses durable cached metadata without a lookup", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-spotify-cache-"));
+  const storePath = path.resolve(process.cwd(), ".data", "spotify-organize.sqlite");
+  const originalFetch = globalThis.fetch;
+  let searchCalls = 0;
+
+  closeSpotifyOrganizeStoreForTests();
+  await fs.rm(storePath, { force: true });
+  await fs.rm(`${storePath}-journal`, { force: true });
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.hostname === "accounts.spotify.com") {
+      return jsonResponse({
+        access_token: "test-token",
+        expires_in: 3600
+      });
+    }
+
+    if (url.hostname === "api.spotify.com" && url.pathname === "/v1/search") {
+      searchCalls += 1;
+      return jsonResponse({
+        tracks: {
+          items: [
+            {
+              album: {
+                album_type: "album",
+                artists: [{ id: "artist-cache", name: "Cache Artist" }],
+                external_urls: { spotify: "https://open.spotify.com/album/album-cache" },
+                id: "album-cache",
+                images: [],
+                name: "Cache Album",
+                release_date: "2025-02-14",
+                total_tracks: 10
+              },
+              artists: [{ id: "artist-cache", name: "Cache Artist" }],
+              disc_number: 1,
+              duration_ms: 210000,
+              explicit: false,
+              external_ids: { isrc: "USABC2500002" },
+              external_urls: { spotify: "https://open.spotify.com/track/track-cache" },
+              id: "track-cache",
+              name: "Cache Song",
+              track_number: 2
+            }
+          ]
+        }
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
+
+  try {
+    const relativePath =
+      "Cache Artist/Cache Artist - Cache Album (2025)/Cache Artist - Cache Album (2025) - 02 - Cache Song.mp3";
+    const absolutePath = path.join(root, ...relativePath.split("/"));
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    await fs.writeFile(absolutePath, "audio");
+
+    const inputTrack = track({
+      absolutePath,
+      relativePath,
+      album: "Cache Album",
+      albumArtist: "Cache Artist",
+      artist: "Cache Artist",
+      title: "Cache Song",
+      trackNumber: 2,
+      year: 2025
+    });
+    const first = await enrichTracksWithSpotifyOrganizeMetadata(settings(root), [inputTrack]);
+
+    assert.equal(searchCalls, 1);
+    assert.equal(first.tracks[0]?.targetSource, "spotify");
+
+    globalThis.fetch = async () => {
+      throw new Error("Spotify should not be called when lookupMissing is false and the cache is fresh.");
+    };
+
+    const second = await enrichTracksWithSpotifyOrganizeMetadata(settings(root), [inputTrack], {
+      includeSummaryWarning: false,
+      lookupMissing: false
+    });
+
+    assert.equal(second.tracks[0]?.targetSource, "spotify");
+    assert.equal(second.tracks[0]?.title, "Cache Song");
+    assert.equal(second.tracks[0]?.isrc, "USABC2500002");
+  } finally {
+    globalThis.fetch = originalFetch;
+    closeSpotifyOrganizeStoreForTests();
+    await fs.rm(storePath, { force: true });
+    await fs.rm(`${storePath}-journal`, { force: true });
     await fs.rm(root, { force: true, recursive: true });
   }
 });

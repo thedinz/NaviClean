@@ -30,6 +30,15 @@ test("standard mode includes disc number for multi-disc albums", () => {
   );
 });
 
+test("standard mode keeps disc one tracks in standard numbering", () => {
+  const target = targetForTrack(track({ discNumber: 1, discTotal: 2 }), settings({ mode: "standard" }));
+
+  assert.equal(
+    target.targetRelativePath,
+    "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3"
+  );
+});
+
 test("custom naming templates are ignored", () => {
   const target = targetForTrack(
     track({ albumType: "single", trackTotal: 5 }),

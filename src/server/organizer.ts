@@ -399,9 +399,7 @@ function templateRelativePath(track: TrackFile, settings: PrivateSettings, exten
 }
 
 function selectTrackFormat(track: TrackFile) {
-  const isMultiDisc =
-    (typeof track.discTotal === "number" && track.discTotal > 1) ||
-    (typeof track.discNumber === "number" && track.discNumber > 1);
+  const isMultiDisc = typeof track.discNumber === "number" && track.discNumber > 1;
 
   if (isMultiDisc) {
     return standardNamingFormatDefaults.multiDiscTrackFormat;
@@ -555,6 +553,7 @@ function sanitizeTemplateSegment(value: string, naming: PrivateSettings["naming"
   }
 
   segment = segment.replace(controlCharacters, "").replace(/\s+/g, " ").replace(/\.+$/g, "").trim();
+  segment = cleanupRenderedTemplateSegment(segment);
 
   if (!segment || segment === "." || segment === "..") {
     return "";
