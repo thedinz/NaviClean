@@ -1,11 +1,20 @@
 FROM node:20-bookworm-slim AS build
 WORKDIR /app
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    g++ \
+    make \
+    python3 \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY package*.json ./
 RUN npm ci
 
 COPY . .
-RUN npm run build
+RUN npm run build \
+  && npm prune --omit=dev \
+  && npm cache clean --force
 
 FROM node:20-bookworm-slim AS runtime
 ENV NODE_ENV=production \
@@ -27,10 +36,9 @@ RUN apt-get update \
     python3 \
     python3-pip \
   && rm -rf /var/lib/apt/lists/* \
-  && python3 -m pip install --no-cache-dir --break-system-packages --upgrade --pre "yt-dlp[default]" \
-  && npm ci --omit=dev \
-  && npm cache clean --force
+  && python3 -m pip install --no-cache-dir --break-system-packages --upgrade --pre "yt-dlp[default]"
 
+COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
