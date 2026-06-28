@@ -1,12 +1,5 @@
-FROM node:20-bookworm-slim AS build
+FROM node:24-bookworm-slim AS build
 WORKDIR /app
-
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-    g++ \
-    make \
-    python3 \
-  && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
 RUN npm ci
@@ -16,7 +9,7 @@ RUN npm run build \
   && npm prune --omit=dev \
   && npm cache clean --force
 
-FROM node:20-bookworm-slim AS runtime
+FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     PORT=8080 \
     PUID=1000 \

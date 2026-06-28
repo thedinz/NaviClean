@@ -1121,11 +1121,11 @@ function spotifyOrganizeDb() {
 
 function createSpotifyOrganizeDatabase(): SqliteDatabase {
   try {
-    const BetterSqlite3 = require("better-sqlite3") as new (databasePath: string) => SqliteDatabase;
-    return new BetterSqlite3(spotifyOrganizeDatabasePath);
-  } catch {
     const nodeSqlite = require("node:sqlite") as { DatabaseSync: new (databasePath: string) => SqliteDatabase };
     return new nodeSqlite.DatabaseSync(spotifyOrganizeDatabasePath);
+  } catch {
+    const BetterSqlite3 = require("better-sqlite3") as new (databasePath: string) => SqliteDatabase;
+    return new BetterSqlite3(spotifyOrganizeDatabasePath);
   }
 }
 
