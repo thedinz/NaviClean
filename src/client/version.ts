@@ -1,4 +1,4 @@
 export const appVersion = {
-  version: "0.1.0",
-  branch: "dev"
+  version: "0.2.0",
+  branch: "main"
 } as const;

@@ -203,10 +203,12 @@ export type NamingSettings = {
   colonReplacementFormat: number;
 };
 
-export type NamingMode = "standard" | "manual";
+export type NamingMode = "standard";
 
 export type ScanSettings = {
   extensions: string[];
+  autoScanEnabled: boolean;
+  autoScanTime: string;
 };
 
 export type SettingsView = {
@@ -273,7 +275,7 @@ export type TrackFile = {
   qualityScore: number;
   targetPath: string;
   targetRelativePath: string;
-  targetSource?: "naviclean" | "spotify";
+  targetSource?: "naviclean" | "navidrome" | "spotify";
   issues: string[];
 };
 
@@ -304,6 +306,7 @@ export type ScanStatus = {
   scannedFiles: number;
   audioFiles: number;
   errors: string[];
+  warnings: string[];
 };
 
 export type LibraryStats = {
@@ -381,7 +384,7 @@ export type OrganizePlanItem = {
   targetPath: string;
   sourceRelativePath: string;
   targetRelativePath: string;
-  targetSource?: "naviclean" | "spotify";
+  targetSource?: "naviclean" | "navidrome" | "spotify";
   status: "ready" | "same" | "duplicate-target" | "conflict" | "outside-library" | "missing-source";
   message: string;
   collision?: OrganizeCollision;
@@ -434,7 +437,7 @@ export type OrganizeApplyResult = {
   skipped: number;
   errors: string[];
   items: Array<OrganizePlanItem & { applied: boolean }>;
-  plan?: OrganizePlan;
+  plan: OrganizePlan;
 };
 
 export type OrganizeTrashResult = {
