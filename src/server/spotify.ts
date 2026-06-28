@@ -82,7 +82,7 @@ type SpotifyOrganizeTrack = {
 type SpotifyOrganizeCache = {
   matches: Record<string, SpotifyOrganizeCacheEntry>;
   updatedAt: string;
-  version: 2;
+  version: 3;
 };
 
 type SpotifyOrganizeCacheEntry = {
@@ -134,7 +134,7 @@ let spotifyOrganizeDatabase: SqliteDatabase | null = null;
 
 const spotifyOrganizeJsonCachePath = path.join(getDataDir(), "spotify-organize-cache.json");
 const spotifyOrganizeDatabasePath = path.join(getDataDir(), "spotify-organize.sqlite");
-const spotifyOrganizeCacheVersion = 2;
+const spotifyOrganizeCacheVersion = 3;
 const spotifyOrganizeLegacyCacheVersion = 1;
 const spotifyOrganizeNoMatchTtlMs = 7 * 24 * 60 * 60 * 1000;
 const spotifyOrganizeMatchTtlMs = 90 * 24 * 60 * 60 * 1000;
@@ -337,7 +337,8 @@ export async function enrichTracksWithSpotifyOrganizeMetadata(
 
   for (const track of eligibleTracks) {
     const cacheKeys = spotifyOrganizeCacheKeys(settings, track);
-    const freshCacheEntry = firstFreshSpotifyOrganizeCacheEntry(cache, cacheKeys);
+    const hints = spotifyOrganizeHints(track);
+    const freshCacheEntry = firstFreshSpotifyOrganizeCacheEntry(cache, cacheKeys, hints);
 
     checked += 1;
 
@@ -817,6 +818,7 @@ function scoreSpotifyOrganizeTrack(track: SpotifyOrganizeTrack, hint: SpotifyOrg
   const titleScore = textMatchScore(hint.title, track.name, 35, 24);
   const artistScore = artistMatchScore(hint, track);
   const albumScore = textMatchScore(hint.album, track.album, 20, 12);
+  const albumMismatch = !isUnknownSpotifyOrganizeValue(hint.album) && albumScore === 0;
   const exactIsrc = Boolean(hint.isrc && track.isrc && hint.isrc === track.isrc);
   let score = titleScore + artistScore + albumScore;
 
@@ -844,6 +846,10 @@ function scoreSpotifyOrganizeTrack(track: SpotifyOrganizeTrack, hint: SpotifyOrg
 
   if (titleScore === 0 || artistScore === 0) {
     score = Math.min(score, exactIsrc ? score : 65);
+  }
+
+  if (albumMismatch) {
+    score = Math.min(score, 74);
   }
 
   return {
@@ -979,10 +985,17 @@ function spotifyOrganizeLegacyCacheKey(settings: PrivateSettings, track: TrackFi
   }));
 }
 
-function firstFreshSpotifyOrganizeCacheEntry(cache: SpotifyOrganizeCache, keys: string[]) {
+function firstFreshSpotifyOrganizeCacheEntry(
+  cache: SpotifyOrganizeCache,
+  keys: string[],
+  hints: SpotifyOrganizeHint[]
+) {
   for (const key of keys) {
     const entry = cache.matches[key];
     if (entry && spotifyOrganizeCacheEntryIsFresh(entry)) {
+      if (entry.status === "matched" && (!entry.track || !confidentSpotifyOrganizeScore([entry.track], hints))) {
+        continue;
+      }
       return entry;
     }
   }

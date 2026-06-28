@@ -53,7 +53,8 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
   }
 
   const enriched = await enrichTracksWithSpotifyOrganizeMetadata(settings, tracks, {
-    includeSummaryWarning: false
+    includeSummaryWarning: false,
+    lookupMissing: false
   });
   const finalTracks = enriched.tracks;
 

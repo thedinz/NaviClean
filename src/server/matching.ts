@@ -24,7 +24,8 @@ export function duplicateKeyForTrack(track: TrackFile) {
     trackNumber: track.trackNumber,
     discNumber: track.discNumber,
     year: track.year,
-    duration: track.duration
+    duration: track.duration,
+    isrc: track.isrc
   });
 }
 
