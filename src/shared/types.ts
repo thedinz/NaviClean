@@ -306,6 +306,7 @@ export type ScanStatus = {
   scannedFiles: number;
   audioFiles: number;
   errors: string[];
+  warnings: string[];
 };
 
 export type LibraryStats = {

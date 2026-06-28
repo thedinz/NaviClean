@@ -55,7 +55,8 @@ const scanStatus: ScanStatus = {
   finishedAt: null,
   scannedFiles: 0,
   audioFiles: 0,
-  errors: []
+  errors: [],
+  warnings: []
 };
 let autoScanTimer: NodeJS.Timeout | null = null;
 let cachedOrganizeEvaluation: OrganizeEvaluation | null = null;
@@ -354,6 +355,7 @@ app.delete("/api/library/artists/:artistId", asyncHandler(async (req, res) => {
   const result = await trashLibraryTracks(await loadSettingsForPlanning(), catalog.tracks, tracks.map((track) => track.id));
 
   await saveCatalog(result.tracks);
+  invalidateOrganizeEvaluationCache();
   res.json(libraryTrashResponse(result));
 }));
 
@@ -371,6 +373,7 @@ app.delete("/api/library/artists/:artistId/albums/:albumId", asyncHandler(async 
   const result = await trashLibraryTracks(await loadSettingsForPlanning(), catalog.tracks, tracks.map((track) => track.id));
 
   await saveCatalog(result.tracks);
+  invalidateOrganizeEvaluationCache();
   res.json(libraryTrashResponse(result));
 }));
 
@@ -387,6 +390,7 @@ app.delete("/api/library/tracks/:trackId", asyncHandler(async (req, res) => {
   const result = await trashLibraryTracks(await loadSettingsForPlanning(), catalog.tracks, [track.id]);
 
   await saveCatalog(result.tracks);
+  invalidateOrganizeEvaluationCache();
   res.json(libraryTrashResponse(result));
 }));
 
@@ -475,6 +479,7 @@ app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
       };
     });
     latestCatalog = await saveCatalog(tracks);
+    invalidateOrganizeEvaluationCache();
   }
 
   const refreshed = await getOrganizeEvaluation({ ...latestCatalog, tracks }, settings);
@@ -495,6 +500,7 @@ app.post("/api/organize/trash", asyncHandler(async (req, res) => {
   const planned = await getOrganizeEvaluation(catalog, settings);
   const result = await trashOrganizeCandidate(settings, planned.tracks, itemId, candidateId);
   const savedCatalog = await saveCatalog(result.tracks);
+  invalidateOrganizeEvaluationCache();
   const refreshed = await getOrganizeEvaluation(savedCatalog, settings);
 
   res.json({
@@ -527,6 +533,7 @@ app.post("/api/organize/trash/bulk", asyncHandler(async (req, res) => {
   const planned = await getOrganizeEvaluation(catalog, settings);
   const result = await trashOrganizeCandidates(settings, planned.tracks, selections);
   const savedCatalog = await saveCatalog(result.tracks);
+  invalidateOrganizeEvaluationCache();
   const refreshed = await getOrganizeEvaluation(savedCatalog, settings);
 
   res.json({
@@ -558,6 +565,7 @@ app.post("/api/duplicates/resolve", asyncHandler(async (req, res) => {
   const result = await resolveDuplicates(settings, catalog.tracks, keepId, removeIds);
 
   await saveCatalog(result.tracks);
+  invalidateOrganizeEvaluationCache();
   res.json({
     keptId: result.keptId,
     trashed: result.trashed,
@@ -585,6 +593,7 @@ app.post("/api/duplicates/resolve/bulk", asyncHandler(async (req, res) => {
   const result = await resolveSelectedDuplicates(settings, catalog.tracks, removeIds);
 
   await saveCatalog(result.tracks);
+  invalidateOrganizeEvaluationCache();
   res.json({
     trashed: result.trashed,
     removedTrackIds: result.removedTrackIds,
@@ -656,9 +665,12 @@ async function runScan() {
     const result = await scanLibrary(settings, (update) => {
       Object.assign(scanStatus, update);
     });
+    invalidateOrganizeEvaluationCache();
     scanStatus.errors = result.errors;
+    scanStatus.warnings = result.warnings;
   } catch (error) {
     scanStatus.errors = [(error as Error).message];
+    scanStatus.warnings = [];
   } finally {
     scanStatus.running = false;
     scanStatus.finishedAt = new Date().toISOString();
@@ -676,7 +688,8 @@ function startBackgroundScan() {
     finishedAt: null,
     scannedFiles: 0,
     audioFiles: 0,
-    errors: []
+    errors: [],
+    warnings: []
   });
 
   void runScan();
@@ -800,6 +813,11 @@ async function buildAndCacheOrganizeEvaluation(catalog: CatalogSnapshot, setting
       pendingOrganizeEvaluation = null;
     }
   }
+}
+
+function invalidateOrganizeEvaluationCache() {
+  cachedOrganizeEvaluation = null;
+  pendingOrganizeEvaluation = null;
 }
 
 function organizeEvaluationFromPlan(

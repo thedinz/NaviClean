@@ -383,6 +383,15 @@ function Dashboard({ stats, scan }: { stats: LibraryStats | null; scan: ScanStat
           <span>{stats?.lastScanFinishedAt ? formatDate(stats.lastScanFinishedAt) : "No completed scan"}</span>
         </div>
         {scan?.running && <ActionProgress label="Scanning library" />}
+        {scan?.warnings.length ? (
+          <div className="notice-bar safety">
+            <strong>Scan notes</strong>
+            {scan.warnings.slice(0, 5).map((item) => (
+              <span key={item}>{item}</span>
+            ))}
+            {scan.warnings.length > 5 && <span>{scan.warnings.length - 5} more notes</span>}
+          </div>
+        ) : null}
         {scan?.errors.length ? (
           <div className="error-list">
             {scan.errors.slice(0, 5).map((item) => (
