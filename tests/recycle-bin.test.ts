@@ -13,14 +13,19 @@ test("lists recycle bin files with original paths and totals", async () => {
     const recycleBinPath = path.join(root, ".naviclean-trash");
     await fs.mkdir(path.join(recycleBinPath, "2026-06-21T07-42-49-123Z", "Artist"), { recursive: true });
     await fs.writeFile(path.join(recycleBinPath, "2026-06-21T07-42-49-123Z", "Artist", "Track.mp3"), "audio");
+    await fs.mkdir(path.join(recycleBinPath, "2026-06-21T07-42-49-123Z", "Artist", "Empty Album"), { recursive: true });
 
     const view = await listRecycleBin(settings(root));
+    const fileItem = view.items.find((item) => item.originalRelativePath === "Artist/Track.mp3");
+    const folderItem = view.items.find((item) => item.originalRelativePath === "Artist/Empty Album");
 
     assert.equal(view.recycleBinPath, path.resolve(recycleBinPath));
-    assert.equal(view.totalFiles, 1);
+    assert.equal(view.totalFiles, 2);
     assert.equal(view.totalSize, 5);
-    assert.equal(view.items[0]?.originalRelativePath, "Artist/Track.mp3");
-    assert.equal(view.items[0]?.deletedAt, "2026-06-21T07:42:49.123Z");
+    assert.equal(fileItem?.itemType, "file");
+    assert.equal(fileItem?.deletedAt, "2026-06-21T07:42:49.123Z");
+    assert.equal(folderItem?.itemType, "folder");
+    assert.equal(folderItem?.size, 0);
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }
@@ -76,6 +81,33 @@ test("restores selected recycle bin files to their original library paths", asyn
     assert.equal(result.restoredBytes, 8);
     assert.deepEqual(result.errors, []);
     assert.equal(await fs.readFile(restoredPath, "utf8"), "metadata");
+    await assert.rejects(fs.access(trashPath), /ENOENT/);
+    assert.equal(result.recycleBin.totalFiles, 0);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("restores selected recycle bin folders to their original library paths", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-trash-"));
+
+  try {
+    const recycleBinPath = path.join(root, ".naviclean-trash");
+    const trashPath = path.join(recycleBinPath, "2026-06-21T07-42-49-123Z", "Artist", "Empty Album");
+    const restoredPath = path.join(root, "Artist", "Empty Album");
+    await fs.mkdir(trashPath, { recursive: true });
+
+    const before = await listRecycleBin(settings(root));
+    const item = before.items.find((candidate) => candidate.originalRelativePath === "Artist/Empty Album");
+
+    assert.equal(item?.itemType, "folder");
+
+    const result = await restoreRecycleBinItems(settings(root), [item?.id || ""]);
+
+    assert.equal(result.restoredFiles, 1);
+    assert.equal(result.restoredBytes, 0);
+    assert.deepEqual(result.errors, []);
+    assert.equal((await fs.stat(restoredPath)).isDirectory(), true);
     await assert.rejects(fs.access(trashPath), /ENOENT/);
     assert.equal(result.recycleBin.totalFiles, 0);
   } finally {

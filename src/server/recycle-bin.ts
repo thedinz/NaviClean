@@ -10,11 +10,18 @@ import type {
 import type { PrivateSettings } from "./settings.js";
 import { isInsidePath, sha1, toPosixRelative } from "./utils.js";
 
+type RecycleBinEntry = {
+  absolutePath: string;
+  itemType: RecycleBinItem["itemType"];
+  mtimeMs: number;
+  size: number;
+};
+
 export async function listRecycleBin(settings: PrivateSettings): Promise<RecycleBinView> {
   const recycleBinPath = safeRecycleBinPath(settings);
-  const files = await collectRecycleBinFiles(recycleBinPath);
-  const items = files
-    .map((file) => recycleBinItemForFile(recycleBinPath, file.absolutePath, file.size, file.mtimeMs))
+  const entries = await collectRecycleBinEntries(recycleBinPath);
+  const items = entries
+    .map((entry) => recycleBinItemForEntry(recycleBinPath, entry))
     .sort((left, right) => right.mtimeMs - left.mtimeMs || left.relativePath.localeCompare(right.relativePath));
   const totalSize = items.reduce((total, item) => total + item.size, 0);
 
@@ -63,7 +70,7 @@ export async function deleteRecycleBinItems(
     }
 
     try {
-      await fs.rm(itemPath, { force: false });
+      await fs.rm(itemPath, { force: false, recursive: item.itemType === "folder" });
       touchedDirectories.add(path.dirname(itemPath));
       deletedFiles += 1;
       deletedBytes += item.size;
@@ -131,7 +138,7 @@ export async function restoreRecycleBinItems(
 
     try {
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await moveFile(itemPath, targetPath);
+      await moveEntry(itemPath, targetPath);
       touchedDirectories.add(path.dirname(itemPath));
       restoredFiles += 1;
       restoredBytes += item.size;
@@ -173,16 +180,16 @@ function safeRecycleBinPath(settings: PrivateSettings) {
   return recycleBinPath;
 }
 
-async function collectRecycleBinFiles(root: string) {
-  const files: Array<{ absolutePath: string; size: number; mtimeMs: number }> = [];
+async function collectRecycleBinEntries(root: string) {
+  const entries: RecycleBinEntry[] = [];
   const stack = [root];
 
   while (stack.length > 0) {
     const current = stack.pop() as string;
-    let entries: Dirent[];
+    let directoryEntries: Dirent[];
 
     try {
-      entries = await fs.readdir(current, { withFileTypes: true });
+      directoryEntries = await fs.readdir(current, { withFileTypes: true });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         continue;
@@ -191,7 +198,23 @@ async function collectRecycleBinFiles(root: string) {
       throw new Error(`Unable to read recycle bin ${current}: ${(error as Error).message}`);
     }
 
-    for (const entry of entries) {
+    if (current !== root && directoryEntries.length === 0) {
+      const relativePath = toPosixRelative(root, current);
+      const segments = relativePath.split("/").filter(Boolean);
+
+      if (segments.length > 1) {
+        const stat = await fs.stat(current);
+        entries.push({
+          absolutePath: current,
+          itemType: "folder",
+          size: 0,
+          mtimeMs: stat.mtimeMs
+        });
+      }
+      continue;
+    }
+
+    for (const entry of directoryEntries) {
       const absolutePath = path.join(current, entry.name);
 
       if (entry.isDirectory()) {
@@ -204,32 +227,35 @@ async function collectRecycleBinFiles(root: string) {
       }
 
       const stat = await fs.stat(absolutePath);
-      files.push({
+      entries.push({
         absolutePath,
+        itemType: "file",
         size: stat.size,
         mtimeMs: stat.mtimeMs
       });
     }
   }
 
-  return files;
+  return entries;
 }
 
-function recycleBinItemForFile(root: string, absolutePath: string, size: number, mtimeMs: number): RecycleBinItem {
+function recycleBinItemForEntry(root: string, entry: RecycleBinEntry): RecycleBinItem {
+  const absolutePath = entry.absolutePath;
   const relativePath = toPosixRelative(root, absolutePath);
   const segments = relativePath.split("/").filter(Boolean);
   const deletedGroup = segments[0] || "";
   const originalRelativePath = segments.length > 1 ? segments.slice(1).join("/") : relativePath;
 
   return {
-    id: sha1(relativePath),
+    id: sha1(`${entry.itemType}:${relativePath}`),
+    itemType: entry.itemType,
     relativePath,
     originalRelativePath,
     deletedGroup,
     deletedAt: parseRecycleBinGroupDate(deletedGroup),
     extension: path.extname(absolutePath).toLowerCase(),
-    size,
-    mtimeMs
+    size: entry.size,
+    mtimeMs: entry.mtimeMs
   };
 }
 
@@ -249,7 +275,7 @@ function parseRecycleBinGroupDate(value: string) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
-async function moveFile(source: string, target: string) {
+async function moveEntry(source: string, target: string) {
   try {
     await fs.rename(source, target);
   } catch (error) {
@@ -258,6 +284,15 @@ async function moveFile(source: string, target: string) {
     }
 
     const stat = await fs.stat(source);
+
+    if (stat.isDirectory()) {
+      await fs.mkdir(target);
+      await fs.chmod(target, stat.mode);
+      await fs.utimes(target, stat.atime, stat.mtime);
+      await fs.rmdir(source);
+      return;
+    }
+
     await fs.copyFile(source, target, constants.COPYFILE_EXCL);
     await fs.chmod(target, stat.mode);
     await fs.utimes(target, stat.atime, stat.mtime);

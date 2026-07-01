@@ -12,6 +12,7 @@ import {
   listEmptyLibraryFolders,
   trashLibraryTracks
 } from "../src/server/library.js";
+import { listRecycleBin } from "../src/server/recycle-bin.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 import type { TrackFile } from "../src/shared/types.js";
 
@@ -134,11 +135,28 @@ test("empty folder cleanup runs one visible level per pass", async () => {
     await fs.access(path.join(root, "Artist"));
     await fs.access(ignoredTrashPath);
 
+    const firstTrash = await listRecycleBin(settings(root));
+    assert.deepEqual(firstTrash.items.filter((item) => item.deletedAt).map((item) => [item.itemType, item.originalRelativePath]), [
+      ["folder", "Artist/Empty Album"]
+    ]);
+
     const secondPass = await deleteEmptyLibraryFolders(settings(root), [result.emptyFolders.folders[0]?.id || ""]);
 
     assert.equal(secondPass.deleted, 1);
     assert.deepEqual(secondPass.emptyFolders.folders.map((folder) => folder.relativePath), []);
     await assert.rejects(fs.access(path.join(root, "Artist")), /ENOENT/);
+
+    const secondTrash = await listRecycleBin(settings(root));
+    assert.deepEqual(
+      secondTrash.items
+        .filter((item) => item.deletedAt)
+        .map((item) => [item.itemType, item.originalRelativePath])
+        .sort((left, right) => left[1].localeCompare(right[1])),
+      [
+        ["folder", "Artist"],
+        ["folder", "Artist/Empty Album"]
+      ]
+    );
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }

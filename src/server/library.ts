@@ -161,6 +161,8 @@ export async function deleteEmptyLibraryFolders(
 
   const before = await listEmptyLibraryFolders(settings);
   const libraryRoot = path.resolve(settings.naming.libraryPath);
+  const trashRoot = safeRecycleBinPath(settings);
+  const trashSessionRoot = path.join(trashRoot, new Date().toISOString().replace(/[:.]/g, "-"));
   const currentFolders = new Map(before.folders.map((folder) => [folder.id, folder]));
   const errors: string[] = [...before.errors];
   let deleted = 0;
@@ -181,7 +183,14 @@ export async function deleteEmptyLibraryFolders(
     }
 
     try {
-      await fs.rmdir(folderPath);
+      const targetPath = path.join(trashSessionRoot, ...folder.relativePath.split("/").filter(Boolean));
+
+      if (!isInsidePath(trashSessionRoot, targetPath) || targetPath === trashSessionRoot) {
+        errors.push(`${folder.relativePath}: recycle target leaves the recycle session folder`);
+        continue;
+      }
+
+      await moveEmptyDirectoryToTrash(folderPath, targetPath);
       deleted += 1;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -569,4 +578,25 @@ async function pruneEmptyDirectories(root: string, startDirectory: string) {
 
     current = path.dirname(current);
   }
+}
+
+async function moveEmptyDirectoryToTrash(source: string, target: string) {
+  const stat = await fs.stat(source);
+
+  if (!stat.isDirectory()) {
+    throw new Error("path is no longer a folder");
+  }
+
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.mkdir(target);
+
+  try {
+    await fs.rmdir(source);
+  } catch (error) {
+    await fs.rmdir(target).catch(() => undefined);
+    throw error;
+  }
+
+  await fs.chmod(target, stat.mode);
+  await fs.utimes(target, stat.atime, stat.mtime);
 }

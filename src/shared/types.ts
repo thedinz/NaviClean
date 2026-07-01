@@ -423,6 +423,7 @@ export type NonMusicTrashResult = {
 
 export type RecycleBinItem = {
   id: string;
+  itemType: "file" | "folder";
   relativePath: string;
   originalRelativePath: string;
   deletedGroup: string;

@@ -780,7 +780,7 @@ function EmptyFoldersPage() {
       return;
     }
 
-    if (!window.confirm(`Permanently delete ${selectedFolders.length} empty ${pluralize("folder", selectedFolders.length)}?`)) {
+    if (!window.confirm(`Move ${selectedFolders.length} empty ${pluralize("folder", selectedFolders.length)} to Trash?`)) {
       return;
     }
 
@@ -841,7 +841,7 @@ function EmptyFoldersPage() {
             disabled={Boolean(busy) || selectedFolders.length === 0}
           >
             {busy === "delete" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
-            <span>{busy === "delete" ? "Deleting" : "Delete selected"}</span>
+            <span>{busy === "delete" ? "Moving" : "Move selected to trash"}</span>
           </button>
         </div>
       </div>
@@ -849,7 +849,7 @@ function EmptyFoldersPage() {
         <ActionProgress
           label={
             busy === "delete"
-              ? "Deleting empty folders"
+              ? "Moving empty folders to trash"
               : busy === "exclude"
                 ? "Excluding empty folder"
                 : "Finding empty folders"
@@ -1741,7 +1741,7 @@ function TrashPage() {
       return;
     }
 
-    if (!window.confirm(`Restore ${selectedItems.length} selected file(s) to their original library paths?`)) {
+    if (!window.confirm(`Restore ${selectedItems.length} selected item(s) to their original library paths?`)) {
       return;
     }
 
@@ -1770,7 +1770,7 @@ function TrashPage() {
       return;
     }
 
-    if (!window.confirm(`Permanently delete ${selectedItems.length} selected file(s) from Trash?`)) {
+    if (!window.confirm(`Permanently delete ${selectedItems.length} selected item(s) from Trash?`)) {
       return;
     }
 
@@ -1799,7 +1799,7 @@ function TrashPage() {
       return;
     }
 
-    if (!window.confirm(`Permanently delete all ${view.totalFiles} file(s) from Trash?`)) {
+    if (!window.confirm(`Permanently delete all ${view.totalFiles} item(s) from Trash?`)) {
       return;
     }
 
@@ -1828,7 +1828,7 @@ function TrashPage() {
       </div>
       <div className="toolbar">
         <div className="summary-chips">
-          <span>{view?.totalFiles || 0} files</span>
+          <span>{view?.totalFiles || 0} items</span>
           <span>{formatBytes(view?.totalSize || 0)}</span>
           {filtersActive && <span>{filteredItems.length} shown</span>}
           <span>{selectedItems.length} selected</span>
@@ -1890,9 +1890,9 @@ function TrashPage() {
         <ActionProgress
           label={
             busy === "restore"
-              ? "Restoring recycle bin files"
+              ? "Restoring recycle bin items"
               : busy
-                ? "Deleting recycle bin files"
+                ? "Deleting recycle bin items"
                 : "Loading recycle bin"
           }
         />
@@ -1909,7 +1909,7 @@ function TrashPage() {
       {!loading && items.length === 0 ? (
         <EmptyState icon={Trash2} title="Trash is empty" />
       ) : !loading && filteredItems.length === 0 ? (
-        <EmptyState icon={Search} title="No matching trash files" />
+        <EmptyState icon={Search} title="No matching trash items" />
       ) : (
         <div className="table-wrap">
           <table>
@@ -1937,7 +1937,7 @@ function TrashPage() {
                   </td>
                   <td>
                     <strong>{item.deletedAt ? formatDate(item.deletedAt) : item.deletedGroup || "Unknown"}</strong>
-                    <span>{item.extension.replace(".", "").toUpperCase() || "File"}</span>
+                    <span>{trashItemKindLabel(item)}</span>
                   </td>
                   <td>
                     <span className="path-diff">{item.originalRelativePath}</span>
@@ -3529,7 +3529,7 @@ function nonMusicTrashNotice(result: NonMusicTrashResult) {
 function emptyFolderDeleteNotice(result: EmptyFolderDeleteResult) {
   const errorSuffix = result.errors.length ? ` (${result.errors.length} issue${result.errors.length === 1 ? "" : "s"})` : "";
   const nextPass = result.emptyFolders.total;
-  return `${result.deleted} empty ${pluralize("folder", result.deleted)} deleted${errorSuffix}. ${nextPass} in the next pass.`;
+  return `${result.deleted} empty ${pluralize("folder", result.deleted)} moved to Trash${errorSuffix}. ${nextPass} in the next pass.`;
 }
 
 function nonMusicClassificationLabel(value: NonMusicFileClassification) {
@@ -3578,45 +3578,57 @@ function trashItemMatchesType(item: RecycleBinItem, typeFilter: string) {
 }
 
 function trashItemType(item: RecycleBinItem) {
+  if (item.itemType === "folder") {
+    return { key: "folder", label: "Folders", rank: 0 };
+  }
+
   const extension = item.extension.toLowerCase();
 
   if (trashAudioExtensions.has(extension)) {
-    return { key: "audio", label: "Audio files", rank: 0 };
+    return { key: "audio", label: "Audio files", rank: 1 };
   }
 
   if (trashArtworkExtensions.has(extension)) {
-    return { key: "artwork", label: "Artwork/images", rank: 1 };
+    return { key: "artwork", label: "Artwork/images", rank: 2 };
   }
 
   if (trashMetadataExtensions.has(extension)) {
-    return { key: "metadata", label: "Metadata/review", rank: 2 };
+    return { key: "metadata", label: "Metadata/review", rank: 3 };
   }
 
   if (trashPlaylistExtensions.has(extension)) {
-    return { key: "playlist", label: "Playlists", rank: 3 };
+    return { key: "playlist", label: "Playlists", rank: 4 };
   }
 
   if (trashLyricsExtensions.has(extension)) {
-    return { key: "lyrics", label: "Lyrics", rank: 4 };
+    return { key: "lyrics", label: "Lyrics", rank: 5 };
   }
 
   if (trashArchiveExtensions.has(extension)) {
-    return { key: "archive", label: "Archives", rank: 5 };
+    return { key: "archive", label: "Archives", rank: 6 };
   }
 
   if (trashVideoExtensions.has(extension)) {
-    return { key: "video", label: "Video files", rank: 6 };
+    return { key: "video", label: "Video files", rank: 7 };
   }
 
   if (trashJunkExtensions.has(extension)) {
-    return { key: "junk", label: "Temporary/junk", rank: 7 };
+    return { key: "junk", label: "Temporary/junk", rank: 8 };
   }
 
   if (!extension) {
-    return { key: "extensionless", label: "No extension", rank: 8 };
+    return { key: "extensionless", label: "No extension", rank: 9 };
   }
 
-  return { key: "other", label: "Other files", rank: 9 };
+  return { key: "other", label: "Other files", rank: 10 };
+}
+
+function trashItemKindLabel(item: RecycleBinItem) {
+  if (item.itemType === "folder") {
+    return "Folder";
+  }
+
+  return item.extension.replace(".", "").toUpperCase() || "File";
 }
 
 function libraryMeta(values: string[]) {
