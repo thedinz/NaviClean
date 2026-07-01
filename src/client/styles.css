@@ -500,10 +500,6 @@ legend {
   align-items: flex-start;
 }
 
-.library-cleanup-actions {
-  justify-content: flex-start;
-}
-
 .library-breadcrumbs {
   display: flex;
   flex-wrap: wrap;
@@ -634,6 +630,11 @@ legend {
 
 .library-track-table {
   min-width: 860px;
+}
+
+.empty-folder-page {
+  display: grid;
+  gap: 14px;
 }
 
 .empty-folder-panel {
@@ -1437,7 +1438,7 @@ select:disabled {
   }
 
   .nav-list {
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr));
   }
 
   .nav-list button,
