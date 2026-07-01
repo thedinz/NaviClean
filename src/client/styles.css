@@ -637,6 +637,11 @@ legend {
   gap: 14px;
 }
 
+.non-music-page {
+  display: grid;
+  gap: 14px;
+}
+
 .empty-folder-panel {
   display: grid;
   gap: 12px;
@@ -656,6 +661,41 @@ legend {
 
 .empty-folder-table {
   min-width: 680px;
+}
+
+.non-music-table {
+  min-width: 920px;
+}
+
+.classification-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.classification-pill.useful {
+  background: #dff4ef;
+  color: #126f66;
+}
+
+.classification-pill.junk {
+  background: #fff0d5;
+  color: #85570f;
+}
+
+.classification-pill.review {
+  background: #edf0ec;
+  color: #4d5a56;
+}
+
+.example-list {
+  display: grid;
+  gap: 4px;
 }
 
 .library-track-table td:first-child {
@@ -949,6 +989,22 @@ select:disabled {
   display: grid;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.settings-list {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid #ebe9e2;
+  border-radius: 8px;
+  background: #fbfaf5;
 }
 
 .subsection-label {
@@ -1438,7 +1494,7 @@ select:disabled {
   }
 
   .nav-list {
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-columns: repeat(9, minmax(0, 1fr));
   }
 
   .nav-list button,

@@ -42,6 +42,9 @@ export type PrivateSettings = {
     autoScanEnabled: boolean;
     autoScanTime: string;
   };
+  cleanup: {
+    emptyFolderExclusions: string[];
+  };
 };
 
 const defaultExtensions = [
@@ -61,6 +64,9 @@ const defaultScan = {
   extensions: defaultExtensions,
   autoScanEnabled: true,
   autoScanTime: "02:00"
+};
+const defaultCleanup = {
+  emptyFolderExclusions: ["provider-downloads", ".spotifybu/tmp/provider-downloads"]
 };
 export const standardNamingFormatDefaults = {
   artistFolderFormat: "{Album Artist Name}",
@@ -151,7 +157,8 @@ export function toSettingsView(settings: PrivateSettings): SettingsView {
       replaceIllegalCharacters: settings.naming.replaceIllegalCharacters,
       colonReplacementFormat: settings.naming.colonReplacementFormat
     },
-    scan: settings.scan
+    scan: settings.scan,
+    cleanup: settings.cleanup
   };
 }
 
@@ -166,7 +173,8 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
       discovery: { ...current.catalog.discovery }
     },
     naming: { ...current.naming },
-    scan: { ...current.scan, extensions: [...current.scan.extensions] }
+    scan: { ...current.scan, extensions: [...current.scan.extensions] },
+    cleanup: { ...current.cleanup, emptyFolderExclusions: [...current.cleanup.emptyFolderExclusions] }
   };
 
   if (update.auth) {
@@ -225,6 +233,10 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
     next.scan = normalizeScanSettings(next.scan, update.scan);
   }
 
+  if (update.cleanup) {
+    next.cleanup = normalizeCleanupSettings(next.cleanup, update.cleanup);
+  }
+
   await saveSettings(next);
   return next;
 }
@@ -243,7 +255,8 @@ async function createDefaultSettings(): Promise<PrivateSettings> {
     },
     catalog: defaultCatalog,
     naming: defaultNaming,
-    scan: defaultScan
+    scan: defaultScan,
+    cleanup: defaultCleanup
   };
 }
 
@@ -260,7 +273,8 @@ function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
     },
     catalog: defaultCatalog,
     naming: defaultNaming,
-    scan: defaultScan
+    scan: defaultScan,
+    cleanup: defaultCleanup
   };
 
   return {
@@ -276,7 +290,8 @@ function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
     },
     catalog: normalizeCatalogSettings(partial.catalog),
     naming: normalizeNamingSettings(fallback.naming, partial.naming),
-    scan: normalizeScanSettings(fallback.scan, partial.scan)
+    scan: normalizeScanSettings(fallback.scan, partial.scan),
+    cleanup: normalizeCleanupSettings(fallback.cleanup, partial.cleanup)
   };
 }
 
@@ -343,6 +358,17 @@ function normalizeScanSettings(
   };
 }
 
+function normalizeCleanupSettings(
+  fallback: PrivateSettings["cleanup"],
+  partial: Partial<PrivateSettings["cleanup"]> | undefined
+): PrivateSettings["cleanup"] {
+  return {
+    emptyFolderExclusions: normalizeRelativeFolderExclusions(
+      partial?.emptyFolderExclusions ?? fallback.emptyFolderExclusions
+    )
+  };
+}
+
 function normalizeSpotifyMarket(value: unknown, fallback: string) {
   const market = typeof value === "string" ? value.trim().toUpperCase() : "";
   return /^[A-Z]{2}$/.test(market) ? market : fallback;
@@ -363,6 +389,21 @@ function normalizeExtensions(extensions: string[]) {
     .map((extension) => extension.trim().toLowerCase())
     .filter(Boolean)
     .map((extension) => (extension.startsWith(".") ? extension : `.${extension}`));
+
+  return Array.from(new Set(normalized));
+}
+
+function normalizeRelativeFolderExclusions(paths: unknown) {
+  if (!Array.isArray(paths)) {
+    return [];
+  }
+
+  const normalized = paths
+    .map((value) => (typeof value === "string" ? value : ""))
+    .map((value) => value.replace(/\\/g, "/").replace(/\/+/g, "/").trim())
+    .map((value) => value.replace(/^\/+/, "").replace(/\/+$/, ""))
+    .filter((value) => value && value !== ".")
+    .filter((value) => !value.split("/").some((segment) => segment === ".."));
 
   return Array.from(new Set(normalized));
 }

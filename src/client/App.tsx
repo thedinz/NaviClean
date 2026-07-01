@@ -7,6 +7,7 @@ import {
   CircleAlert,
   CopyX,
   Database,
+  FileQuestion,
   FolderInput,
   FolderX,
   Gauge,
@@ -32,6 +33,7 @@ import type {
   AuthInfo,
   DuplicateBulkResolveResult,
   EmptyFolderDeleteResult,
+  EmptyFolderExcludeResult,
   EmptyFolderItem,
   EmptyFolderPreview,
   DuplicateGroup,
@@ -39,6 +41,8 @@ import type {
   LibraryArtistSummary,
   LibraryStats,
   LibraryTrashResult,
+  NonMusicFileClassification,
+  NonMusicFilesView,
   OrganizeApplyResult,
   OrganizeCollisionCandidate,
   OrganizePlan,
@@ -59,7 +63,7 @@ import type {
 import { api } from "./api";
 import { appVersion } from "./version";
 
-type Page = "dashboard" | "library" | "empty-folders" | "discover" | "duplicates" | "organize" | "trash" | "settings";
+type Page = "dashboard" | "library" | "empty-folders" | "non-music" | "discover" | "duplicates" | "organize" | "trash" | "settings";
 type AppTheme = "light" | "dark";
 type OrganizePreviewFilter = "attention" | "ready" | "duplicate-target" | "conflict" | "missing" | "same" | "all";
 type OrganizePreviewItem = OrganizePlan["items"][number];
@@ -72,6 +76,7 @@ const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
   { id: "library", label: "Library", icon: Database },
   { id: "empty-folders", label: "Empty Folders", icon: FolderX },
+  { id: "non-music", label: "Non-Music Files", icon: FileQuestion },
   { id: "discover", label: "Discover", icon: Music2 },
   { id: "organize", label: "Organize", icon: FolderInput },
   { id: "duplicates", label: "Duplicates", icon: CopyX },
@@ -289,6 +294,7 @@ function Shell({
         {page === "dashboard" && <Dashboard stats={stats} scan={scan} />}
         {page === "library" && <LibraryPage onChanged={refreshStats} />}
         {page === "empty-folders" && <EmptyFoldersPage />}
+        {page === "non-music" && <NonMusicFilesPage />}
         {page === "discover" && <DiscoverPage />}
         {page === "duplicates" && (
           <DuplicatesPage stats={stats} onChanged={refreshStats} onOpenOrganize={() => setPage("organize")} />
@@ -671,7 +677,7 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
 function EmptyFoldersPage() {
   const [preview, setPreview] = useState<EmptyFolderPreview | null>(null);
   const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({});
-  const [busy, setBusy] = useState<"load" | "delete" | null>(null);
+  const [busy, setBusy] = useState<"load" | "delete" | "exclude" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
@@ -758,6 +764,25 @@ function EmptyFoldersPage() {
     }
   };
 
+  const excludeFolder = async (folder: EmptyFolderItem) => {
+    setBusy("exclude");
+    setNotice(null);
+    setError(null);
+
+    try {
+      const result = await api<EmptyFolderExcludeResult>("/library/empty-folders/exclusions", {
+        method: "POST",
+        body: JSON.stringify({ relativePath: folder.relativePath })
+      });
+      applyPreview(result.emptyFolders);
+      setNotice(`${folder.relativePath} excluded from empty folder cleanup.`);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <section className="panel empty-folder-page">
       <div className="toolbar">
@@ -781,7 +806,17 @@ function EmptyFoldersPage() {
           </button>
         </div>
       </div>
-      {busy && <ActionProgress label={busy === "delete" ? "Deleting empty folders" : "Finding empty folders"} />}
+      {busy && (
+        <ActionProgress
+          label={
+            busy === "delete"
+              ? "Deleting empty folders"
+              : busy === "exclude"
+                ? "Excluding empty folder"
+                : "Finding empty folders"
+          }
+        />
+      )}
       {notice && <div className="notice-bar">{notice}</div>}
       {error && <p className="form-error">{error}</p>}
       {errors.length > 0 && (
@@ -798,6 +833,8 @@ function EmptyFoldersPage() {
           preview={preview}
           selectedCount={selectedFolders.length}
           selectedIds={selectedIds}
+          disabled={Boolean(busy)}
+          onExclude={excludeFolder}
           onToggle={toggleFolder}
           onToggleAll={toggleAll}
         />
@@ -813,6 +850,8 @@ function EmptyFoldersPanel({
   preview,
   selectedCount,
   selectedIds,
+  disabled = false,
+  onExclude,
   onToggle,
   onToggleAll
 }: {
@@ -820,6 +859,8 @@ function EmptyFoldersPanel({
   preview: EmptyFolderPreview;
   selectedCount: number;
   selectedIds: Record<string, boolean>;
+  disabled?: boolean;
+  onExclude?: (folder: EmptyFolderItem) => void;
   onToggle: (folder: EmptyFolderItem) => void;
   onToggleAll: () => void;
 }) {
@@ -846,6 +887,7 @@ function EmptyFoldersPanel({
                 <th>Folder</th>
                 <th>Parent</th>
                 <th>Depth</th>
+                {onExclude && <th>Exclude</th>}
               </tr>
             </thead>
             <tbody>
@@ -865,6 +907,20 @@ function EmptyFoldersPanel({
                   </td>
                   <td>{folder.parentRelativePath || "Library root"}</td>
                   <td>{folder.depth}</td>
+                  {onExclude && (
+                    <td>
+                      <button
+                        className="icon-button"
+                        type="button"
+                        onClick={() => onExclude(folder)}
+                        disabled={disabled}
+                        title={`Exclude ${folder.relativePath}`}
+                        aria-label={`Exclude ${folder.relativePath}`}
+                      >
+                        <FolderX size={17} />
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -872,6 +928,103 @@ function EmptyFoldersPanel({
         </div>
       )}
     </div>
+  );
+}
+
+function NonMusicFilesPage() {
+  const [view, setView] = useState<NonMusicFilesView | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const load = async ({ clearNotice = true }: { clearNotice?: boolean } = {}) => {
+    setLoading(true);
+
+    if (clearNotice) {
+      setNotice(null);
+    }
+
+    try {
+      setView(await api<NonMusicFilesView>("/library/non-music-files"));
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load({ clearNotice: false });
+  }, []);
+
+  const groups = view?.groups || [];
+
+  return (
+    <section className="panel non-music-page">
+      <div className="toolbar">
+        <div className="summary-chips">
+          <span>{(view?.nonMusicFiles || 0).toLocaleString()} non-music files</span>
+          <span>{(view?.audioFiles || 0).toLocaleString()} audio files</span>
+          <span>{formatBytes(view?.totalSize || 0)}</span>
+        </div>
+        <button className="secondary-button" type="button" onClick={() => load()} disabled={loading}>
+          {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+          <span>{loading ? "Loading" : "Refresh"}</span>
+        </button>
+      </div>
+      {loading && <ActionProgress label="Scanning non-music files" />}
+      {notice && <div className="notice-bar">{notice}</div>}
+      {view?.errors.length ? (
+        <div className="error-list">
+          {view.errors.slice(0, 8).map((item) => (
+            <span key={item}>{item}</span>
+          ))}
+          {view.errors.length > 8 && <span>{view.errors.length - 8} more errors</span>}
+        </div>
+      ) : null}
+      {!loading && groups.length === 0 ? (
+        <EmptyState icon={FileQuestion} title="No non-music files" />
+      ) : groups.length > 0 ? (
+        <div className="table-wrap">
+          <table className="non-music-table">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Classification</th>
+                <th>Files</th>
+                <th>Size</th>
+                <th>Examples</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groups.map((group) => (
+                <tr key={group.key}>
+                  <td>
+                    <strong>{group.label}</strong>
+                    <span>{group.description}</span>
+                  </td>
+                  <td>
+                    <span className={`classification-pill ${group.classification}`}>
+                      {nonMusicClassificationLabel(group.classification)}
+                    </span>
+                  </td>
+                  <td>{group.count.toLocaleString()}</td>
+                  <td>{formatBytes(group.totalSize)}</td>
+                  <td>
+                    <div className="example-list">
+                      {group.examples.map((example) => (
+                        <span className="path-diff" key={example.relativePath}>
+                          {example.relativePath}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -2449,7 +2602,8 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
             libraryPath: settings.naming.libraryPath,
             recycleBinPath: settings.naming.recycleBinPath
           },
-          scan: settings.scan
+          scan: settings.scan,
+          cleanup: settings.cleanup
         })
       });
 
@@ -2727,6 +2881,36 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
             }
           />
         </label>
+        <div className="settings-subsection">
+          <span className="subsection-label">Empty folder exclusions</span>
+          {settings.cleanup.emptyFolderExclusions.length === 0 ? (
+            <span className="muted">No excluded folders</span>
+          ) : (
+            <div className="settings-list">
+              {settings.cleanup.emptyFolderExclusions.map((relativePath) => (
+                <div className="settings-list-row" key={relativePath}>
+                  <span className="path-diff">{relativePath}</span>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() =>
+                      setSettings({
+                        ...settings,
+                        cleanup: {
+                          ...settings.cleanup,
+                          emptyFolderExclusions: settings.cleanup.emptyFolderExclusions.filter((item) => item !== relativePath)
+                        }
+                      })
+                    }
+                  >
+                    <Check size={17} />
+                    <span>Include</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </fieldset>
 
       <div className="settings-actions">
@@ -3113,6 +3297,18 @@ function emptyFolderDeleteNotice(result: EmptyFolderDeleteResult) {
   const errorSuffix = result.errors.length ? ` (${result.errors.length} issue${result.errors.length === 1 ? "" : "s"})` : "";
   const nextPass = result.emptyFolders.total;
   return `${result.deleted} empty ${pluralize("folder", result.deleted)} deleted${errorSuffix}. ${nextPass} in the next pass.`;
+}
+
+function nonMusicClassificationLabel(value: NonMusicFileClassification) {
+  if (value === "useful") {
+    return "Likely useful";
+  }
+
+  if (value === "junk") {
+    return "Probably junk";
+  }
+
+  return "Review";
 }
 
 function libraryMeta(values: string[]) {
