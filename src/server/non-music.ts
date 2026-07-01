@@ -4,12 +4,15 @@ import path from "node:path";
 import type {
   NonMusicFileClassification,
   NonMusicFileExample,
+  NonMusicFileGroupDetail,
   NonMusicFileGroup,
+  NonMusicFileItem,
+  NonMusicFileTrashResult,
   NonMusicFilesView,
   NonMusicTrashResult
 } from "../shared/types.js";
 import type { PrivateSettings } from "./settings.js";
-import { isInsidePath, toPosixRelative } from "./utils.js";
+import { isInsidePath, sha1, toPosixRelative } from "./utils.js";
 
 type MutableNonMusicGroup = NonMusicFileGroup & {
   examples: NonMusicFileExample[];
@@ -61,6 +64,14 @@ export async function listNonMusicFiles(settings: PrivateSettings): Promise<NonM
   return (await buildNonMusicInventory(settings)).view;
 }
 
+export async function listNonMusicFileGroup(
+  settings: PrivateSettings,
+  groupKey: string
+): Promise<NonMusicFileGroupDetail> {
+  const inventory = await buildNonMusicInventory(settings);
+  return nonMusicGroupDetail(inventory, groupKey);
+}
+
 export async function trashNonMusicFileGroups(
   settings: PrivateSettings,
   groupKeys: string[]
@@ -75,12 +86,7 @@ export async function trashNonMusicFileGroups(
   const currentKeys = new Set(inventory.view.groups.map((group) => group.key));
   const selectedKeySet = new Set(selectedKeys);
   const files = inventory.files.filter((file) => selectedKeySet.has(file.groupKey));
-  const libraryRoot = path.resolve(settings.naming.libraryPath);
-  const trashRoot = safeRecycleBinPath(settings);
-  const trashSessionRoot = path.join(trashRoot, new Date().toISOString().replace(/[:.]/g, "-"));
   const errors = [...inventory.view.errors];
-  let trashed = 0;
-  let trashedBytes = 0;
 
   for (const key of selectedKeys) {
     if (!currentKeys.has(key)) {
@@ -88,36 +94,47 @@ export async function trashNonMusicFileGroups(
     }
   }
 
-  for (const file of files) {
-    const sourcePath = path.resolve(file.absolutePath);
+  const result = await trashNonMusicCandidates(settings, files, errors);
 
-    if (!isInsidePath(libraryRoot, sourcePath) || sourcePath === libraryRoot) {
-      errors.push(`${file.relativePath}: only files inside the configured library can be recycled`);
-      continue;
-    }
+  return {
+    trashed: result.trashed,
+    trashedBytes: result.trashedBytes,
+    errors,
+    nonMusicFiles: await listNonMusicFiles(settings)
+  };
+}
 
-    try {
-      const targetPath = path.join(trashSessionRoot, ...file.relativePath.split("/").filter(Boolean));
+export async function trashNonMusicFiles(
+  settings: PrivateSettings,
+  fileIds: string[],
+  groupKey = ""
+): Promise<NonMusicFileTrashResult> {
+  const selectedIds = Array.from(new Set(fileIds.map((id) => id.trim()).filter(Boolean)));
 
-      if (!isInsidePath(trashSessionRoot, targetPath) || targetPath === trashSessionRoot) {
-        errors.push(`${file.relativePath}: recycle target leaves the recycle session folder`);
-        continue;
-      }
+  if (selectedIds.length === 0) {
+    throw new Error("At least one non-music file is required.");
+  }
 
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await moveFile(sourcePath, targetPath);
-      trashed += 1;
-      trashedBytes += file.size;
-    } catch (error) {
-      errors.push(`${file.relativePath}: ${(error as Error).message}`);
+  const inventory = await buildNonMusicInventory(settings);
+  const filesById = new Map(inventory.files.map((file) => [nonMusicFileId(file.relativePath), file]));
+  const files = selectedIds.map((id) => filesById.get(id)).filter((file): file is NonMusicFileCandidate => Boolean(file));
+  const errors = [...inventory.view.errors];
+
+  for (const id of selectedIds) {
+    if (!filesById.has(id)) {
+      errors.push(`${id}: non-music file is no longer present`);
     }
   }
 
+  const result = await trashNonMusicCandidates(settings, files, errors);
+  const refreshedInventory = await buildNonMusicInventory(settings);
+
   return {
-    trashed,
-    trashedBytes,
+    trashed: result.trashed,
+    trashedBytes: result.trashedBytes,
     errors,
-    nonMusicFiles: await listNonMusicFiles(settings)
+    nonMusicFiles: refreshedInventory.view,
+    group: groupKey ? nonMusicGroupDetailOrNull(refreshedInventory, groupKey) : null
   };
 }
 
@@ -166,6 +183,92 @@ async function buildNonMusicInventory(settings: PrivateSettings) {
     },
     files
   };
+}
+
+async function trashNonMusicCandidates(
+  settings: PrivateSettings,
+  files: NonMusicFileCandidate[],
+  errors: string[]
+) {
+  const libraryRoot = path.resolve(settings.naming.libraryPath);
+  const trashRoot = safeRecycleBinPath(settings);
+  const trashSessionRoot = path.join(trashRoot, new Date().toISOString().replace(/[:.]/g, "-"));
+  let trashed = 0;
+  let trashedBytes = 0;
+
+  for (const file of files) {
+    const sourcePath = path.resolve(file.absolutePath);
+
+    if (!isInsidePath(libraryRoot, sourcePath) || sourcePath === libraryRoot) {
+      errors.push(`${file.relativePath}: only files inside the configured library can be recycled`);
+      continue;
+    }
+
+    try {
+      const targetPath = path.join(trashSessionRoot, ...file.relativePath.split("/").filter(Boolean));
+
+      if (!isInsidePath(trashSessionRoot, targetPath) || targetPath === trashSessionRoot) {
+        errors.push(`${file.relativePath}: recycle target leaves the recycle session folder`);
+        continue;
+      }
+
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await moveFile(sourcePath, targetPath);
+      trashed += 1;
+      trashedBytes += file.size;
+    } catch (error) {
+      errors.push(`${file.relativePath}: ${(error as Error).message}`);
+    }
+  }
+
+  return { trashed, trashedBytes };
+}
+
+function nonMusicGroupDetail(
+  inventory: Awaited<ReturnType<typeof buildNonMusicInventory>>,
+  groupKey: string
+): NonMusicFileGroupDetail {
+  const group = inventory.view.groups.find((candidate) => candidate.key === groupKey);
+
+  if (!group) {
+    throw new Error(`${groupKey}: non-music group is no longer present`);
+  }
+
+  return {
+    group,
+    files: inventory.files.filter((file) => file.groupKey === groupKey).map(nonMusicFileItem).sort(compareNonMusicFiles),
+    errors: inventory.view.errors
+  };
+}
+
+function nonMusicGroupDetailOrNull(
+  inventory: Awaited<ReturnType<typeof buildNonMusicInventory>>,
+  groupKey: string
+) {
+  try {
+    return nonMusicGroupDetail(inventory, groupKey);
+  } catch {
+    return null;
+  }
+}
+
+function nonMusicFileItem(file: NonMusicFileCandidate): NonMusicFileItem {
+  return {
+    id: nonMusicFileId(file.relativePath),
+    relativePath: file.relativePath,
+    filename: file.filename,
+    extension: file.extension,
+    size: file.size,
+    mtimeMs: file.mtimeMs
+  };
+}
+
+function nonMusicFileId(relativePath: string) {
+  return sha1(`non-music:${relativePath}`);
+}
+
+function compareNonMusicFiles(left: NonMusicFileItem, right: NonMusicFileItem) {
+  return left.relativePath.localeCompare(right.relativePath, undefined, { sensitivity: "base" });
 }
 
 async function collectNonMusicFiles(

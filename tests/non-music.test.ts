@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { listNonMusicFiles, trashNonMusicFileGroups } from "../src/server/non-music.js";
+import {
+  listNonMusicFileGroup,
+  listNonMusicFiles,
+  trashNonMusicFileGroups,
+  trashNonMusicFiles
+} from "../src/server/non-music.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 
 test("non-music inventory groups sidecars and ignores NaviClean folders", async () => {
@@ -29,6 +34,35 @@ test("non-music inventory groups sidecars and ignores NaviClean folders", async 
     assert.equal(groups.get(".txt")?.classification, "review");
     assert.equal(groups.get(".pdf")?.classification, "review");
     assert.ok(groups.get(".jpg")?.examples.some((example) => example.relativePath === "Artist/Album/cover.jpg"));
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("lists a non-music group and trashes one selected file", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-non-music-"));
+
+  try {
+    await writeFile(root, "Artist/Album/one.nfo", "one");
+    await writeFile(root, "Artist/Album/two.nfo", "two");
+    await writeFile(root, "Artist/Album/cover.jpg", "image");
+
+    const detail = await listNonMusicFileGroup(settings(root), ".nfo");
+
+    assert.deepEqual(detail.files.map((file) => file.relativePath), [
+      "Artist/Album/one.nfo",
+      "Artist/Album/two.nfo"
+    ]);
+
+    const result = await trashNonMusicFiles(settings(root), [detail.files[0]?.id || ""], ".nfo");
+
+    assert.equal(result.trashed, 1);
+    assert.equal(result.trashedBytes, 3);
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.group?.files.map((file) => file.relativePath), ["Artist/Album/two.nfo"]);
+    assert.equal(result.nonMusicFiles.groups.find((group) => group.key === ".nfo")?.count, 1);
+    await assert.rejects(fs.access(path.join(root, "Artist", "Album", "one.nfo")), /ENOENT/);
+    await fs.access(path.join(root, "Artist", "Album", "two.nfo"));
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }
