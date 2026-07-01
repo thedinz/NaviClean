@@ -129,6 +129,103 @@ test("standard folder with inferred year needs organization when metadata year i
   }
 });
 
+test("SpotifyBU-managed file is not organized only because its path differs", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const sourceRelativePath = "SpotifyBU Downloads/Track Copy.mp3";
+    const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "audio");
+
+    const plan = await buildOrganizePlan(
+      [
+        track({
+          absolutePath: sourcePath,
+          relativePath: sourceRelativePath,
+          managedBy: "spotifybu"
+        })
+      ],
+      settings({
+        libraryPath: root,
+        mode: "standard"
+      })
+    );
+
+    assert.equal(plan.summary.ready, 0);
+    assert.equal(plan.summary.same, 1);
+    assert.equal(plan.items[0]?.status, "same");
+    assert.equal(plan.items[0]?.message, "Managed by SpotifyBU");
+    assert.equal(
+      plan.items[0]?.targetRelativePath,
+      "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3"
+    );
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("normal file without SpotifyBU identity keeps existing organization behavior", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const sourceRelativePath = "Incoming/Track Copy.mp3";
+    const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "audio");
+
+    const plan = await buildOrganizePlan(
+      [
+        track({
+          absolutePath: sourcePath,
+          relativePath: sourceRelativePath
+        })
+      ],
+      settings({
+        libraryPath: root,
+        mode: "standard"
+      })
+    );
+
+    assert.equal(plan.summary.ready, 1);
+    assert.equal(plan.summary.same, 0);
+    assert.equal(plan.items[0]?.status, "ready");
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("SpotifyBU-managed missing source still reports the hard error", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const sourceRelativePath = "SpotifyBU Downloads/Missing Track.mp3";
+    const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
+
+    const plan = await buildOrganizePlan(
+      [
+        track({
+          absolutePath: sourcePath,
+          relativePath: sourceRelativePath,
+          managedBy: "spotifybu"
+        })
+      ],
+      settings({
+        libraryPath: root,
+        mode: "standard"
+      })
+    );
+
+    assert.equal(plan.summary.ready, 0);
+    assert.equal(plan.summary.same, 0);
+    assert.equal(plan.summary.missing, 1);
+    assert.equal(plan.items[0]?.status, "missing-source");
+    assert.equal(plan.items[0]?.message, "Source file is missing");
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("duplicate source blocked by an existing organized target does not count as a conflict", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
 

@@ -3,8 +3,57 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { scanLibrary } from "../src/server/scanner.js";
+import { hasSpotifyBuIdentityTags, scanLibrary } from "../src/server/scanner.js";
 import type { PrivateSettings } from "../src/server/settings.js";
+
+test("scanner recognizes SpotifyBU track identity tags", () => {
+  assert.equal(
+    hasSpotifyBuIdentityTags({
+      native: {
+        "ID3v2.4": [{ id: "TXXX:spotifybu:track_id", value: "spotify-track-id" }]
+      }
+    }),
+    true
+  );
+
+  assert.equal(
+    hasSpotifyBuIdentityTags({
+      native: {
+        iTunes: [{ id: "----:com.apple.iTunes:spotifybu:track_uri", value: "spotify:track:123" }]
+      }
+    }),
+    true
+  );
+
+  assert.equal(
+    hasSpotifyBuIdentityTags({
+      common: {
+        spotifybu_track_uri: "spotify:track:456"
+      } as Record<string, unknown>
+    }),
+    true
+  );
+});
+
+test("scanner requires SpotifyBU track id or uri for managed identity", () => {
+  assert.equal(
+    hasSpotifyBuIdentityTags({
+      native: {
+        vorbis: [{ id: "spotifybu:album_id", value: "spotify-album-id" }]
+      }
+    }),
+    false
+  );
+
+  assert.equal(
+    hasSpotifyBuIdentityTags({
+      common: {
+        "spotifybu:isrc": "USABC2100001"
+      } as Record<string, unknown>
+    }),
+    false
+  );
+});
 
 test("scanner infers the release year when the parent artist folder stripped trailing punctuation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-"));
