@@ -14,14 +14,14 @@ import {
   listEmptyLibraryFolders,
   trashLibraryTracks
 } from "./library.js";
-import { listNonMusicFiles } from "./non-music.js";
+import { listNonMusicFiles, trashNonMusicFileGroups } from "./non-music.js";
 import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate, trashOrganizeCandidates } from "./organizer.js";
 import {
   getSpotifyCatalogDownloadJob,
   previewSpotifyCatalogDownloads,
   startSpotifyCatalogDownloadJob
 } from "./providers.js";
-import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin } from "./recycle-bin.js";
+import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin, restoreRecycleBinItems } from "./recycle-bin.js";
 import { scanLibrary } from "./scanner.js";
 import { loadSettings, toSettingsView, updateSettings } from "./settings.js";
 import { fetchNavidromeArtwork, testNavidromeConnection } from "./navidrome.js";
@@ -325,6 +325,17 @@ app.get("/api/library/non-music-files", asyncHandler(async (_req, res) => {
   res.json(await listNonMusicFiles(await loadSettingsForPlanning()));
 }));
 
+app.post("/api/library/non-music-files/trash", asyncHandler(async (req, res) => {
+  const groupKeys = Array.isArray(req.body.groupKeys) ? req.body.groupKeys.map(String).filter(Boolean) : [];
+
+  if (groupKeys.length === 0) {
+    res.status(400).json({ error: "groupKeys are required" });
+    return;
+  }
+
+  res.json(await trashNonMusicFileGroups(await loadSettingsForPlanning(), groupKeys));
+}));
+
 app.get("/api/library/artwork/:type", asyncHandler(async (req, res) => {
   const type = String(req.params.type || "");
   const artist = String(req.query.artist || "").trim();
@@ -485,6 +496,17 @@ app.delete("/api/recycle-bin/items", asyncHandler(async (req, res) => {
   }
 
   res.json(await deleteRecycleBinItems(await loadSettingsForPlanning(), ids));
+}));
+
+app.post("/api/recycle-bin/restore", asyncHandler(async (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids.map(String).filter(Boolean) : [];
+
+  if (ids.length === 0) {
+    res.status(400).json({ error: "ids are required" });
+    return;
+  }
+
+  res.json(await restoreRecycleBinItems(await loadSettingsForPlanning(), ids));
 }));
 
 app.post("/api/organize/preview", asyncHandler(async (_req, res) => {

@@ -26,6 +26,7 @@ import {
   SlidersHorizontal,
   Sun,
   Trash2,
+  Undo2,
   UserRound
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -42,6 +43,7 @@ import type {
   LibraryStats,
   LibraryTrashResult,
   NonMusicFileClassification,
+  NonMusicTrashResult,
   NonMusicFilesView,
   OrganizeApplyResult,
   OrganizeCollisionCandidate,
@@ -50,6 +52,7 @@ import type {
   OrganizeTrashSelection,
   RecycleBinDeleteResult,
   RecycleBinItem,
+  RecycleBinRestoreResult,
   RecycleBinView,
   ScanStatus,
   SettingsView,
@@ -933,18 +936,36 @@ function EmptyFoldersPanel({
 
 function NonMusicFilesPage() {
   const [view, setView] = useState<NonMusicFilesView | null>(null);
+  const [selectedGroupKeys, setSelectedGroupKeys] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<"trash" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [errors, setErrors] = useState<string[]>([]);
+  const groups = view?.groups || [];
+  const selectedGroups = groups.filter((group) => selectedGroupKeys[group.key]);
+  const selectedFileCount = selectedGroups.reduce((total, group) => total + group.count, 0);
+  const selectedBytes = selectedGroups.reduce((total, group) => total + group.totalSize, 0);
+  const allSelected = groups.length > 0 && selectedGroups.length === groups.length;
+
+  const applyView = (next: NonMusicFilesView) => {
+    setView(next);
+    setErrors(next.errors);
+    setSelectedGroupKeys((current) => {
+      const validKeys = new Set(next.groups.map((group) => group.key));
+      return Object.fromEntries(Object.entries(current).filter(([key, selected]) => selected && validKeys.has(key)));
+    });
+  };
 
   const load = async ({ clearNotice = true }: { clearNotice?: boolean } = {}) => {
     setLoading(true);
 
     if (clearNotice) {
       setNotice(null);
+      setErrors([]);
     }
 
     try {
-      setView(await api<NonMusicFilesView>("/library/non-music-files"));
+      applyView(await api<NonMusicFilesView>("/library/non-music-files"));
     } catch (caught) {
       setNotice((caught as Error).message);
     } finally {
@@ -956,7 +977,54 @@ function NonMusicFilesPage() {
     void load({ clearNotice: false });
   }, []);
 
-  const groups = view?.groups || [];
+  const toggleAll = () => {
+    if (allSelected) {
+      setSelectedGroupKeys({});
+      return;
+    }
+
+    setSelectedGroupKeys(Object.fromEntries(groups.map((group) => [group.key, true])));
+  };
+
+  const toggleGroup = (groupKey: string) => {
+    setSelectedGroupKeys((current) => ({
+      ...current,
+      [groupKey]: !current[groupKey]
+    }));
+  };
+
+  const trashSelected = async () => {
+    if (selectedGroups.length === 0) {
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Move ${selectedFileCount.toLocaleString()} selected non-music ${pluralize("file", selectedFileCount)} to Trash?`
+      )
+    ) {
+      return;
+    }
+
+    setBusy("trash");
+    setNotice(null);
+    setErrors([]);
+
+    try {
+      const result = await api<NonMusicTrashResult>("/library/non-music-files/trash", {
+        method: "POST",
+        body: JSON.stringify({ groupKeys: selectedGroups.map((group) => group.key) })
+      });
+      applyView(result.nonMusicFiles);
+      setSelectedGroupKeys({});
+      setErrors(result.errors);
+      setNotice(nonMusicTrashNotice(result));
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
 
   return (
     <section className="panel non-music-page">
@@ -965,20 +1033,32 @@ function NonMusicFilesPage() {
           <span>{(view?.nonMusicFiles || 0).toLocaleString()} non-music files</span>
           <span>{(view?.audioFiles || 0).toLocaleString()} audio files</span>
           <span>{formatBytes(view?.totalSize || 0)}</span>
+          <span>{selectedGroups.length} selected</span>
         </div>
-        <button className="secondary-button" type="button" onClick={() => load()} disabled={loading}>
-          {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
-          <span>{loading ? "Loading" : "Refresh"}</span>
-        </button>
+        <div className="button-row">
+          <button className="secondary-button" type="button" onClick={() => load()} disabled={loading || Boolean(busy)}>
+            {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+            <span>{loading ? "Loading" : "Refresh"}</span>
+          </button>
+          <button
+            className="danger-button"
+            type="button"
+            onClick={trashSelected}
+            disabled={loading || Boolean(busy) || selectedGroups.length === 0}
+          >
+            {busy === "trash" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+            <span>{busy === "trash" ? "Moving" : "Move selected to trash"}</span>
+          </button>
+        </div>
       </div>
-      {loading && <ActionProgress label="Scanning non-music files" />}
+      {(loading || busy) && <ActionProgress label={busy ? "Moving non-music files to trash" : "Scanning non-music files"} />}
       {notice && <div className="notice-bar">{notice}</div>}
-      {view?.errors.length ? (
+      {errors.length ? (
         <div className="error-list">
-          {view.errors.slice(0, 8).map((item) => (
+          {errors.slice(0, 8).map((item) => (
             <span key={item}>{item}</span>
           ))}
-          {view.errors.length > 8 && <span>{view.errors.length - 8} more errors</span>}
+          {errors.length > 8 && <span>{errors.length - 8} more errors</span>}
         </div>
       ) : null}
       {!loading && groups.length === 0 ? (
@@ -988,6 +1068,15 @@ function NonMusicFilesPage() {
           <table className="non-music-table">
             <thead>
               <tr>
+                <th>
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    disabled={loading || Boolean(busy)}
+                    aria-label="Select all non-music file groups"
+                  />
+                </th>
                 <th>Type</th>
                 <th>Classification</th>
                 <th>Files</th>
@@ -998,6 +1087,15 @@ function NonMusicFilesPage() {
             <tbody>
               {groups.map((group) => (
                 <tr key={group.key}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedGroupKeys[group.key])}
+                      onChange={() => toggleGroup(group.key)}
+                      disabled={loading || Boolean(busy)}
+                      aria-label={`Select ${group.label}`}
+                    />
+                  </td>
                   <td>
                     <strong>{group.label}</strong>
                     <span>{group.description}</span>
@@ -1022,6 +1120,11 @@ function NonMusicFilesPage() {
               ))}
             </tbody>
           </table>
+          {selectedGroups.length > 0 && (
+            <p className="notice">
+              {selectedFileCount.toLocaleString()} selected {pluralize("file", selectedFileCount)} / {formatBytes(selectedBytes)}
+            </p>
+          )}
         </div>
       ) : null}
     </section>
@@ -1529,13 +1632,15 @@ function DuplicatesPage({
 function TrashPage() {
   const [view, setView] = useState<RecycleBinView | null>(null);
   const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({});
+  const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<"selected" | "empty" | null>(null);
+  const [busy, setBusy] = useState<"restore" | "selected" | "empty" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const items = view?.items || [];
-  const selectedItems = items.filter((item) => selectedIds[item.id]);
-  const allSelected = items.length > 0 && selectedItems.length === items.length;
+  const filteredItems = useMemo(() => filterTrashItems(items, filter), [filter, items]);
+  const selectedItems = filteredItems.filter((item) => selectedIds[item.id]);
+  const allSelected = filteredItems.length > 0 && selectedItems.length === filteredItems.length;
 
   const load = async ({ clearNotice = true }: { clearNotice?: boolean } = {}) => {
     setLoading(true);
@@ -1563,12 +1668,20 @@ function TrashPage() {
   }, []);
 
   const toggleAll = () => {
-    if (allSelected) {
-      setSelectedIds({});
-      return;
-    }
+    setSelectedIds((current) => {
+      if (allSelected) {
+        const next = { ...current };
+        for (const item of filteredItems) {
+          delete next[item.id];
+        }
+        return next;
+      }
 
-    setSelectedIds(Object.fromEntries(items.map((item) => [item.id, true])));
+      return {
+        ...current,
+        ...Object.fromEntries(filteredItems.map((item) => [item.id, true]))
+      };
+    });
   };
 
   const toggleItem = (item: RecycleBinItem) => {
@@ -1576,6 +1689,35 @@ function TrashPage() {
       ...current,
       [item.id]: !current[item.id]
     }));
+  };
+
+  const restoreSelected = async () => {
+    if (selectedItems.length === 0) {
+      return;
+    }
+
+    if (!window.confirm(`Restore ${selectedItems.length} selected file(s) to their original library paths?`)) {
+      return;
+    }
+
+    setBusy("restore");
+    setNotice(null);
+    setErrors([]);
+
+    try {
+      const result = await api<RecycleBinRestoreResult>("/recycle-bin/restore", {
+        method: "POST",
+        body: JSON.stringify({ ids: selectedItems.map((item) => item.id) })
+      });
+      setView(result.recycleBin);
+      setSelectedIds({});
+      setErrors(result.errors);
+      setNotice(`${result.restoredFiles} restored (${formatBytes(result.restoredBytes)}).`);
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setBusy(null);
+    }
   };
 
   const deleteSelected = async () => {
@@ -1643,12 +1785,26 @@ function TrashPage() {
         <div className="summary-chips">
           <span>{view?.totalFiles || 0} files</span>
           <span>{formatBytes(view?.totalSize || 0)}</span>
+          {filter.trim() && <span>{filteredItems.length} shown</span>}
           <span>{selectedItems.length} selected</span>
+        </div>
+        <div className="search-box">
+          <Search size={17} />
+          <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter trash" />
         </div>
         <div className="button-row">
           <button className="secondary-button" type="button" onClick={() => load()} disabled={loading || Boolean(busy)}>
             {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
             <span>{loading ? "Loading" : "Refresh"}</span>
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={restoreSelected}
+            disabled={loading || Boolean(busy) || selectedItems.length === 0}
+          >
+            {busy === "restore" ? <Loader2 className="spin" size={18} /> : <Undo2 size={18} />}
+            <span>{busy === "restore" ? "Restoring" : "Restore selected"}</span>
           </button>
           <button
             className="danger-button"
@@ -1670,7 +1826,17 @@ function TrashPage() {
           </button>
         </div>
       </div>
-      {(loading || busy) && <ActionProgress label={busy ? "Deleting recycle bin files" : "Loading recycle bin"} />}
+      {(loading || busy) && (
+        <ActionProgress
+          label={
+            busy === "restore"
+              ? "Restoring recycle bin files"
+              : busy
+                ? "Deleting recycle bin files"
+                : "Loading recycle bin"
+          }
+        />
+      )}
       {notice && <div className="notice-bar">{notice}</div>}
       {errors.length > 0 && (
         <div className="error-list">
@@ -1682,6 +1848,8 @@ function TrashPage() {
       )}
       {!loading && items.length === 0 ? (
         <EmptyState icon={Trash2} title="Trash is empty" />
+      ) : !loading && filteredItems.length === 0 ? (
+        <EmptyState icon={Search} title="No matching trash files" />
       ) : (
         <div className="table-wrap">
           <table>
@@ -1697,7 +1865,7 @@ function TrashPage() {
               </tr>
             </thead>
             <tbody>
-              {items.map((item) => (
+              {filteredItems.map((item) => (
                 <tr key={item.id}>
                   <td>
                     <input
@@ -3293,6 +3461,11 @@ function libraryTrashNotice(result: LibraryTrashResult) {
   return `${result.trashed} moved to recycle bin${errorSuffix}.`;
 }
 
+function nonMusicTrashNotice(result: NonMusicTrashResult) {
+  const errorSuffix = result.errors.length ? ` (${result.errors.length} issue${result.errors.length === 1 ? "" : "s"})` : "";
+  return `${result.trashed.toLocaleString()} non-music ${pluralize("file", result.trashed)} moved to trash (${formatBytes(result.trashedBytes)})${errorSuffix}.`;
+}
+
 function emptyFolderDeleteNotice(result: EmptyFolderDeleteResult) {
   const errorSuffix = result.errors.length ? ` (${result.errors.length} issue${result.errors.length === 1 ? "" : "s"})` : "";
   const nextPass = result.emptyFolders.total;
@@ -3309,6 +3482,21 @@ function nonMusicClassificationLabel(value: NonMusicFileClassification) {
   }
 
   return "Review";
+}
+
+function filterTrashItems(items: RecycleBinItem[], filter: string) {
+  const query = filter.trim().toLowerCase();
+
+  if (!query) {
+    return items;
+  }
+
+  return items.filter((item) =>
+    [item.originalRelativePath, item.relativePath, item.deletedGroup, item.extension]
+      .join(" ")
+      .toLowerCase()
+      .includes(query)
+  );
 }
 
 function libraryMeta(values: string[]) {
