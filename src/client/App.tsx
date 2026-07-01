@@ -2,6 +2,7 @@ import {
   Activity,
   Album as AlbumIcon,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
@@ -29,7 +30,7 @@ import {
   Undo2,
   UserRound
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AuthInfo,
   DuplicateBulkResolveResult,
@@ -43,6 +44,10 @@ import type {
   LibraryStats,
   LibraryTrashResult,
   NonMusicFileClassification,
+  NonMusicFileGroup,
+  NonMusicFileGroupDetail,
+  NonMusicFileItem,
+  NonMusicFileTrashResult,
   NonMusicTrashResult,
   NonMusicFilesView,
   OrganizeApplyResult,
@@ -973,8 +978,12 @@ function EmptyFoldersPanel({
 function NonMusicFilesPage() {
   const [view, setView] = useState<NonMusicFilesView | null>(null);
   const [selectedGroupKeys, setSelectedGroupKeys] = useState<Record<string, boolean>>({});
+  const [expandedGroupKeys, setExpandedGroupKeys] = useState<Record<string, boolean>>({});
+  const [groupDetails, setGroupDetails] = useState<Record<string, NonMusicFileGroupDetail>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<"trash" | null>(null);
+  const [detailLoadingKey, setDetailLoadingKey] = useState<string | null>(null);
+  const [fileTrashBusyId, setFileTrashBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const groups = view?.groups || [];
@@ -989,6 +998,14 @@ function NonMusicFilesPage() {
     setSelectedGroupKeys((current) => {
       const validKeys = new Set(next.groups.map((group) => group.key));
       return Object.fromEntries(Object.entries(current).filter(([key, selected]) => selected && validKeys.has(key)));
+    });
+    setExpandedGroupKeys((current) => {
+      const validKeys = new Set(next.groups.map((group) => group.key));
+      return Object.fromEntries(Object.entries(current).filter(([key, expanded]) => expanded && validKeys.has(key)));
+    });
+    setGroupDetails((current) => {
+      const validKeys = new Set(next.groups.map((group) => group.key));
+      return Object.fromEntries(Object.entries(current).filter(([key]) => validKeys.has(key)));
     });
   };
 
@@ -1027,6 +1044,74 @@ function NonMusicFilesPage() {
       ...current,
       [groupKey]: !current[groupKey]
     }));
+  };
+
+  const loadGroupDetail = async (groupKey: string) => {
+    setDetailLoadingKey(groupKey);
+    setErrors([]);
+
+    try {
+      const detail = await api<NonMusicFileGroupDetail>(
+        `/library/non-music-files/group?key=${encodeURIComponent(groupKey)}`
+      );
+      setGroupDetails((current) => ({ ...current, [groupKey]: detail }));
+      setErrors(detail.errors);
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setDetailLoadingKey(null);
+    }
+  };
+
+  const toggleGroupExpanded = (group: NonMusicFileGroup) => {
+    if (expandedGroupKeys[group.key]) {
+      setExpandedGroupKeys((current) => ({ ...current, [group.key]: false }));
+      return;
+    }
+
+    setExpandedGroupKeys((current) => ({ ...current, [group.key]: true }));
+
+    if (!groupDetails[group.key]) {
+      void loadGroupDetail(group.key);
+    }
+  };
+
+  const trashFile = async (group: NonMusicFileGroup, file: NonMusicFileItem) => {
+    if (!window.confirm(`Move ${file.relativePath} to Trash?`)) {
+      return;
+    }
+
+    setFileTrashBusyId(file.id);
+    setNotice(null);
+    setErrors([]);
+
+    try {
+      const result = await api<NonMusicFileTrashResult>("/library/non-music-files/trash-files", {
+        method: "POST",
+        body: JSON.stringify({ fileIds: [file.id], groupKey: group.key })
+      });
+      applyView(result.nonMusicFiles);
+      setErrors(result.errors);
+      setNotice(nonMusicTrashNotice(result));
+
+      const refreshedGroup = result.group;
+
+      if (refreshedGroup) {
+        setExpandedGroupKeys((current) => ({ ...current, [group.key]: true }));
+        setGroupDetails((current) => ({ ...current, [group.key]: refreshedGroup }));
+      } else {
+        setExpandedGroupKeys((current) => ({ ...current, [group.key]: false }));
+        setGroupDetails((current) => {
+          const next = { ...current };
+          delete next[group.key];
+          return next;
+        });
+      }
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setFileTrashBusyId(null);
+    }
   };
 
   const trashSelected = async () => {
@@ -1104,6 +1189,7 @@ function NonMusicFilesPage() {
           <table className="non-music-table">
             <thead>
               <tr>
+                <th></th>
                 <th>
                   <input
                     type="checkbox"
@@ -1121,39 +1207,84 @@ function NonMusicFilesPage() {
               </tr>
             </thead>
             <tbody>
-              {groups.map((group) => (
-                <tr key={group.key}>
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(selectedGroupKeys[group.key])}
-                      onChange={() => toggleGroup(group.key)}
-                      disabled={loading || Boolean(busy)}
-                      aria-label={`Select ${group.label}`}
-                    />
-                  </td>
-                  <td>
-                    <strong>{group.label}</strong>
-                    <span>{group.description}</span>
-                  </td>
-                  <td>
-                    <span className={`classification-pill ${group.classification}`}>
-                      {nonMusicClassificationLabel(group.classification)}
-                    </span>
-                  </td>
-                  <td>{group.count.toLocaleString()}</td>
-                  <td>{formatBytes(group.totalSize)}</td>
-                  <td>
-                    <div className="example-list">
-                      {group.examples.map((example) => (
-                        <span className="path-diff" key={example.relativePath}>
-                          {example.relativePath}
+              {groups.map((group) => {
+                const expanded = Boolean(expandedGroupKeys[group.key]);
+                const detail = groupDetails[group.key];
+                const detailLoading = detailLoadingKey === group.key;
+
+                return (
+                  <Fragment key={group.key}>
+                    <tr className="non-music-group-row">
+                      <td>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          onClick={() => toggleGroupExpanded(group)}
+                          disabled={loading || Boolean(busy)}
+                          title={expanded ? `Collapse ${group.label}` : `Expand ${group.label}`}
+                          aria-label={expanded ? `Collapse ${group.label}` : `Expand ${group.label}`}
+                        >
+                          {detailLoading ? (
+                            <Loader2 className="spin" size={17} />
+                          ) : expanded ? (
+                            <ChevronDown size={17} />
+                          ) : (
+                            <ChevronRight size={17} />
+                          )}
+                        </button>
+                      </td>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selectedGroupKeys[group.key])}
+                          onChange={() => toggleGroup(group.key)}
+                          disabled={loading || Boolean(busy)}
+                          aria-label={`Select ${group.label}`}
+                        />
+                      </td>
+                      <td>
+                        <button
+                          className="group-toggle-button"
+                          type="button"
+                          onClick={() => toggleGroupExpanded(group)}
+                          disabled={loading || Boolean(busy)}
+                        >
+                          <strong>{group.label}</strong>
+                          <span>{group.description}</span>
+                        </button>
+                      </td>
+                      <td>
+                        <span className={`classification-pill ${group.classification}`}>
+                          {nonMusicClassificationLabel(group.classification)}
                         </span>
-                      ))}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                      </td>
+                      <td>{group.count.toLocaleString()}</td>
+                      <td>{formatBytes(group.totalSize)}</td>
+                      <td>
+                        <div className="example-list">
+                          {group.examples.map((example) => (
+                            <span className="path-diff" key={example.relativePath}>
+                              {example.relativePath}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr className="non-music-detail-row">
+                        <td colSpan={7}>
+                          <NonMusicGroupDetailPanel
+                            busyFileId={fileTrashBusyId}
+                            detail={detail}
+                            loading={detailLoading}
+                            onTrashFile={(file) => trashFile(group, file)}
+                          />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
           {selectedGroups.length > 0 && (
@@ -1164,6 +1295,60 @@ function NonMusicFilesPage() {
         </div>
       ) : null}
     </section>
+  );
+}
+
+function NonMusicGroupDetailPanel({
+  busyFileId,
+  detail,
+  loading,
+  onTrashFile
+}: {
+  busyFileId: string | null;
+  detail?: NonMusicFileGroupDetail;
+  loading: boolean;
+  onTrashFile: (file: NonMusicFileItem) => void;
+}) {
+  if (loading && !detail) {
+    return <ActionProgress label="Loading files" />;
+  }
+
+  if (!detail) {
+    return <EmptyState icon={FileQuestion} title="No files loaded" />;
+  }
+
+  if (detail.files.length === 0) {
+    return <EmptyState icon={FileQuestion} title="No files left in this group" />;
+  }
+
+  return (
+    <div className="non-music-file-panel">
+      <div className="summary-chips">
+        <span>{detail.files.length.toLocaleString()} files</span>
+        <span>{formatBytes(detail.group.totalSize)}</span>
+      </div>
+      <div className="non-music-file-list">
+        {detail.files.map((file) => (
+          <div className="non-music-file-row" key={file.id}>
+            <div>
+              <strong>{file.filename}</strong>
+              <span className="path-diff">{file.relativePath}</span>
+            </div>
+            <span>{formatBytes(file.size)}</span>
+            <button
+              className="icon-button danger-icon"
+              type="button"
+              onClick={() => onTrashFile(file)}
+              disabled={Boolean(busyFileId)}
+              title={`Move ${file.relativePath} to Trash`}
+              aria-label={`Move ${file.relativePath} to Trash`}
+            >
+              {busyFileId === file.id ? <Loader2 className="spin" size={17} /> : <Trash2 size={17} />}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

@@ -394,6 +394,12 @@ export type NonMusicFileExample = {
   mtimeMs: number;
 };
 
+export type NonMusicFileItem = NonMusicFileExample & {
+  id: string;
+  extension: string;
+  filename: string;
+};
+
 export type NonMusicFileGroup = {
   key: string;
   label: string;
@@ -414,11 +420,21 @@ export type NonMusicFilesView = {
   errors: string[];
 };
 
+export type NonMusicFileGroupDetail = {
+  group: NonMusicFileGroup;
+  files: NonMusicFileItem[];
+  errors: string[];
+};
+
 export type NonMusicTrashResult = {
   trashed: number;
   trashedBytes: number;
   errors: string[];
   nonMusicFiles: NonMusicFilesView;
+};
+
+export type NonMusicFileTrashResult = NonMusicTrashResult & {
+  group: NonMusicFileGroupDetail | null;
 };
 
 export type RecycleBinItem = {

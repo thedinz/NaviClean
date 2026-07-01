@@ -14,7 +14,7 @@ import {
   listEmptyLibraryFolders,
   trashLibraryTracks
 } from "./library.js";
-import { listNonMusicFiles, trashNonMusicFileGroups } from "./non-music.js";
+import { listNonMusicFileGroup, listNonMusicFiles, trashNonMusicFileGroups, trashNonMusicFiles } from "./non-music.js";
 import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate, trashOrganizeCandidates } from "./organizer.js";
 import {
   getSpotifyCatalogDownloadJob,
@@ -325,6 +325,17 @@ app.get("/api/library/non-music-files", asyncHandler(async (_req, res) => {
   res.json(await listNonMusicFiles(await loadSettingsForPlanning()));
 }));
 
+app.get("/api/library/non-music-files/group", asyncHandler(async (req, res) => {
+  const groupKey = String(req.query.key || "");
+
+  if (!groupKey) {
+    res.status(400).json({ error: "key is required" });
+    return;
+  }
+
+  res.json(await listNonMusicFileGroup(await loadSettingsForPlanning(), groupKey));
+}));
+
 app.post("/api/library/non-music-files/trash", asyncHandler(async (req, res) => {
   const groupKeys = Array.isArray(req.body.groupKeys) ? req.body.groupKeys.map(String).filter(Boolean) : [];
 
@@ -334,6 +345,17 @@ app.post("/api/library/non-music-files/trash", asyncHandler(async (req, res) => 
   }
 
   res.json(await trashNonMusicFileGroups(await loadSettingsForPlanning(), groupKeys));
+}));
+
+app.post("/api/library/non-music-files/trash-files", asyncHandler(async (req, res) => {
+  const fileIds = Array.isArray(req.body.fileIds) ? req.body.fileIds.map(String).filter(Boolean) : [];
+
+  if (fileIds.length === 0) {
+    res.status(400).json({ error: "fileIds are required" });
+    return;
+  }
+
+  res.json(await trashNonMusicFiles(await loadSettingsForPlanning(), fileIds, String(req.body.groupKey || "")));
 }));
 
 app.get("/api/library/artwork/:type", asyncHandler(async (req, res) => {
