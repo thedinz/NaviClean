@@ -12,6 +12,11 @@ import { enrichTracksWithSpotifyOrganizeMetadata } from "./spotify.js";
 import { cleanDisplayValue, normalizeForMatch, sha1, titleFromFilename, toPosixRelative } from "./utils.js";
 
 type ProgressHandler = (status: Partial<ScanStatus>) => void;
+type ParsedAudioMetadata = Awaited<ReturnType<typeof parseFile>>;
+type SpotifyBuTagContainer = {
+  common?: ParsedAudioMetadata["common"] | Record<string, unknown>;
+  native?: ParsedAudioMetadata["native"];
+};
 
 const extensionQuality: Record<string, number> = {
   ".flac": 1000,
@@ -26,6 +31,10 @@ const extensionQuality: Record<string, number> = {
   ".mp3": 550,
   ".wma": 420
 };
+const spotifyBuTrackIdentityKeys = new Set(["spotifybu:track_id", "spotifybu:track_uri"]);
+const spotifyBuTrackIdentityLookupKeys = new Set(
+  Array.from(spotifyBuTrackIdentityKeys, normalizeTagLookupKey)
+);
 
 export async function scanLibrary(settings: PrivateSettings, onProgress?: ProgressHandler) {
   const root = path.resolve(settings.naming.libraryPath);
@@ -393,6 +402,7 @@ async function readTrack(filePath: string, root: string, settings: PrivateSettin
   const codec = cleanNullable(format?.codec);
   const container = cleanNullable(format?.container);
   const lossless = Boolean(format?.lossless || [".flac", ".alac", ".wav", ".aiff", ".aif"].includes(extension));
+  const managedBy = hasSpotifyBuIdentityTags(metadata) ? "spotifybu" : undefined;
 
   if (artist === "Unknown Artist") {
     issues.push("Missing artist");
@@ -443,6 +453,7 @@ async function readTrack(filePath: string, root: string, settings: PrivateSettin
     qualityScore: qualityScore(extension, bitrate, bitsPerSample, lossless),
     targetPath: "",
     targetRelativePath: "",
+    managedBy,
     issues
   } satisfies TrackFile;
 
@@ -452,6 +463,79 @@ async function readTrack(filePath: string, root: string, settings: PrivateSettin
     targetPath: target.targetPath,
     targetRelativePath: target.targetRelativePath
   };
+}
+
+export function hasSpotifyBuIdentityTags(tags: SpotifyBuTagContainer | null | undefined) {
+  return hasSpotifyBuIdentityCommonTag(tags?.common) || hasSpotifyBuIdentityNativeTag(tags?.native);
+}
+
+function hasSpotifyBuIdentityCommonTag(common: SpotifyBuTagContainer["common"]) {
+  const commonRecord = common as Record<string, unknown> | undefined;
+
+  if (!commonRecord) {
+    return false;
+  }
+
+  return Object.entries(commonRecord).some(([key, value]) =>
+    spotifyBuTagKeyIsTrackIdentity(key) && tagValueIsPresent(value)
+  );
+}
+
+function hasSpotifyBuIdentityNativeTag(native: ParsedAudioMetadata["native"] | undefined) {
+  if (!native) {
+    return false;
+  }
+
+  return Object.values(native).some((tags) =>
+    tags.some((tag) => spotifyBuTagKeyIsTrackIdentity(tag.id) && tagValueIsPresent(tag.value))
+  );
+}
+
+function spotifyBuTagKeyIsTrackIdentity(key: string) {
+  const lowerKey = key.trim().toLowerCase();
+
+  if (spotifyBuTrackIdentityKeys.has(lowerKey)) {
+    return true;
+  }
+
+  const parts = lowerKey.split(":").filter(Boolean);
+  for (let index = 0; index < parts.length; index += 1) {
+    const suffix = parts.slice(index).join(":");
+
+    if (
+      spotifyBuTrackIdentityKeys.has(suffix) ||
+      spotifyBuTrackIdentityLookupKeys.has(normalizeTagLookupKey(suffix))
+    ) {
+      return true;
+    }
+  }
+
+  return spotifyBuTrackIdentityLookupKeys.has(normalizeTagLookupKey(lowerKey));
+}
+
+function normalizeTagLookupKey(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function tagValueIsPresent(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+
+  if (value instanceof Uint8Array) {
+    return value.length > 0;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some(tagValueIsPresent);
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return ["text", "value", "identifier", "url"].some((key) => tagValueIsPresent(record[key]));
+  }
+
+  return false;
 }
 
 function qualityScore(extension: string, bitrate: number | null, bitsPerSample: number | null, lossless: boolean) {

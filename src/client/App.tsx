@@ -2429,6 +2429,9 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
                         {item.status !== "ready" && item.status !== "same" && (
                           <span className="status-detail">{item.message}</span>
                         )}
+                        {item.status === "same" && item.managedBy === "spotifybu" && item.sourceRelativePath !== item.targetRelativePath && (
+                          <span className="status-detail">{item.message}</span>
+                        )}
                       </td>
                       <td>
                         <PathDiff value={item.sourceRelativePath} compareTo={item.targetRelativePath} />
@@ -3633,6 +3636,10 @@ function duplicateTrashSelectionWouldRemoveGroup(
 
 function organizeChangeLabel(item: OrganizePlan["items"][number]) {
   if (item.status === "same") {
+    if (item.managedBy === "spotifybu" && item.sourceRelativePath !== item.targetRelativePath) {
+      return "Managed";
+    }
+
     return "Already organized";
   }
 

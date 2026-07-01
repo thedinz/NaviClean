@@ -282,6 +282,7 @@ export type TrackFile = {
   targetPath: string;
   targetRelativePath: string;
   targetSource?: "naviclean" | "navidrome" | "spotify";
+  managedBy?: "spotifybu";
   issues: string[];
 };
 
@@ -477,6 +478,7 @@ export type OrganizePlanItem = {
   sourceRelativePath: string;
   targetRelativePath: string;
   targetSource?: "naviclean" | "navidrome" | "spotify";
+  managedBy?: "spotifybu";
   status: "ready" | "same" | "duplicate-target" | "conflict" | "outside-library" | "missing-source";
   message: string;
   collision?: OrganizeCollision;

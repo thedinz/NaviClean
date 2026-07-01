@@ -65,6 +65,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       sourceRelativePath: track.relativePath,
       targetRelativePath: target.targetRelativePath,
       targetSource: track.targetSource ?? "naviclean",
+      managedBy: track.managedBy,
       status: "ready",
       message: "Ready"
     };
@@ -119,6 +120,9 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     } else if (targetGroup.length > 1) {
       item.status = "conflict";
       item.message = "Multiple tracks resolve to this target";
+    } else if (track.managedBy === "spotifybu") {
+      item.status = "same";
+      item.message = "Managed by SpotifyBU";
     }
 
     items.push(item);
@@ -382,7 +386,7 @@ export async function trashOrganizeCandidates(
 }
 
 export function trackNeedsMove(track: TrackFile) {
-  return path.resolve(track.absolutePath) !== path.resolve(track.targetPath);
+  return track.managedBy !== "spotifybu" && path.resolve(track.absolutePath) !== path.resolve(track.targetPath);
 }
 
 function templateRelativePath(track: TrackFile, settings: PrivateSettings, extension: string) {
