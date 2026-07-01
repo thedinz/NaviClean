@@ -1,9 +1,17 @@
-import { constants } from "node:fs";
+import { constants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { LibraryAlbumSummary, LibraryArtistSummary, LibraryTrashResult, TrackFile } from "../shared/types.js";
+import type {
+  EmptyFolderDeleteResult,
+  EmptyFolderItem,
+  EmptyFolderPreview,
+  LibraryAlbumSummary,
+  LibraryArtistSummary,
+  LibraryTrashResult,
+  TrackFile
+} from "../shared/types.js";
 import type { PrivateSettings } from "./settings.js";
-import { isInsidePath, normalizeForMatch, sha1 } from "./utils.js";
+import { isInsidePath, normalizeForMatch, sha1, toPosixRelative } from "./utils.js";
 
 type ArtistGroup = {
   id: string;
@@ -119,6 +127,78 @@ export async function trashLibraryTracks(
     removedTrackIds: Array.from(removedTrackIds),
     errors,
     tracks: tracks.filter((track) => !removedTrackIds.has(track.id))
+  };
+}
+
+export async function listEmptyLibraryFolders(settings: PrivateSettings): Promise<EmptyFolderPreview> {
+  const libraryRoot = path.resolve(settings.naming.libraryPath);
+  const recycleRoot = path.resolve(settings.naming.recycleBinPath);
+  const folders: EmptyFolderItem[] = [];
+  const errors: string[] = [];
+
+  await collectEmptyLibraryFolders(libraryRoot, libraryRoot, recycleRoot, folders, errors);
+
+  folders.sort((left, right) => left.relativePath.localeCompare(right.relativePath, undefined, { sensitivity: "base" }));
+
+  return {
+    libraryPath: libraryRoot,
+    total: folders.length,
+    folders,
+    errors
+  };
+}
+
+export async function deleteEmptyLibraryFolders(
+  settings: PrivateSettings,
+  folderIds: string[]
+): Promise<EmptyFolderDeleteResult> {
+  const selectedIds = Array.from(new Set(folderIds.filter(Boolean)));
+
+  if (selectedIds.length === 0) {
+    throw new Error("At least one empty folder is required.");
+  }
+
+  const before = await listEmptyLibraryFolders(settings);
+  const libraryRoot = path.resolve(settings.naming.libraryPath);
+  const currentFolders = new Map(before.folders.map((folder) => [folder.id, folder]));
+  const errors: string[] = [...before.errors];
+  let deleted = 0;
+
+  for (const id of selectedIds) {
+    const folder = currentFolders.get(id);
+
+    if (!folder) {
+      errors.push(`${id}: folder is no longer empty or is not in the current pass`);
+      continue;
+    }
+
+    const folderPath = path.resolve(libraryRoot, ...folder.relativePath.split("/").filter(Boolean));
+
+    if (!isInsidePath(libraryRoot, folderPath) || folderPath === libraryRoot) {
+      errors.push(`${folder.relativePath}: folder is outside the configured library`);
+      continue;
+    }
+
+    try {
+      await fs.rmdir(folderPath);
+      deleted += 1;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+
+      if (code === "ENOENT") {
+        errors.push(`${folder.relativePath}: folder is already gone`);
+      } else if (code === "ENOTEMPTY" || code === "EEXIST") {
+        errors.push(`${folder.relativePath}: folder is no longer empty`);
+      } else {
+        errors.push(`${folder.relativePath}: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  return {
+    deleted,
+    errors,
+    emptyFolders: await listEmptyLibraryFolders(settings)
   };
 }
 
@@ -346,6 +426,71 @@ function yearLabel(tracks: TrackFile[]) {
   }
 
   return `${years[0]}-${years[years.length - 1]}`;
+}
+
+async function collectEmptyLibraryFolders(
+  libraryRoot: string,
+  currentDirectory: string,
+  recycleRoot: string,
+  folders: EmptyFolderItem[],
+  errors: string[]
+) {
+  let entries: Dirent[];
+
+  try {
+    entries = await fs.readdir(currentDirectory, { withFileTypes: true });
+  } catch (error) {
+    const message = `Unable to read ${currentDirectory}: ${(error as Error).message}`;
+
+    if (currentDirectory === libraryRoot) {
+      throw new Error(message);
+    }
+
+    errors.push(`${toPosixRelative(libraryRoot, currentDirectory)}: ${(error as Error).message}`);
+    return;
+  }
+
+  if (currentDirectory !== libraryRoot && entries.length === 0) {
+    folders.push(await emptyFolderItem(libraryRoot, currentDirectory));
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const absolutePath = path.join(currentDirectory, entry.name);
+
+    if (isIgnoredLibraryDirectory(absolutePath, entry.name, recycleRoot)) {
+      continue;
+    }
+
+    await collectEmptyLibraryFolders(libraryRoot, absolutePath, recycleRoot, folders, errors);
+  }
+}
+
+async function emptyFolderItem(libraryRoot: string, absolutePath: string): Promise<EmptyFolderItem> {
+  const relativePath = toPosixRelative(libraryRoot, absolutePath);
+  const segments = relativePath.split("/").filter(Boolean);
+  const stat = await fs.stat(absolutePath);
+
+  return {
+    id: sha1(`empty-folder:${relativePath}`),
+    relativePath,
+    name: segments.at(-1) || relativePath,
+    parentRelativePath: segments.slice(0, -1).join("/"),
+    depth: segments.length,
+    mtimeMs: stat.mtimeMs
+  };
+}
+
+function isIgnoredLibraryDirectory(absolutePath: string, name: string, recycleRoot: string) {
+  return (
+    path.resolve(absolutePath) === recycleRoot ||
+    name === ".naviclean" ||
+    name === ".naviclean-trash"
+  );
 }
 
 function safeRecycleBinPath(settings: PrivateSettings) {

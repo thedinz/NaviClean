@@ -353,6 +353,28 @@ export type LibraryTrashResult = {
   errors: string[];
 };
 
+export type EmptyFolderItem = {
+  id: string;
+  relativePath: string;
+  name: string;
+  parentRelativePath: string;
+  depth: number;
+  mtimeMs: number;
+};
+
+export type EmptyFolderPreview = {
+  libraryPath: string;
+  total: number;
+  folders: EmptyFolderItem[];
+  errors: string[];
+};
+
+export type EmptyFolderDeleteResult = {
+  deleted: number;
+  errors: string[];
+  emptyFolders: EmptyFolderPreview;
+};
+
 export type RecycleBinItem = {
   id: string;
   relativePath: string;

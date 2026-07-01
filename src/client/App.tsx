@@ -30,6 +30,9 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AuthInfo,
   DuplicateBulkResolveResult,
+  EmptyFolderDeleteResult,
+  EmptyFolderItem,
+  EmptyFolderPreview,
   DuplicateGroup,
   LibraryAlbumSummary,
   LibraryArtistSummary,
@@ -433,6 +436,14 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [emptyFolders, setEmptyFolders] = useState<EmptyFolderPreview | null>(null);
+  const [selectedEmptyFolderIds, setSelectedEmptyFolderIds] = useState<Record<string, boolean>>({});
+  const [emptyFolderBusy, setEmptyFolderBusy] = useState<"load" | "delete" | null>(null);
+  const [emptyFolderErrors, setEmptyFolderErrors] = useState<string[]>([]);
+  const emptyFolderItems = emptyFolders?.folders || [];
+  const selectedEmptyFolderItems = emptyFolderItems.filter((folder) => selectedEmptyFolderIds[folder.id]);
+  const allEmptyFoldersSelected =
+    emptyFolderItems.length > 0 && selectedEmptyFolderItems.length === emptyFolderItems.length;
 
   useEffect(() => {
     let cancelled = false;
@@ -508,6 +519,79 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
     }
   };
 
+  const applyEmptyFolderPreview = (next: EmptyFolderPreview) => {
+    setEmptyFolders(next);
+    setSelectedEmptyFolderIds((current) => {
+      const validIds = new Set(next.folders.map((folder) => folder.id));
+      return Object.fromEntries(Object.entries(current).filter(([id, selected]) => selected && validIds.has(id)));
+    });
+    setEmptyFolderErrors(next.errors);
+  };
+
+  const clearEmptyFolderPreview = () => {
+    setEmptyFolders(null);
+    setSelectedEmptyFolderIds({});
+    setEmptyFolderErrors([]);
+  };
+
+  const loadEmptyFolders = async () => {
+    setEmptyFolderBusy("load");
+    setError(null);
+
+    try {
+      const next = await api<EmptyFolderPreview>("/library/empty-folders");
+      applyEmptyFolderPreview(next);
+      setNotice(`${next.total} empty ${pluralize("folder", next.total)} found.`);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setEmptyFolderBusy(null);
+    }
+  };
+
+  const toggleAllEmptyFolders = () => {
+    if (allEmptyFoldersSelected) {
+      setSelectedEmptyFolderIds({});
+      return;
+    }
+
+    setSelectedEmptyFolderIds(Object.fromEntries(emptyFolderItems.map((folder) => [folder.id, true])));
+  };
+
+  const toggleEmptyFolder = (folder: EmptyFolderItem) => {
+    setSelectedEmptyFolderIds((current) => ({
+      ...current,
+      [folder.id]: !current[folder.id]
+    }));
+  };
+
+  const deleteSelectedEmptyFolders = async () => {
+    if (selectedEmptyFolderItems.length === 0) {
+      return;
+    }
+
+    if (!window.confirm(`Permanently delete ${selectedEmptyFolderItems.length} empty ${pluralize("folder", selectedEmptyFolderItems.length)}?`)) {
+      return;
+    }
+
+    setEmptyFolderBusy("delete");
+    setError(null);
+
+    try {
+      const result = await api<EmptyFolderDeleteResult>("/library/empty-folders", {
+        method: "DELETE",
+        body: JSON.stringify({ ids: selectedEmptyFolderItems.map((folder) => folder.id) })
+      });
+      applyEmptyFolderPreview(result.emptyFolders);
+      setEmptyFolderErrors(result.errors);
+      setNotice(emptyFolderDeleteNotice(result));
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setEmptyFolderBusy(null);
+    }
+  };
+
   const trashArtist = async (artist: LibraryArtistSummary) => {
     const confirmed = window.confirm(
       `Move ${artist.name}, ${artist.albumCount} ${pluralize("album", artist.albumCount)}, and ${artist.trackCount} ${pluralize("track", artist.trackCount)} to the recycle bin?`
@@ -565,6 +649,7 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
       setNotice(libraryTrashNotice(result));
 
       if (result.trashed > 0) {
+        clearEmptyFolderPreview();
         afterTrash?.();
         await onChanged();
       }
@@ -621,6 +706,29 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
           <Search size={17} />
           <input value={search} onChange={(event) => updateSearch(event.target.value)} placeholder="Search" />
         </div>
+        <div className="button-row library-cleanup-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={loadEmptyFolders}
+            disabled={Boolean(emptyFolderBusy) || Boolean(busyKey)}
+            title="Find empty folders"
+          >
+            {emptyFolderBusy === "load" ? <Loader2 className="spin" size={18} /> : emptyFolders ? <RefreshCw size={18} /> : <FolderInput size={18} />}
+            <span>{emptyFolderBusy === "load" ? "Finding" : emptyFolders ? "Refresh folders" : "Empty folders"}</span>
+          </button>
+          {emptyFolders && (
+            <button
+              className="danger-button"
+              type="button"
+              onClick={deleteSelectedEmptyFolders}
+              disabled={Boolean(emptyFolderBusy) || selectedEmptyFolderItems.length === 0}
+            >
+              {emptyFolderBusy === "delete" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+              <span>{emptyFolderBusy === "delete" ? "Deleting" : "Delete selected"}</span>
+            </button>
+          )}
+        </div>
         {view === "artists" && artistTotal > libraryArtistPageSize && (
           <div className="pagination-controls library-pagination" aria-label="Artist pages">
             <button
@@ -647,6 +755,27 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
         <span className="muted">{loading ? "Loading library" : countLabel}</span>
       </div>
       {notice && <p className="notice-bar">{notice}</p>}
+      {emptyFolderBusy && (
+        <ActionProgress label={emptyFolderBusy === "delete" ? "Deleting empty folders" : "Finding empty folders"} />
+      )}
+      {emptyFolders && (
+        <EmptyFoldersPanel
+          allSelected={allEmptyFoldersSelected}
+          preview={emptyFolders}
+          selectedCount={selectedEmptyFolderItems.length}
+          selectedIds={selectedEmptyFolderIds}
+          onToggle={toggleEmptyFolder}
+          onToggleAll={toggleAllEmptyFolders}
+        />
+      )}
+      {emptyFolderErrors.length > 0 && (
+        <div className="error-list">
+          {emptyFolderErrors.slice(0, 8).map((item) => (
+            <span key={item}>{item}</span>
+          ))}
+          {emptyFolderErrors.length > 8 && <span>{emptyFolderErrors.length - 8} more errors</span>}
+        </div>
+      )}
       {loading && <ActionProgress label="Loading library" />}
       {error && <p className="form-error">{error}</p>}
       {!loading && view === "artists" && (
@@ -659,6 +788,73 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
         <LibraryTrackTable tracks={tracks} busyKey={busyKey} onTrash={trashTrack} />
       )}
     </section>
+  );
+}
+
+function EmptyFoldersPanel({
+  allSelected,
+  preview,
+  selectedCount,
+  selectedIds,
+  onToggle,
+  onToggleAll
+}: {
+  allSelected: boolean;
+  preview: EmptyFolderPreview;
+  selectedCount: number;
+  selectedIds: Record<string, boolean>;
+  onToggle: (folder: EmptyFolderItem) => void;
+  onToggleAll: () => void;
+}) {
+  return (
+    <div className="empty-folder-panel">
+      <div className="toolbar compact-toolbar">
+        <div className="summary-chips">
+          <span>Current pass</span>
+          <span>{preview.total} empty {pluralize("folder", preview.total)}</span>
+          <span>{selectedCount} selected</span>
+        </div>
+        <span className="muted">{preview.libraryPath}</span>
+      </div>
+      {preview.folders.length === 0 ? (
+        <EmptyState icon={FolderInput} title="No empty folders" />
+      ) : (
+        <div className="table-wrap">
+          <table className="empty-folder-table">
+            <thead>
+              <tr>
+                <th>
+                  <input type="checkbox" checked={allSelected} onChange={onToggleAll} aria-label="Select all empty folders" />
+                </th>
+                <th>Folder</th>
+                <th>Parent</th>
+                <th>Depth</th>
+              </tr>
+            </thead>
+            <tbody>
+              {preview.folders.map((folder) => (
+                <tr key={folder.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedIds[folder.id])}
+                      onChange={() => onToggle(folder)}
+                      aria-label={`Select ${folder.relativePath}`}
+                    />
+                  </td>
+                  <td>
+                    <strong>{folder.name}</strong>
+                    <span className="path-diff">{folder.relativePath}</span>
+                  </td>
+                  <td>{folder.parentRelativePath || "Library root"}</td>
+                  <td>{folder.depth}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2894,6 +3090,12 @@ function filterLibraryTracks(tracks: TrackFile[], search: string) {
 function libraryTrashNotice(result: LibraryTrashResult) {
   const errorSuffix = result.errors.length ? ` (${result.errors.length} issue${result.errors.length === 1 ? "" : "s"})` : "";
   return `${result.trashed} moved to recycle bin${errorSuffix}.`;
+}
+
+function emptyFolderDeleteNotice(result: EmptyFolderDeleteResult) {
+  const errorSuffix = result.errors.length ? ` (${result.errors.length} issue${result.errors.length === 1 ? "" : "s"})` : "";
+  const nextPass = result.emptyFolders.total;
+  return `${result.deleted} empty ${pluralize("folder", result.deleted)} deleted${errorSuffix}. ${nextPass} in the next pass.`;
 }
 
 function libraryMeta(values: string[]) {

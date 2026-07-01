@@ -500,6 +500,10 @@ legend {
   align-items: flex-start;
 }
 
+.library-cleanup-actions {
+  justify-content: flex-start;
+}
+
 .library-breadcrumbs {
   display: flex;
   flex-wrap: wrap;
@@ -630,6 +634,27 @@ legend {
 
 .library-track-table {
   min-width: 860px;
+}
+
+.empty-folder-panel {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #e4e2d9;
+  border-radius: 8px;
+  background: #fbfaf5;
+}
+
+.empty-folder-panel .toolbar {
+  margin-bottom: 0;
+}
+
+.empty-folder-panel .muted {
+  overflow-wrap: anywhere;
+}
+
+.empty-folder-table {
+  min-width: 680px;
 }
 
 .library-track-table td:first-child {

@@ -3,7 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { buildLibraryAlbums, buildLibraryArtists, findLibraryAlbumTracks, findLibraryArtistTracks, trashLibraryTracks } from "../src/server/library.js";
+import {
+  buildLibraryAlbums,
+  buildLibraryArtists,
+  deleteEmptyLibraryFolders,
+  findLibraryAlbumTracks,
+  findLibraryArtistTracks,
+  listEmptyLibraryFolders,
+  trashLibraryTracks
+} from "../src/server/library.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 import type { TrackFile } from "../src/shared/types.js";
 
@@ -95,6 +103,42 @@ test("trashing an artist recycles all artist tracks and prunes empty folders", a
     assert.equal(trashGroups.length, 1);
     await fs.access(path.join(root, ".naviclean-trash", trashGroups[0], "Artist", "Album", "01 - One.mp3"));
     await fs.access(path.join(root, ".naviclean-trash", trashGroups[0], "Artist", "Album", "02 - Two.mp3"));
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("empty folder cleanup runs one visible level per pass", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-library-empty-"));
+
+  try {
+    const emptyAlbumPath = path.join(root, "Artist", "Empty Album");
+    const nonEmptyAlbumPath = path.join(root, "Other Artist", "Album");
+    const ignoredTrashPath = path.join(root, ".naviclean-trash", "Batch", "Empty");
+
+    await fs.mkdir(emptyAlbumPath, { recursive: true });
+    await fs.mkdir(nonEmptyAlbumPath, { recursive: true });
+    await fs.writeFile(path.join(nonEmptyAlbumPath, "01 - Song.mp3"), "audio");
+    await fs.mkdir(ignoredTrashPath, { recursive: true });
+
+    const firstPass = await listEmptyLibraryFolders(settings(root));
+
+    assert.deepEqual(firstPass.folders.map((folder) => folder.relativePath), ["Artist/Empty Album"]);
+
+    const result = await deleteEmptyLibraryFolders(settings(root), [firstPass.folders[0]?.id || ""]);
+
+    assert.equal(result.deleted, 1);
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.emptyFolders.folders.map((folder) => folder.relativePath), ["Artist"]);
+    await assert.rejects(fs.access(emptyAlbumPath), /ENOENT/);
+    await fs.access(path.join(root, "Artist"));
+    await fs.access(ignoredTrashPath);
+
+    const secondPass = await deleteEmptyLibraryFolders(settings(root), [result.emptyFolders.folders[0]?.id || ""]);
+
+    assert.equal(secondPass.deleted, 1);
+    assert.deepEqual(secondPass.emptyFolders.folders.map((folder) => folder.relativePath), []);
+    await assert.rejects(fs.access(path.join(root, "Artist")), /ENOENT/);
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }
