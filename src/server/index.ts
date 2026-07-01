@@ -8,8 +8,10 @@ import { buildDuplicateGroups, resolveDuplicates, resolveSelectedDuplicates } fr
 import {
   buildLibraryAlbums,
   buildLibraryArtists,
+  deleteEmptyLibraryFolders,
   findLibraryAlbumTracks,
   findLibraryArtistTracks,
+  listEmptyLibraryFolders,
   trashLibraryTracks
 } from "./library.js";
 import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate, trashOrganizeCandidates } from "./organizer.js";
@@ -280,6 +282,21 @@ app.get("/api/library/artists", asyncHandler(async (req, res) => {
     pageSize,
     total: catalog.tracks.length
   });
+}));
+
+app.get("/api/library/empty-folders", asyncHandler(async (_req, res) => {
+  res.json(await listEmptyLibraryFolders(await loadSettingsForPlanning()));
+}));
+
+app.delete("/api/library/empty-folders", asyncHandler(async (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids.map(String).filter(Boolean) : [];
+
+  if (ids.length === 0) {
+    res.status(400).json({ error: "ids are required" });
+    return;
+  }
+
+  res.json(await deleteEmptyLibraryFolders(await loadSettingsForPlanning(), ids));
 }));
 
 app.get("/api/library/artwork/:type", asyncHandler(async (req, res) => {
