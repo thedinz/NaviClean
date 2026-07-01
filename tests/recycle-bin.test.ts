@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin } from "../src/server/recycle-bin.js";
+import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin, restoreRecycleBinItems } from "../src/server/recycle-bin.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 
 test("lists recycle bin files with original paths and totals", async () => {
@@ -50,6 +50,34 @@ test("deletes selected recycle bin files and keeps unselected files", async () =
     await fs.access(keepPath);
     await assert.rejects(fs.access(removePath), /ENOENT/);
     assert.deepEqual(result.recycleBin.items.map((item) => item.originalRelativePath), ["Keep.mp3"]);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("restores selected recycle bin files to their original library paths", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-trash-"));
+
+  try {
+    const recycleBinPath = path.join(root, ".naviclean-trash");
+    const trashPath = path.join(recycleBinPath, "2026-06-21T07-42-49-123Z", "Artist", "Album", "info.nfo");
+    const restoredPath = path.join(root, "Artist", "Album", "info.nfo");
+    await fs.mkdir(path.dirname(trashPath), { recursive: true });
+    await fs.writeFile(trashPath, "metadata");
+
+    const before = await listRecycleBin(settings(root));
+    const item = before.items.find((candidate) => candidate.originalRelativePath === "Artist/Album/info.nfo");
+
+    assert.ok(item);
+
+    const result = await restoreRecycleBinItems(settings(root), [item.id]);
+
+    assert.equal(result.restoredFiles, 1);
+    assert.equal(result.restoredBytes, 8);
+    assert.deepEqual(result.errors, []);
+    assert.equal(await fs.readFile(restoredPath, "utf8"), "metadata");
+    await assert.rejects(fs.access(trashPath), /ENOENT/);
+    assert.equal(result.recycleBin.totalFiles, 0);
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }

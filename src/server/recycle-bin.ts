@@ -1,7 +1,12 @@
-import type { Dirent } from "node:fs";
+import { constants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { RecycleBinDeleteResult, RecycleBinItem, RecycleBinView } from "../shared/types.js";
+import type {
+  RecycleBinDeleteResult,
+  RecycleBinItem,
+  RecycleBinRestoreResult,
+  RecycleBinView
+} from "../shared/types.js";
 import type { PrivateSettings } from "./settings.js";
 import { isInsidePath, sha1, toPosixRelative } from "./utils.js";
 
@@ -80,6 +85,74 @@ export async function deleteRecycleBinItems(
   return {
     deletedFiles,
     deletedBytes,
+    errors,
+    recycleBin: await listRecycleBin(settings)
+  };
+}
+
+export async function restoreRecycleBinItems(
+  settings: PrivateSettings,
+  itemIds: string[]
+): Promise<RecycleBinRestoreResult> {
+  const recycleBinPath = safeRecycleBinPath(settings);
+  const libraryPath = path.resolve(settings.naming.libraryPath);
+  const current = await listRecycleBin(settings);
+  const selectedIds = new Set(itemIds);
+  const selectedItems = current.items.filter((item) => selectedIds.has(item.id));
+  const touchedDirectories = new Set<string>();
+  const errors: string[] = [];
+  let restoredFiles = 0;
+  let restoredBytes = 0;
+
+  for (const item of selectedItems) {
+    const itemPath = path.resolve(recycleBinPath, ...item.relativePath.split("/").filter(Boolean));
+    const targetPath = path.resolve(libraryPath, ...item.originalRelativePath.split("/").filter(Boolean));
+
+    if (!isInsidePath(recycleBinPath, itemPath) || itemPath === recycleBinPath) {
+      errors.push(`${item.relativePath}: path is outside the recycle bin`);
+      continue;
+    }
+
+    if (!isInsidePath(libraryPath, targetPath) || targetPath === libraryPath) {
+      errors.push(`${item.originalRelativePath}: restore target is outside the configured library`);
+      continue;
+    }
+
+    try {
+      await fs.access(targetPath);
+      errors.push(`${item.originalRelativePath}: restore target already exists`);
+      continue;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        errors.push(`${item.originalRelativePath}: ${(error as Error).message}`);
+        continue;
+      }
+    }
+
+    try {
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await moveFile(itemPath, targetPath);
+      touchedDirectories.add(path.dirname(itemPath));
+      restoredFiles += 1;
+      restoredBytes += item.size;
+    } catch (error) {
+      errors.push(`${item.originalRelativePath}: ${(error as Error).message}`);
+    }
+  }
+
+  for (const directory of touchedDirectories) {
+    await pruneEmptyDirectories(recycleBinPath, directory);
+  }
+
+  const missingIds = itemIds.filter((id) => !current.items.some((item) => item.id === id));
+
+  for (const id of missingIds) {
+    errors.push(`${id}: item is no longer in the recycle bin`);
+  }
+
+  return {
+    restoredFiles,
+    restoredBytes,
     errors,
     recycleBin: await listRecycleBin(settings)
   };
@@ -174,6 +247,22 @@ function parseRecycleBinGroupDate(value: string) {
   );
 
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+async function moveFile(source: string, target: string) {
+  try {
+    await fs.rename(source, target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EXDEV") {
+      throw error;
+    }
+
+    const stat = await fs.stat(source);
+    await fs.copyFile(source, target, constants.COPYFILE_EXCL);
+    await fs.chmod(target, stat.mode);
+    await fs.utimes(target, stat.atime, stat.mtime);
+    await fs.unlink(source);
+  }
 }
 
 async function pruneEmptyDirectories(root: string, startDirectory: string) {

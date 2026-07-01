@@ -414,6 +414,13 @@ export type NonMusicFilesView = {
   errors: string[];
 };
 
+export type NonMusicTrashResult = {
+  trashed: number;
+  trashedBytes: number;
+  errors: string[];
+  nonMusicFiles: NonMusicFilesView;
+};
+
 export type RecycleBinItem = {
   id: string;
   relativePath: string;
@@ -435,6 +442,13 @@ export type RecycleBinView = {
 export type RecycleBinDeleteResult = {
   deletedFiles: number;
   deletedBytes: number;
+  errors: string[];
+  recycleBin: RecycleBinView;
+};
+
+export type RecycleBinRestoreResult = {
+  restoredFiles: number;
+  restoredBytes: number;
   errors: string[];
   recycleBin: RecycleBinView;
 };

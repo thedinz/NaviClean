@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { listNonMusicFiles } from "../src/server/non-music.js";
+import { listNonMusicFiles, trashNonMusicFileGroups } from "../src/server/non-music.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 
 test("non-music inventory groups sidecars and ignores NaviClean folders", async () => {
@@ -34,10 +34,56 @@ test("non-music inventory groups sidecars and ignores NaviClean folders", async 
   }
 });
 
+test("trashes selected non-music groups and refreshes inventory", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-non-music-"));
+
+  try {
+    await writeFile(root, "Artist/Album/01 - Song.mp3", "audio");
+    await writeFile(root, "Artist/Album/album.nfo", "metadata");
+    await writeFile(root, "Artist/Album/cover.jpg", "image");
+
+    const result = await trashNonMusicFileGroups(settings(root), [".nfo"]);
+
+    assert.equal(result.trashed, 1);
+    assert.equal(result.trashedBytes, 8);
+    assert.deepEqual(result.errors, []);
+    await assert.rejects(fs.access(path.join(root, "Artist", "Album", "album.nfo")), /ENOENT/);
+
+    const trashedFiles = await findFiles(path.join(root, ".naviclean-trash"));
+    assert.deepEqual(trashedFiles.map((file) => file.replace(/^[^/]+\//, "")), ["Artist/Album/album.nfo"]);
+    assert.equal(result.nonMusicFiles.groups.some((group) => group.key === ".nfo"), false);
+    assert.equal(result.nonMusicFiles.groups.some((group) => group.key === ".jpg"), true);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 async function writeFile(root: string, relativePath: string, contents: string) {
   const filePath = path.join(root, ...relativePath.split("/"));
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, contents);
+}
+
+async function findFiles(root: string) {
+  const files: string[] = [];
+  const stack = [root];
+
+  while (stack.length > 0) {
+    const current = stack.pop() as string;
+    const entries = await fs.readdir(current, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const absolutePath = path.join(current, entry.name);
+
+      if (entry.isDirectory()) {
+        stack.push(absolutePath);
+      } else if (entry.isFile()) {
+        files.push(path.relative(root, absolutePath).split(path.sep).join("/"));
+      }
+    }
+  }
+
+  return files.sort();
 }
 
 function settings(libraryPath: string): PrivateSettings {
