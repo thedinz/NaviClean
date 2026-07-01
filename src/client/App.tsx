@@ -74,6 +74,42 @@ type OrganizePreviewItem = OrganizePlan["items"][number];
 const libraryArtistPageSize = 25;
 const organizePreviewPageSize = 150;
 const themeStorageKey = "naviclean-theme";
+const trashAudioExtensions = new Set([
+  ".aac",
+  ".aif",
+  ".aiff",
+  ".alac",
+  ".ape",
+  ".dff",
+  ".dsf",
+  ".flac",
+  ".m4a",
+  ".mka",
+  ".mp3",
+  ".ogg",
+  ".opus",
+  ".wav",
+  ".wma"
+]);
+const trashArtworkExtensions = new Set([".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"]);
+const trashPlaylistExtensions = new Set([".m3u", ".m3u8", ".pls", ".xspf"]);
+const trashLyricsExtensions = new Set([".lrc"]);
+const trashMetadataExtensions = new Set([
+  ".accurip",
+  ".cue",
+  ".log",
+  ".md5",
+  ".nfo",
+  ".pdf",
+  ".sfv",
+  ".sha1",
+  ".sha256",
+  ".txt",
+  ".url"
+]);
+const trashArchiveExtensions = new Set([".7z", ".gz", ".rar", ".tar", ".zip"]);
+const trashVideoExtensions = new Set([".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm", ".wmv"]);
+const trashJunkExtensions = new Set([".bak", ".crdownload", ".part", ".tmp"]);
 
 const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
@@ -1633,14 +1669,17 @@ function TrashPage() {
   const [view, setView] = useState<RecycleBinView | null>(null);
   const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<"restore" | "selected" | "empty" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const items = view?.items || [];
-  const filteredItems = useMemo(() => filterTrashItems(items, filter), [filter, items]);
+  const typeOptions = useMemo(() => buildTrashTypeOptions(items), [items]);
+  const filteredItems = useMemo(() => filterTrashItems(items, filter, typeFilter), [filter, items, typeFilter]);
   const selectedItems = filteredItems.filter((item) => selectedIds[item.id]);
   const allSelected = filteredItems.length > 0 && selectedItems.length === filteredItems.length;
+  const filtersActive = Boolean(filter.trim()) || typeFilter !== "all";
 
   const load = async ({ clearNotice = true }: { clearNotice?: boolean } = {}) => {
     setLoading(true);
@@ -1666,6 +1705,12 @@ function TrashPage() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (typeFilter !== "all" && !typeOptions.some((option) => option.key === typeFilter)) {
+      setTypeFilter("all");
+    }
+  }, [typeFilter, typeOptions]);
 
   const toggleAll = () => {
     setSelectedIds((current) => {
@@ -1785,12 +1830,27 @@ function TrashPage() {
         <div className="summary-chips">
           <span>{view?.totalFiles || 0} files</span>
           <span>{formatBytes(view?.totalSize || 0)}</span>
-          {filter.trim() && <span>{filteredItems.length} shown</span>}
+          {filtersActive && <span>{filteredItems.length} shown</span>}
           <span>{selectedItems.length} selected</span>
         </div>
         <div className="search-box">
           <Search size={17} />
           <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter trash" />
+        </div>
+        <div className="filter-select">
+          <SlidersHorizontal size={17} />
+          <select
+            value={typeFilter}
+            onChange={(event) => setTypeFilter(event.target.value)}
+            disabled={items.length === 0}
+            aria-label="Filter trash by type"
+          >
+            {typeOptions.map((option) => (
+              <option key={option.key} value={option.key}>
+                {option.label} ({option.count.toLocaleString()})
+              </option>
+            ))}
+          </select>
         </div>
         <div className="button-row">
           <button className="secondary-button" type="button" onClick={() => load()} disabled={loading || Boolean(busy)}>
@@ -3484,19 +3544,79 @@ function nonMusicClassificationLabel(value: NonMusicFileClassification) {
   return "Review";
 }
 
-function filterTrashItems(items: RecycleBinItem[], filter: string) {
-  const query = filter.trim().toLowerCase();
+function buildTrashTypeOptions(items: RecycleBinItem[]) {
+  const options = new Map<string, { key: string; label: string; count: number; rank: number }>();
 
-  if (!query) {
-    return items;
+  for (const item of items) {
+    const type = trashItemType(item);
+    const option = options.get(type.key) ?? { ...type, count: 0 };
+    option.count += 1;
+    options.set(type.key, option);
   }
 
+  return [
+    { key: "all", label: "All types", count: items.length, rank: -1 },
+    ...Array.from(options.values()).sort((left, right) => left.rank - right.rank || left.label.localeCompare(right.label))
+  ];
+}
+
+function filterTrashItems(items: RecycleBinItem[], filter: string, typeFilter: string) {
+  const query = filter.trim().toLowerCase();
+
   return items.filter((item) =>
-    [item.originalRelativePath, item.relativePath, item.deletedGroup, item.extension]
-      .join(" ")
-      .toLowerCase()
-      .includes(query)
+    trashItemMatchesType(item, typeFilter) &&
+    (!query ||
+      [item.originalRelativePath, item.relativePath, item.deletedGroup, item.extension]
+        .join(" ")
+        .toLowerCase()
+        .includes(query))
   );
+}
+
+function trashItemMatchesType(item: RecycleBinItem, typeFilter: string) {
+  return typeFilter === "all" || trashItemType(item).key === typeFilter;
+}
+
+function trashItemType(item: RecycleBinItem) {
+  const extension = item.extension.toLowerCase();
+
+  if (trashAudioExtensions.has(extension)) {
+    return { key: "audio", label: "Audio files", rank: 0 };
+  }
+
+  if (trashArtworkExtensions.has(extension)) {
+    return { key: "artwork", label: "Artwork/images", rank: 1 };
+  }
+
+  if (trashMetadataExtensions.has(extension)) {
+    return { key: "metadata", label: "Metadata/review", rank: 2 };
+  }
+
+  if (trashPlaylistExtensions.has(extension)) {
+    return { key: "playlist", label: "Playlists", rank: 3 };
+  }
+
+  if (trashLyricsExtensions.has(extension)) {
+    return { key: "lyrics", label: "Lyrics", rank: 4 };
+  }
+
+  if (trashArchiveExtensions.has(extension)) {
+    return { key: "archive", label: "Archives", rank: 5 };
+  }
+
+  if (trashVideoExtensions.has(extension)) {
+    return { key: "video", label: "Video files", rank: 6 };
+  }
+
+  if (trashJunkExtensions.has(extension)) {
+    return { key: "junk", label: "Temporary/junk", rank: 7 };
+  }
+
+  if (!extension) {
+    return { key: "extensionless", label: "No extension", rank: 8 };
+  }
+
+  return { key: "other", label: "Other files", rank: 9 };
 }
 
 function libraryMeta(values: string[]) {
