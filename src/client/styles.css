@@ -472,7 +472,8 @@ legend {
   font-weight: 760;
 }
 
-.search-box {
+.search-box,
+.filter-select {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -484,8 +485,20 @@ legend {
   background: #fff;
 }
 
+.filter-select {
+  width: min(260px, 100%);
+}
+
 .search-box input {
   width: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+}
+
+.filter-select select {
+  min-height: 38px;
+  padding: 0;
   border: 0;
   outline: none;
   background: transparent;
@@ -1381,6 +1394,7 @@ select:disabled {
 }
 
 [data-theme="dark"] .search-box,
+[data-theme="dark"] .filter-select,
 [data-theme="dark"] input,
 [data-theme="dark"] select {
   border-color: var(--border-strong);
@@ -1388,7 +1402,8 @@ select:disabled {
   color: var(--text);
 }
 
-[data-theme="dark"] .search-box input {
+[data-theme="dark"] .search-box input,
+[data-theme="dark"] .filter-select select {
   border-color: transparent;
   background: transparent;
 }
@@ -1529,6 +1544,7 @@ select:disabled {
   .primary-button,
   .secondary-button,
   .danger-button,
+  .filter-select,
   .organize-preview-tools,
   .toolbar {
     width: 100%;
