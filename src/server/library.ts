@@ -133,10 +133,11 @@ export async function trashLibraryTracks(
 export async function listEmptyLibraryFolders(settings: PrivateSettings): Promise<EmptyFolderPreview> {
   const libraryRoot = path.resolve(settings.naming.libraryPath);
   const recycleRoot = path.resolve(settings.naming.recycleBinPath);
+  const exclusions = new Set(settings.cleanup.emptyFolderExclusions.map((value) => value.toLowerCase()));
   const folders: EmptyFolderItem[] = [];
   const errors: string[] = [];
 
-  await collectEmptyLibraryFolders(libraryRoot, libraryRoot, recycleRoot, folders, errors);
+  await collectEmptyLibraryFolders(libraryRoot, libraryRoot, recycleRoot, exclusions, folders, errors);
 
   folders.sort((left, right) => left.relativePath.localeCompare(right.relativePath, undefined, { sensitivity: "base" }));
 
@@ -432,6 +433,7 @@ async function collectEmptyLibraryFolders(
   libraryRoot: string,
   currentDirectory: string,
   recycleRoot: string,
+  exclusions: Set<string>,
   folders: EmptyFolderItem[],
   errors: string[]
 ) {
@@ -462,11 +464,11 @@ async function collectEmptyLibraryFolders(
 
     const absolutePath = path.join(currentDirectory, entry.name);
 
-    if (isIgnoredLibraryDirectory(absolutePath, entry.name, recycleRoot)) {
+    if (isIgnoredLibraryDirectory(libraryRoot, absolutePath, entry.name, recycleRoot, exclusions)) {
       continue;
     }
 
-    await collectEmptyLibraryFolders(libraryRoot, absolutePath, recycleRoot, folders, errors);
+    await collectEmptyLibraryFolders(libraryRoot, absolutePath, recycleRoot, exclusions, folders, errors);
   }
 }
 
@@ -485,12 +487,31 @@ async function emptyFolderItem(libraryRoot: string, absolutePath: string): Promi
   };
 }
 
-function isIgnoredLibraryDirectory(absolutePath: string, name: string, recycleRoot: string) {
+function isIgnoredLibraryDirectory(
+  libraryRoot: string,
+  absolutePath: string,
+  name: string,
+  recycleRoot: string,
+  exclusions: Set<string>
+) {
+  const relativePath = toPosixRelative(libraryRoot, absolutePath).toLowerCase();
+
   return (
     path.resolve(absolutePath) === recycleRoot ||
     name === ".naviclean" ||
-    name === ".naviclean-trash"
+    name === ".naviclean-trash" ||
+    pathMatchesExclusion(relativePath, exclusions)
   );
+}
+
+function pathMatchesExclusion(relativePath: string, exclusions: Set<string>) {
+  for (const exclusion of exclusions) {
+    if (relativePath === exclusion || relativePath.startsWith(`${exclusion}/`)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function safeRecycleBinPath(settings: PrivateSettings) {

@@ -144,6 +144,22 @@ test("empty folder cleanup runs one visible level per pass", async () => {
   }
 });
 
+test("empty folder cleanup skips configured exclusions", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-library-empty-excluded-"));
+
+  try {
+    await fs.mkdir(path.join(root, "provider-downloads"), { recursive: true });
+    await fs.mkdir(path.join(root, ".spotifybu", "tmp", "provider-downloads"), { recursive: true });
+    await fs.mkdir(path.join(root, "Artist", "Empty Album"), { recursive: true });
+
+    const firstPass = await listEmptyLibraryFolders(settings(root));
+
+    assert.deepEqual(firstPass.folders.map((folder) => folder.relativePath), ["Artist/Empty Album"]);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 function settings(libraryPath: string): PrivateSettings {
   return {
     auth: {
@@ -183,6 +199,9 @@ function settings(libraryPath: string): PrivateSettings {
       extensions: [".mp3", ".flac"],
       autoScanEnabled: true,
       autoScanTime: "02:00"
+    },
+    cleanup: {
+      emptyFolderExclusions: ["provider-downloads", ".spotifybu/tmp/provider-downloads"]
     }
   };
 }

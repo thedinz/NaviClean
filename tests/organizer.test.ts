@@ -545,6 +545,9 @@ function settings(overrides: Partial<PrivateSettings["naming"]> = {}): PrivateSe
       extensions: [".mp3"],
       autoScanEnabled: true,
       autoScanTime: "02:00"
+    },
+    cleanup: {
+      emptyFolderExclusions: ["provider-downloads", ".spotifybu/tmp/provider-downloads"]
     }
   };
 }

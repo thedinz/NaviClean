@@ -211,6 +211,10 @@ export type ScanSettings = {
   autoScanTime: string;
 };
 
+export type CleanupSettings = {
+  emptyFolderExclusions: string[];
+};
+
 export type SettingsView = {
   auth: {
     enabled: boolean;
@@ -220,6 +224,7 @@ export type SettingsView = {
   catalog: CatalogSettingsView;
   naming: NamingSettings;
   scan: ScanSettings;
+  cleanup: CleanupSettings;
 };
 
 export type SettingsUpdate = {
@@ -244,6 +249,7 @@ export type SettingsUpdate = {
   };
   naming?: Partial<NamingSettings>;
   scan?: Partial<ScanSettings>;
+  cleanup?: Partial<CleanupSettings>;
 };
 
 export type TrackFile = {
@@ -373,6 +379,39 @@ export type EmptyFolderDeleteResult = {
   deleted: number;
   errors: string[];
   emptyFolders: EmptyFolderPreview;
+};
+
+export type EmptyFolderExcludeResult = {
+  emptyFolders: EmptyFolderPreview;
+  exclusions: string[];
+};
+
+export type NonMusicFileClassification = "useful" | "junk" | "review";
+
+export type NonMusicFileExample = {
+  relativePath: string;
+  size: number;
+  mtimeMs: number;
+};
+
+export type NonMusicFileGroup = {
+  key: string;
+  label: string;
+  classification: NonMusicFileClassification;
+  description: string;
+  count: number;
+  totalSize: number;
+  examples: NonMusicFileExample[];
+};
+
+export type NonMusicFilesView = {
+  libraryPath: string;
+  totalFiles: number;
+  audioFiles: number;
+  nonMusicFiles: number;
+  totalSize: number;
+  groups: NonMusicFileGroup[];
+  errors: string[];
 };
 
 export type RecycleBinItem = {

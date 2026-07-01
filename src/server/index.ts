@@ -14,6 +14,7 @@ import {
   listEmptyLibraryFolders,
   trashLibraryTracks
 } from "./library.js";
+import { listNonMusicFiles } from "./non-music.js";
 import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate, trashOrganizeCandidates } from "./organizer.js";
 import {
   getSpotifyCatalogDownloadJob,
@@ -288,6 +289,27 @@ app.get("/api/library/empty-folders", asyncHandler(async (_req, res) => {
   res.json(await listEmptyLibraryFolders(await loadSettingsForPlanning()));
 }));
 
+app.post("/api/library/empty-folders/exclusions", asyncHandler(async (req, res) => {
+  const relativePath = String(req.body.relativePath || "").trim();
+
+  if (!relativePath) {
+    res.status(400).json({ error: "relativePath is required" });
+    return;
+  }
+
+  const settings = await loadSettingsForPlanning();
+  const next = await updateSettings({
+    cleanup: {
+      emptyFolderExclusions: [...settings.cleanup.emptyFolderExclusions, relativePath]
+    }
+  });
+
+  res.json({
+    emptyFolders: await listEmptyLibraryFolders(next),
+    exclusions: next.cleanup.emptyFolderExclusions
+  });
+}));
+
 app.delete("/api/library/empty-folders", asyncHandler(async (req, res) => {
   const ids = Array.isArray(req.body.ids) ? req.body.ids.map(String).filter(Boolean) : [];
 
@@ -297,6 +319,10 @@ app.delete("/api/library/empty-folders", asyncHandler(async (req, res) => {
   }
 
   res.json(await deleteEmptyLibraryFolders(await loadSettingsForPlanning(), ids));
+}));
+
+app.get("/api/library/non-music-files", asyncHandler(async (_req, res) => {
+  res.json(await listNonMusicFiles(await loadSettingsForPlanning()));
 }));
 
 app.get("/api/library/artwork/:type", asyncHandler(async (req, res) => {
