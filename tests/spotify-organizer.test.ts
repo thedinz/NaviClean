@@ -276,6 +276,36 @@ test("spotify organize enrichment keeps same song on a different album local", a
   }
 });
 
+test("spotify organize enrichment skips SpotifyBU-managed tracks", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-spotifybu-organizer-"));
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("SpotifyBU-managed tracks should not be looked up.");
+  };
+
+  try {
+    const inputTrack = track({
+      absolutePath: path.join(root, "SpotifyBU Downloads", "Track Copy.mp3"),
+      relativePath: "SpotifyBU Downloads/Track Copy.mp3",
+      managedBy: "spotifybu"
+    });
+    const result = await enrichTracksWithSpotifyOrganizeMetadata(settings(root), [inputTrack], {
+      useCache: false
+    });
+
+    assert.equal(fetchCalls, 0);
+    assert.equal(result.tracks[0]?.managedBy, "spotifybu");
+    assert.equal(result.tracks[0]?.targetSource, undefined);
+    assert.equal(result.tracks[0]?.relativePath, inputTrack.relativePath);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     headers: {

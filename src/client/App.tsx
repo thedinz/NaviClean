@@ -73,7 +73,7 @@ import { appVersion } from "./version";
 
 type Page = "dashboard" | "library" | "empty-folders" | "non-music" | "discover" | "duplicates" | "organize" | "trash" | "settings";
 type AppTheme = "light" | "dark";
-type OrganizePreviewFilter = "attention" | "ready" | "duplicate-target" | "conflict" | "missing" | "same" | "all";
+type OrganizePreviewFilter = "attention" | "ready" | "duplicate-target" | "conflict" | "missing" | "spotifybu" | "same" | "all";
 type OrganizePreviewItem = OrganizePlan["items"][number];
 
 const libraryArtistPageSize = 25;
@@ -134,6 +134,7 @@ const organizePreviewFilters: Array<{ id: OrganizePreviewFilter; label: string }
   { id: "duplicate-target", label: "Duplicates" },
   { id: "conflict", label: "Conflicts" },
   { id: "missing", label: "Missing" },
+  { id: "spotifybu", label: "SpotifyBU" },
   { id: "same", label: "Organized" },
   { id: "all", label: "All" }
 ];
@@ -2152,10 +2153,16 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
   const [trashBusyKey, setTrashBusyKey] = useState<string | null>(null);
   const [selectedTrashCandidates, setSelectedTrashCandidates] = useState<Record<string, string>>({});
   const previewRequestId = useRef(0);
+  const lastScanFinishedAtRef = useRef<string | null | undefined>(undefined);
   const workflow = stats?.workflow;
+  const lastScanFinishedAt = stats?.lastScanFinishedAt ?? null;
   const workflowSummary = workflowBlockerSummary(workflow);
   const organizeItems = plan?.items || [];
   const filterCounts = useMemo(() => countOrganizePreviewFilters(organizeItems), [organizeItems]);
+  const visibleOrganizeFilters = useMemo(
+    () => organizePreviewFilters.filter((filter) => filter.id !== "spotifybu" || filterCounts.spotifybu > 0),
+    [filterCounts.spotifybu]
+  );
   const filteredItems = useMemo(
     () => organizeItems.filter((item) => organizePreviewItemMatchesFilter(item, organizeFilter)),
     [organizeFilter, organizeItems]
@@ -2221,6 +2228,17 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
   useEffect(() => {
     void load({ quick: true });
   }, []);
+
+  useEffect(() => {
+    const previousScanFinishedAt = lastScanFinishedAtRef.current;
+    lastScanFinishedAtRef.current = lastScanFinishedAt;
+
+    if (previousScanFinishedAt === undefined || previousScanFinishedAt === lastScanFinishedAt || !lastScanFinishedAt) {
+      return;
+    }
+
+    void load({ clearNotice: false, quick: true, resetPlan: true });
+  }, [lastScanFinishedAt]);
 
   const apply = async () => {
     if (!plan?.summary.ready || !window.confirm(`Move ${plan.summary.ready} files?`)) {
@@ -2289,6 +2307,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
             <>
               <span>{plan.summary.ready} ready</span>
               <span>{plan.summary.same} organized</span>
+              {filterCounts.spotifybu > 0 && <span>{filterCounts.spotifybu} SpotifyBU</span>}
               <span>{plan.summary.duplicateTargets} duplicates</span>
               <span>{plan.summary.conflicts} conflicts</span>
               <span>{plan.summary.missing} missing</span>
@@ -2361,7 +2380,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
         <>
           <div className="organize-preview-tools">
             <div className="segmented-control organize-filter" role="radiogroup" aria-label="Preview status">
-              {organizePreviewFilters.map((filter) => (
+              {visibleOrganizeFilters.map((filter) => (
                 <button
                   key={filter.id}
                   className={organizeFilter === filter.id ? "active" : ""}
@@ -2429,7 +2448,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
                         {item.status !== "ready" && item.status !== "same" && (
                           <span className="status-detail">{item.message}</span>
                         )}
-                        {item.status === "same" && item.managedBy === "spotifybu" && item.sourceRelativePath !== item.targetRelativePath && (
+                        {item.status === "same" && item.managedBy === "spotifybu" && (
                           <span className="status-detail">{item.message}</span>
                         )}
                       </td>
@@ -3519,12 +3538,17 @@ function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {
     "duplicate-target": 0,
     conflict: 0,
     missing: 0,
+    spotifybu: 0,
     same: 0,
     all: 0
   };
 
   for (const item of items) {
     counts.all += 1;
+
+    if (item.managedBy === "spotifybu") {
+      counts.spotifybu += 1;
+    }
 
     if (item.status === "same") {
       counts.same += 1;
@@ -3565,6 +3589,10 @@ function organizePreviewItemMatchesFilter(item: OrganizePreviewItem, filter: Org
 
   if (filter === "missing") {
     return item.status === "missing-source";
+  }
+
+  if (filter === "spotifybu") {
+    return item.managedBy === "spotifybu";
   }
 
   return item.status === filter;
@@ -3636,8 +3664,8 @@ function duplicateTrashSelectionWouldRemoveGroup(
 
 function organizeChangeLabel(item: OrganizePlan["items"][number]) {
   if (item.status === "same") {
-    if (item.managedBy === "spotifybu" && item.sourceRelativePath !== item.targetRelativePath) {
-      return "Managed";
+    if (item.managedBy === "spotifybu") {
+      return "SpotifyBU";
     }
 
     return "Already organized";
