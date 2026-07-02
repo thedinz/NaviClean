@@ -427,17 +427,15 @@ legend {
 }
 
 .organize-preview-tools {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
   margin-bottom: 12px;
-  flex-wrap: wrap;
 }
 
 .segmented-control.organize-filter {
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  width: min(880px, 100%);
+  grid-template-columns: repeat(auto-fit, minmax(94px, 1fr));
+  width: 100%;
 }
 
 .segmented-control.organize-filter button {
@@ -466,6 +464,7 @@ legend {
 .pagination-controls {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   color: #53615d;
   font-size: 0.9rem;
