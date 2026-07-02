@@ -19,14 +19,17 @@ import { buildDuplicateKey } from "./matching.js";
 import { targetForTrack } from "./organizer.js";
 import { scanLibrary } from "./scanner.js";
 import type { PrivateSettings } from "./settings.js";
+import { spotifyBuMetadataTagsForSpotifyTrack } from "./spotifybu.js";
 import { normalizeForMatch, sha1, toPosixRelative } from "./utils.js";
 import { buildSpotifyDownloadPlan } from "./spotify.js";
 
 type CatalogProviderTrack = {
   album: string;
+  albumId: string;
   albumArtist: string;
   albumImageUrl: string | null;
   albumReleaseYear: number | null;
+  albumSpotifyUrl: string;
   albumTracksTotal: number;
   albumType: string;
   artists: string[];
@@ -680,6 +683,15 @@ async function tagDownloadedFile(filePath: string, track: CatalogProviderTrack) 
     metadataArgs.push("-metadata", `comment=Spotify metadata: ${track.spotifyUrl}`);
   }
 
+  for (const tag of spotifyBuMetadataTagsForSpotifyTrack({
+    albumId: track.albumId,
+    albumSpotifyUrl: track.albumSpotifyUrl,
+    trackId: track.id,
+    trackSpotifyUrl: track.spotifyUrl
+  })) {
+    metadataArgs.push("-metadata", `${tag.key}=${tag.value}`);
+  }
+
   try {
     coverPath = await downloadSpotifyAlbumCover(parsedPath.dir, parsedPath.name, track.albumImageUrl);
     await writeTaggedAudioFile(filePath, tempPath, metadataArgs, coverPath);
@@ -803,9 +815,11 @@ function providerTrackFromSpotify(
 ): CatalogProviderTrack {
   return {
     album: album.name,
+    albumId: album.id,
     albumArtist: album.artist.name,
     albumImageUrl: album.imageUrl,
     albumReleaseYear: album.releaseYear,
+    albumSpotifyUrl: album.spotifyUrl,
     albumTracksTotal: album.totalTracks,
     albumType: album.albumType,
     artists: track.artists.length ? track.artists : [album.artist.name],
