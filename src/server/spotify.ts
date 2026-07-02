@@ -551,6 +551,10 @@ function spotifyCredentials(
 }
 
 function spotifyOrganizeTrackIsEligible(track: TrackFile) {
+  if (track.managedBy === "spotifybu") {
+    return false;
+  }
+
   if (track.targetSource === "navidrome") {
     return false;
   }
