@@ -185,7 +185,8 @@ export async function getSpotifyAlbumDetail(
   };
   const albumArtist = artist.name;
   const albumName = album.name;
-  const tracks = album.tracks.items.map((track) =>
+  const detailedTracks = await fetchSpotifyTrackDetails(settings, album.tracks.items);
+  const tracks = detailedTracks.map((track) =>
     spotifyTrackSummary(track, localTracks, albumArtist, albumName)
   );
 
@@ -195,6 +196,44 @@ export async function getSpotifyAlbumDetail(
     tracks,
     localTrackCount: tracks.filter((track) => track.present).length
   };
+}
+
+async function fetchSpotifyTrackDetails(settings: PrivateSettings, tracks: SpotifyTrack[]) {
+  const hydrated = new Map<string, SpotifyTrack>();
+  const ids = tracks.map((track) => track.id).filter(Boolean);
+
+  for (const batch of chunks(ids, 50)) {
+    const response = await spotifyRequest<{ tracks: SpotifyTrack[] }>(
+      settings,
+      spotifyCredentials(settings),
+      "/v1/tracks",
+      {
+        ids: batch.join(","),
+        market: settings.catalog.spotify.market
+      }
+    );
+
+    for (const track of response.tracks) {
+      if (track?.id) {
+        hydrated.set(track.id, track);
+      }
+    }
+  }
+
+  return tracks.map((track) => ({
+    ...track,
+    ...hydrated.get(track.id)
+  }));
+}
+
+function chunks<T>(items: T[], size: number) {
+  const result: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size));
+  }
+
+  return result;
 }
 
 export async function buildSpotifyDownloadPlan(
@@ -396,9 +435,14 @@ function spotifyTrackSummary(
     trackNumber: track.track_number,
     duration: Math.round(track.duration_ms / 1000),
     explicit: track.explicit,
+    isrc: normalizeSpotifyIsrc(track.external_ids?.isrc),
     spotifyUrl: track.external_urls?.spotify ?? "",
     present: localTrackPresent(localTracks, albumArtist, album, track.name, track.disc_number, track.track_number)
   };
+}
+
+function normalizeSpotifyIsrc(value: unknown) {
+  return typeof value === "string" ? value.replace(/[^a-z0-9]/gi, "").toUpperCase() || null : null;
 }
 
 function uniqueSpotifyAlbums(albums: SpotifyAlbum[]) {

@@ -36,32 +36,33 @@ test("scanner recognizes SpotifyBU track identity tags", () => {
   );
 });
 
-test("scanner requires SpotifyBU track id or uri for managed identity", () => {
-  assert.equal(
-    hasSpotifyBuIdentityTags({
-      native: {
-        vorbis: [{ id: "spotifybu:album_id", value: "spotify-album-id" }]
-      }
-    }),
-    false
-  );
+test("scanner recognizes SpotifyBU v1 identity aliases", () => {
+  for (const key of ["album_id", "identity_version", "isrc", "track_id", "track_uri"]) {
+    assert.equal(
+      hasSpotifyBuIdentityTags({
+        common: {
+          [`spotifybu_${key}`]: key === "identity_version" ? "1" : `value-${key}`
+        } as Record<string, unknown>
+      }),
+      true
+    );
 
-  assert.equal(
-    hasSpotifyBuIdentityTags({
-      common: {
-        "spotifybu:isrc": "USABC2100001"
-      } as Record<string, unknown>
-    }),
-    false
-  );
+    assert.equal(
+      hasSpotifyBuIdentityTags({
+        native: {
+          iTunes: [{ id: `----:com.apple.iTunes:spotifybu:${key}`, value: key === "identity_version" ? "1" : `value-${key}` }]
+        }
+      }),
+      true
+    );
+  }
 });
 
 test("SpotifyBU metadata helper emits scanner-recognized identity tags", () => {
   const tags = spotifyBuMetadataTagsForSpotifyTrack({
     albumId: "spotify-album-id",
-    albumSpotifyUrl: "https://open.spotify.com/album/spotify-album-id",
-    trackId: "spotify-track-id",
-    trackSpotifyUrl: "https://open.spotify.com/track/spotify-track-id"
+    isrc: "usabc2100001",
+    trackId: "spotify-track-id"
   });
 
   assert.deepEqual(
@@ -69,10 +70,19 @@ test("SpotifyBU metadata helper emits scanner-recognized identity tags", () => {
     [
       "spotifybu:track_id",
       "spotifybu:track_uri",
-      "spotifybu:track_url",
       "spotifybu:album_id",
-      "spotifybu:album_uri",
-      "spotifybu:album_url"
+      "spotifybu:isrc",
+      "spotifybu:identity_version"
+    ]
+  );
+  assert.deepEqual(
+    tags.map((tag) => tag.value),
+    [
+      "spotify-track-id",
+      "spotify:track:spotify-track-id",
+      "spotify-album-id",
+      "USABC2100001",
+      "1"
     ]
   );
   assert.equal(

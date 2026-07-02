@@ -56,6 +56,7 @@ export type SpotifyTrackSummary = {
   trackNumber: number;
   duration: number;
   explicit: boolean;
+  isrc: string | null;
   spotifyUrl: string;
   present: boolean;
 };
