@@ -17,6 +17,7 @@ type SearchResult3 = {
   searchResult3?: {
     artist?: NavidromeArtist[];
     album?: NavidromeAlbum[];
+    song?: NavidromeSong[];
   };
 };
 
@@ -230,6 +231,63 @@ export async function fetchNavidromeLibraryTracks(settings: PrivateSettings): Pr
   return tracks;
 }
 
+export async function searchNavidromeLibraryTrackCandidates(
+  settings: PrivateSettings,
+  lookup: { album?: string; albumArtist?: string; artist?: string; title: string },
+  limit = 8
+): Promise<{ query: string; tracks: NavidromeLibraryTrack[] }> {
+  if (!settings.navidrome.baseUrl || !settings.navidrome.username || !settings.navidrome.password) {
+    throw new Error("Navidrome URL, username, and password are required.");
+  }
+
+  const queries = uniqueValues([
+    [lookup.albumArtist || lookup.artist, lookup.album, lookup.title].filter(Boolean).join(" "),
+    [lookup.artist, lookup.title].filter(Boolean).join(" "),
+    lookup.title
+  ]);
+  const tracksById = new Map<string, NavidromeLibraryTrack>();
+  let usedQuery = queries[0] || lookup.title;
+
+  for (const query of queries) {
+    if (!query.trim()) {
+      continue;
+    }
+
+    const body = await subsonicJson<SearchResult3>(
+      settings,
+      "rest/search3.view",
+      {
+        query,
+        artistCount: "0",
+        albumCount: "0",
+        songCount: String(Math.max(limit, 1) * 3)
+      },
+      {
+        throwOnError: true
+      }
+    );
+    const songs = asArray(body?.searchResult3?.song);
+
+    if (songs.length > 0 && tracksById.size === 0) {
+      usedQuery = query;
+    }
+
+    for (const song of songs) {
+      const track = navidromeLibraryTrackFromSearchSong(settings, song);
+      tracksById.set(track.id, track);
+    }
+
+    if (tracksById.size >= limit) {
+      break;
+    }
+  }
+
+  return {
+    query: usedQuery,
+    tracks: Array.from(tracksById.values()).slice(0, Math.max(limit, 1))
+  };
+}
+
 async function fetchNavidromeAlbums(settings: PrivateSettings) {
   const albums: NavidromeAlbum[] = [];
   const pageSize = 500;
@@ -298,6 +356,17 @@ function navidromeLibraryTrackFromSong(
     suffix: stringValue(song.suffix),
     isrc: stringValue(song.isrc) || null
   };
+}
+
+function navidromeLibraryTrackFromSearchSong(settings: PrivateSettings, song: NavidromeSong) {
+  const album: NavidromeAlbum = {
+    artist: stringValue(song.albumArtist) || stringValue(song.artist),
+    name: stringValue(song.album),
+    songCount: undefined,
+    year: positiveInteger(song.year) ?? undefined
+  };
+
+  return navidromeLibraryTrackFromSong(settings, album, song);
 }
 
 function navidromeSongSourcePath(settings: PrivateSettings, songPath: unknown) {
@@ -504,6 +573,22 @@ function chunks<T>(items: T[], size: number) {
 
   for (let index = 0; index < items.length; index += size) {
     result.push(items.slice(index, index + size));
+  }
+
+  return result;
+}
+
+function uniqueValues(values: string[]) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values.map((item) => item.trim()).filter(Boolean)) {
+    const key = normalized(value);
+
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(value);
+    }
   }
 
   return result;

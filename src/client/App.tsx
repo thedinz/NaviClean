@@ -68,6 +68,8 @@ import type {
   SpotifyCatalogDownloadPreviewResult,
   TrackFile,
   UnindexedFilesView,
+  UnindexedNavidromeCandidate,
+  UnindexedNavidromeLookupResult,
   UnindexedTrashResult
 } from "../shared/types";
 import { api } from "./api";
@@ -1001,6 +1003,8 @@ function UnindexedPage({
   const [filter, setFilter] = useState<UnindexedFilter>("all");
   const [pageIndex, setPageIndex] = useState(0);
   const [busy, setBusy] = useState<"load" | "trash" | null>(null);
+  const [matchBusyId, setMatchBusyId] = useState<string | null>(null);
+  const [matchResults, setMatchResults] = useState<Record<string, UnindexedNavidromeLookupResult>>({});
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
@@ -1029,6 +1033,10 @@ function UnindexedPage({
     setSelectedIds((current) => {
       const validIds = new Set(next.tracks.map((track) => track.id));
       return Object.fromEntries(Object.entries(current).filter(([id, selected]) => selected && validIds.has(id)));
+    });
+    setMatchResults((current) => {
+      const validIds = new Set(next.tracks.map((track) => track.id));
+      return Object.fromEntries(Object.entries(current).filter(([id]) => validIds.has(id)));
     });
     setPageIndex(0);
   };
@@ -1140,6 +1148,25 @@ function UnindexedPage({
     }
   };
 
+  const checkNavidrome = async (track: TrackFile) => {
+    setMatchBusyId(track.id);
+    setError(null);
+
+    try {
+      const result = await api<UnindexedNavidromeLookupResult>(
+        `/library/unindexed/${encodeURIComponent(track.id)}/navidrome-matches`
+      );
+      setMatchResults((current) => ({
+        ...current,
+        [track.id]: result
+      }));
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setMatchBusyId(null);
+    }
+  };
+
   return (
     <section className="panel unindexed-page">
       <div className="toolbar">
@@ -1236,6 +1263,9 @@ function UnindexedPage({
           selectedIds={selectedIds}
           onToggle={toggleTrack}
           onToggleAll={togglePage}
+          matchBusyId={matchBusyId}
+          matchResults={matchResults}
+          onCheckNavidrome={checkNavidrome}
         />
       )}
     </section>
@@ -1248,7 +1278,10 @@ function UnindexedTable({
   tracks,
   selectedIds,
   onToggle,
-  onToggleAll
+  onToggleAll,
+  matchBusyId,
+  matchResults,
+  onCheckNavidrome
 }: {
   allSelected: boolean;
   disabled: boolean;
@@ -1256,6 +1289,9 @@ function UnindexedTable({
   selectedIds: Record<string, boolean>;
   onToggle: (track: TrackFile) => void;
   onToggleAll: () => void;
+  matchBusyId: string | null;
+  matchResults: Record<string, UnindexedNavidromeLookupResult>;
+  onCheckNavidrome: (track: TrackFile) => void;
 }) {
   return (
     <div className="table-wrap">
@@ -1269,40 +1305,118 @@ function UnindexedTable({
             <th>Track</th>
             <th>Current path</th>
             <th>Quality</th>
+            <th>Navidrome</th>
           </tr>
         </thead>
         <tbody>
-          {tracks.map((track) => (
-            <tr key={track.id}>
-              <td>
-                <input
-                  type="checkbox"
-                  checked={Boolean(selectedIds[track.id])}
-                  onChange={() => onToggle(track)}
-                  disabled={disabled}
-                  aria-label={`Select ${track.relativePath}`}
-                />
-              </td>
-              <td>
-                <StatusPill active={track.navidromeEnrichment?.code === "no-api-match"} label={unindexedReasonShortLabel(track)} />
-                <span className="status-detail navidrome-diagnostic">{track.navidromeEnrichment?.message}</span>
-              </td>
-              <td>
-                <strong>{track.title}</strong>
-                <span>{libraryMeta([track.artist, track.album, albumReleaseLabel(track), trackNumberLabel(track)])}</span>
-                <span>{libraryMeta([track.isrc ? `ISRC ${track.isrc}` : "", track.managedBy === "spotifybu" ? "SpotifyBU" : ""])}</span>
-              </td>
-              <td>
-                <span className="path-diff">{track.relativePath}</span>
-              </td>
-              <td>
-                <span className="quality-pill">{qualitySummary(track)}</span>
-                <span>{formatBytes(track.size)}</span>
-              </td>
-            </tr>
-          ))}
+          {tracks.map((track) => {
+            const matchResult = matchResults[track.id];
+
+            return (
+              <Fragment key={track.id}>
+                <tr>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedIds[track.id])}
+                      onChange={() => onToggle(track)}
+                      disabled={disabled}
+                      aria-label={`Select ${track.relativePath}`}
+                    />
+                  </td>
+                  <td>
+                    <StatusPill active={track.navidromeEnrichment?.code === "no-api-match"} label={unindexedReasonShortLabel(track)} />
+                    <span className="status-detail navidrome-diagnostic">{track.navidromeEnrichment?.message}</span>
+                  </td>
+                  <td>
+                    <strong>{track.title}</strong>
+                    <span>{libraryMeta([track.artist, track.album, albumReleaseLabel(track), trackNumberLabel(track)])}</span>
+                    <span>{libraryMeta([track.isrc ? `ISRC ${track.isrc}` : "", track.managedBy === "spotifybu" ? "SpotifyBU" : ""])}</span>
+                  </td>
+                  <td>
+                    <span className="path-diff">{track.relativePath}</span>
+                  </td>
+                  <td>
+                    <span className="quality-pill">{qualitySummary(track)}</span>
+                    <span>{formatBytes(track.size)}</span>
+                  </td>
+                  <td>
+                    <button
+                      className="icon-button"
+                      type="button"
+                      onClick={() => onCheckNavidrome(track)}
+                      disabled={disabled || matchBusyId === track.id}
+                      title={`Find Navidrome matches for ${track.title}`}
+                      aria-label={`Find Navidrome matches for ${track.title}`}
+                    >
+                      {matchBusyId === track.id ? <Loader2 className="spin" size={17} /> : <Search size={17} />}
+                    </button>
+                  </td>
+                </tr>
+                {matchResult && (
+                  <tr className="unindexed-match-row">
+                    <td colSpan={6}>
+                      <UnindexedMatchPanel result={matchResult} />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function UnindexedMatchPanel({ result }: { result: UnindexedNavidromeLookupResult }) {
+  return (
+    <div className="unindexed-match-panel">
+      <div className="toolbar compact-toolbar">
+        <div>
+          <strong>Navidrome search</strong>
+          <span className="muted">Query: {result.query}</span>
+        </div>
+        <span className="muted">{result.message}</span>
+      </div>
+      <div className="unindexed-local-match">
+        <strong>Local file</strong>
+        <span>{result.track.relativePath}</span>
+        <span>{unindexedTrackSummary(result.track)}</span>
+      </div>
+      {result.candidates.length === 0 ? (
+        <span className="muted">No candidates came back from Navidrome search.</span>
+      ) : (
+        <div className="unindexed-candidate-list">
+          {result.candidates.map((candidate) => (
+            <UnindexedCandidatePanel candidate={candidate} key={candidate.id} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UnindexedCandidatePanel({ candidate }: { candidate: UnindexedNavidromeCandidate }) {
+  return (
+    <div className="unindexed-candidate">
+      <div>
+        <strong>{candidate.navidrome.title || "Untitled"}</strong>
+        <span>{unindexedCandidateSummary(candidate)}</span>
+        <span className="path-diff">{candidate.navidrome.relativePath || candidate.navidrome.path || "No Navidrome path"}</span>
+      </div>
+      <div className="unindexed-check-grid">
+        <span>{unindexedCheckLabel("Abs", candidate.checks.absolutePath)}</span>
+        <span>{unindexedCheckLabel("Rel", candidate.checks.relativePath)}</span>
+        <span>{unindexedCheckLabel("Name+size", candidate.checks.filenameSize)}</span>
+        <span>{unindexedCheckLabel("Metadata", candidate.checks.metadataKey)}</span>
+      </div>
+      <div className="unindexed-reasons">
+        <strong>{candidate.acceptedBy ? `Would match by ${navidromeMatchMethodLabel(candidate.acceptedBy)}` : `Score ${candidate.score}`}</strong>
+        {candidate.rejectedReasons.map((reason) => (
+          <span key={reason}>{reason}</span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -4160,6 +4274,58 @@ function unindexedReasonShortLabel(track: TrackFile) {
   }
 
   return "Unindexed";
+}
+
+function unindexedTrackSummary(track: TrackFile) {
+  return libraryMeta([
+    track.artist,
+    track.album,
+    albumReleaseLabel(track),
+    trackNumberLabel(track),
+    track.duration ? formatDuration(track.duration) : "",
+    formatBytes(track.size),
+    track.isrc ? `ISRC ${track.isrc}` : ""
+  ]);
+}
+
+function unindexedCandidateSummary(candidate: UnindexedNavidromeCandidate) {
+  return libraryMeta([
+    candidate.navidrome.artist,
+    candidate.navidrome.album,
+    candidate.navidrome.year ? String(candidate.navidrome.year) : "",
+    [
+      candidate.navidrome.discNumber ? `D${candidate.navidrome.discNumber}` : "",
+      candidate.navidrome.trackNumber ? `T${candidate.navidrome.trackNumber}` : ""
+    ].filter(Boolean).join(" "),
+    candidate.navidrome.duration ? formatDuration(candidate.navidrome.duration) : "",
+    candidate.navidrome.size ? formatBytes(candidate.navidrome.size) : "",
+    candidate.navidrome.isrc ? `ISRC ${candidate.navidrome.isrc}` : "",
+    navidromePathStatusLabel(candidate)
+  ]);
+}
+
+function navidromePathStatusLabel(candidate: UnindexedNavidromeCandidate) {
+  if (candidate.navidrome.pathStatus === "missing") {
+    return "No API path";
+  }
+
+  if (candidate.navidrome.pathStatus === "outside-library-root") {
+    return "Path outside library root";
+  }
+
+  return "";
+}
+
+function unindexedCheckLabel(label: string, status: UnindexedNavidromeCandidate["checks"][keyof UnindexedNavidromeCandidate["checks"]]) {
+  if (status === "match") {
+    return `${label}: match`;
+  }
+
+  if (status === "unavailable") {
+    return `${label}: unavailable`;
+  }
+
+  return `${label}: differs`;
 }
 
 function libraryTrashNotice(result: LibraryTrashResult) {

@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { TrackFile } from "../src/shared/types.js";
 import type { PrivateSettings } from "../src/server/settings.js";
-import { listUnindexedFiles, trashUnindexedFiles } from "../src/server/unindexed.js";
+import { findUnindexedNavidromeMatches, listUnindexedFiles, trashUnindexedFiles } from "../src/server/unindexed.js";
 
 test("unindexed view lists unmatched Navidrome diagnostics and drops matched tracks", () => {
   const testSettings = settings("/music");
@@ -83,6 +83,81 @@ test("trashing unindexed files recycles only files still in the unindexed view",
     await fs.rm(root, { force: true, recursive: true });
   }
 });
+
+test("Navidrome match probe explains why a searched candidate was not accepted", async () => {
+  const originalFetch = globalThis.fetch;
+  const testSettings = settings("/music");
+  testSettings.navidrome.baseUrl = "http://navidrome.local";
+  testSettings.navidrome.username = "admin";
+  testSettings.navidrome.password = "password";
+  const localTrack = track({
+    id: "unindexed",
+    relativePath: "Artist/Artist - Album (2026)/Artist - Album (2026) - 01 - Song.mp3",
+    absolutePath: "/music/Artist/Artist - Album (2026)/Artist - Album (2026) - 01 - Song.mp3",
+    size: 100,
+    navidromeEnrichment: {
+      status: "unmatched",
+      code: "no-api-match",
+      message: "No Navidrome API record matched this local file."
+    }
+  });
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/rest/search3.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          searchResult3: {
+            song: [
+              {
+                id: "nav-song",
+                title: "Song",
+                artist: "Artist",
+                albumArtist: "Artist",
+                album: "Album",
+                track: 1,
+                discNumber: 1,
+                year: 2026,
+                duration: 180,
+                size: 101,
+                path: "Artist/Album/01 Song.mp3",
+                isrc: "USABC2100001"
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
+
+  try {
+    const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
+    const candidate = result.candidates[0];
+
+    assert.equal(result.query, "Artist Album Song");
+    assert.equal(candidate?.acceptedBy, null);
+    assert.equal(candidate?.checks.relativePath, "different");
+    assert.equal(candidate?.checks.filenameSize, "different");
+    assert.equal(candidate?.checks.metadataKey, "different");
+    assert.ok(candidate?.rejectedReasons.some((reason) => reason.startsWith("Relative path differs")));
+    assert.ok(candidate?.rejectedReasons.some((reason) => reason.startsWith("Metadata key differs")));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    headers: {
+      "content-type": "application/json"
+    },
+    status
+  });
+}
 
 function settings(libraryPath: string): PrivateSettings {
   return {
