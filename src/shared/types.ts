@@ -398,6 +398,43 @@ export type UnindexedTrashResult = LibraryTrashResult & {
   unindexed: UnindexedFilesView;
 };
 
+export type UnindexedNavidromeComparisonStatus = "match" | "different" | "unavailable";
+
+export type UnindexedNavidromeCandidate = {
+  id: string;
+  score: number;
+  acceptedBy: NavidromeMetadataMatchMethod | null;
+  rejectedReasons: string[];
+  checks: {
+    absolutePath: UnindexedNavidromeComparisonStatus;
+    relativePath: UnindexedNavidromeComparisonStatus;
+    filenameSize: UnindexedNavidromeComparisonStatus;
+    metadataKey: UnindexedNavidromeComparisonStatus;
+  };
+  navidrome: {
+    path: string | null;
+    relativePath: string | null;
+    pathStatus: "usable" | "missing" | "outside-library-root";
+    artist: string;
+    albumArtist: string;
+    album: string;
+    title: string;
+    trackNumber: number | null;
+    discNumber: number | null;
+    year: number | null;
+    duration: number | null;
+    size: number | null;
+    isrc: string | null;
+  };
+};
+
+export type UnindexedNavidromeLookupResult = {
+  query: string;
+  track: TrackFile;
+  candidates: UnindexedNavidromeCandidate[];
+  message: string;
+};
+
 export type EmptyFolderItem = {
   id: string;
   relativePath: string;

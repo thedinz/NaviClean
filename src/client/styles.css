@@ -934,6 +934,56 @@ td span {
   overflow-wrap: anywhere;
 }
 
+.unindexed-match-row td {
+  background: #fbfaf5;
+}
+
+.unindexed-match-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.unindexed-local-match,
+.unindexed-candidate {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid #ebe9e2;
+  border-radius: 8px;
+  background: #fffefa;
+}
+
+.unindexed-local-match span,
+.unindexed-candidate span,
+.unindexed-reasons span {
+  overflow-wrap: anywhere;
+}
+
+.unindexed-candidate-list {
+  display: grid;
+  gap: 8px;
+}
+
+.unindexed-check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 6px;
+}
+
+.unindexed-check-grid span {
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: #edf0ec;
+  color: #4d5a56;
+  font-size: 0.78rem;
+  font-weight: 760;
+}
+
+.unindexed-reasons {
+  display: grid;
+  gap: 4px;
+}
+
 .error-list,
 .notice-bar {
   display: grid;
@@ -1356,11 +1406,22 @@ select:disabled {
 [data-theme="dark"] .library-card,
 [data-theme="dark"] .duplicate-option,
 [data-theme="dark"] .collision-candidate,
+[data-theme="dark"] .unindexed-local-match,
+[data-theme="dark"] .unindexed-candidate,
 [data-theme="dark"] .catalog-card,
 [data-theme="dark"] .download-confirmations label {
   border-color: var(--border);
   background: var(--panel);
   color: var(--text);
+}
+
+[data-theme="dark"] .unindexed-match-row td {
+  background: var(--surface-muted);
+}
+
+[data-theme="dark"] .unindexed-check-grid span {
+  background: var(--field-muted);
+  color: var(--muted);
 }
 
 [data-theme="dark"] .panel-title,

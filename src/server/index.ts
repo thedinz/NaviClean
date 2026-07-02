@@ -25,7 +25,7 @@ import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin, restoreRecycleB
 import { scanLibrary } from "./scanner.js";
 import { loadSettings, toSettingsView, updateSettings } from "./settings.js";
 import { fetchNavidromeArtwork, testNavidromeConnection } from "./navidrome.js";
-import { listUnindexedFiles, trashUnindexedFiles } from "./unindexed.js";
+import { findUnindexedNavidromeMatches, listUnindexedFiles, trashUnindexedFiles } from "./unindexed.js";
 import {
   buildSpotifyDownloadPlan,
   getSpotifyAlbumDetail,
@@ -349,6 +349,13 @@ app.post("/api/library/unindexed/trash", asyncHandler(async (req, res) => {
     errors: result.errors,
     unindexed: result.unindexed
   });
+}));
+
+app.get("/api/library/unindexed/:trackId/navidrome-matches", asyncHandler(async (req, res) => {
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+
+  res.json(await findUnindexedNavidromeMatches(settings, catalog.tracks, String(req.params.trackId || "")));
 }));
 
 app.get("/api/library/non-music-files/group", asyncHandler(async (req, res) => {
