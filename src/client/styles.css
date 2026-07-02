@@ -848,6 +848,13 @@ td span {
   font-weight: 760;
 }
 
+.navidrome-diagnostic {
+  display: block;
+  max-width: 58ch;
+  color: #56635f;
+  font-weight: 650;
+}
+
 .path-diff,
 .path-diff span,
 .path-diff mark {

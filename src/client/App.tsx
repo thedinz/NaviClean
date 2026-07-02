@@ -2459,8 +2459,12 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
                         {item.targetRelativePath ? (
                           <>
                             <PathDiff value={item.targetRelativePath} compareTo={item.sourceRelativePath} />
-                            {item.targetSource === "navidrome" && <span className="status-detail">Navidrome metadata</span>}
-                            {item.targetSource === "spotify" && <span className="status-detail">Spotify metadata</span>}
+                            <span className="status-detail">{organizeMetadataSourceLabel(item)}</span>
+                            {organizeNavidromeDiagnosticLabel(item) && (
+                              <span className="status-detail navidrome-diagnostic">
+                                {organizeNavidromeDiagnosticLabel(item)}
+                              </span>
+                            )}
                           </>
                         ) : (
                           item.message
@@ -3529,6 +3533,50 @@ function VersionFooter() {
 
 function StatusPill({ active, label }: { active: boolean; label: string }) {
   return <span className={active ? "status-pill active" : "status-pill"}>{label}</span>;
+}
+
+function organizeMetadataSourceLabel(item: OrganizePreviewItem) {
+  if (item.targetSource === "navidrome") {
+    return item.navidromeEnrichment?.matchMethod
+      ? `Navidrome metadata (${navidromeMatchMethodLabel(item.navidromeEnrichment.matchMethod)})`
+      : "Navidrome metadata";
+  }
+
+  if (item.targetSource === "spotify") {
+    return "Spotify metadata";
+  }
+
+  if (item.status === "same" && item.sourceRelativePath === item.targetRelativePath) {
+    return "Path-organized/local metadata";
+  }
+
+  return "Local metadata";
+}
+
+function organizeNavidromeDiagnosticLabel(item: OrganizePreviewItem) {
+  const diagnostic = item.navidromeEnrichment;
+
+  if (!diagnostic || diagnostic.code === "matched") {
+    return "";
+  }
+
+  return diagnostic.message;
+}
+
+function navidromeMatchMethodLabel(method: NonNullable<OrganizePreviewItem["navidromeEnrichment"]>["matchMethod"]) {
+  if (method === "absolute-path") {
+    return "absolute path";
+  }
+
+  if (method === "relative-path") {
+    return "relative path";
+  }
+
+  if (method === "filename-size") {
+    return "filename+size";
+  }
+
+  return "metadata key";
 }
 
 function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {

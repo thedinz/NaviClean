@@ -253,6 +253,26 @@ export type SettingsUpdate = {
   cleanup?: Partial<CleanupSettings>;
 };
 
+export type NavidromeMetadataMatchMethod = "absolute-path" | "relative-path" | "filename-size" | "metadata-key";
+
+export type NavidromeMetadataDiagnosticCode =
+  | "matched"
+  | "settings-missing"
+  | "api-request-failed"
+  | "zero-tracks"
+  | "track-no-usable-path"
+  | "path-outside-library-root"
+  | "no-api-match"
+  | "possible-stale-scan";
+
+export type NavidromeMetadataEnrichment = {
+  status: "matched" | "skipped" | "unmatched";
+  code: NavidromeMetadataDiagnosticCode;
+  message: string;
+  matchMethod?: NavidromeMetadataMatchMethod;
+  indexedTrackCount?: number;
+};
+
 export type TrackFile = {
   id: string;
   absolutePath: string;
@@ -283,6 +303,7 @@ export type TrackFile = {
   targetPath: string;
   targetRelativePath: string;
   targetSource?: "naviclean" | "navidrome" | "spotify";
+  navidromeEnrichment?: NavidromeMetadataEnrichment;
   managedBy?: "spotifybu";
   issues: string[];
 };
@@ -479,6 +500,7 @@ export type OrganizePlanItem = {
   sourceRelativePath: string;
   targetRelativePath: string;
   targetSource?: "naviclean" | "navidrome" | "spotify";
+  navidromeEnrichment?: NavidromeMetadataEnrichment;
   managedBy?: "spotifybu";
   status: "ready" | "same" | "duplicate-target" | "conflict" | "outside-library" | "missing-source";
   message: string;
