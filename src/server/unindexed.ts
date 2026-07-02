@@ -88,12 +88,15 @@ export async function findUnindexedNavidromeMatches(
     title: track.title
   });
   const candidates = result.tracks.map((candidate) => compareNavidromeCandidate(track, candidate));
+  const acceptedCount = candidates.filter((candidate) => candidate.acceptedBy).length;
 
   return {
     query: result.query,
     track,
     candidates: candidates.sort(compareCandidateMatches),
-    message: candidates.length
+    message: acceptedCount
+      ? `${acceptedCount.toLocaleString()} Navidrome ${acceptedCount === 1 ? "candidate would" : "candidates would"} match after a NaviClean scan refreshes the catalog.`
+      : candidates.length
       ? `${candidates.length.toLocaleString()} possible Navidrome ${candidates.length === 1 ? "match" : "matches"} found.`
       : "No Navidrome candidates were found by search."
   };
@@ -225,11 +228,11 @@ function acceptedMatchMethod(
     return "metadata-key";
   }
 
-  if (relaxedDurationKeyForTrack(track) === relaxedDurationKeyForNavidrome(candidate) && durationIsCloseOrMissing(track.duration, candidate.duration)) {
+  if (sameNonEmptyKey(relaxedDurationKeyForTrack(track), relaxedDurationKeyForNavidrome(candidate))) {
     return "metadata-size-relaxed-duration";
   }
 
-  if (editionMetadataKeyForTrack(track) === editionMetadataKeyForNavidrome(candidate) && durationIsCloseOrMissing(track.duration, candidate.duration)) {
+  if (sameNonEmptyKey(editionMetadataKeyForTrack(track), editionMetadataKeyForNavidrome(candidate))) {
     return "edition-metadata-size";
   }
 
@@ -316,10 +319,10 @@ function scoreNavidromeCandidate(
   if (checks.relativePath === "match") score += 90;
   if (checks.filenameSize === "match") score += 70;
   if (checks.metadataKey === "match") score += 80;
-  if (relaxedDurationKeyForTrack(track) === relaxedDurationKeyForNavidrome(candidate) && durationIsCloseOrMissing(track.duration, candidate.duration)) {
+  if (sameNonEmptyKey(relaxedDurationKeyForTrack(track), relaxedDurationKeyForNavidrome(candidate))) {
     score += 85;
   }
-  if (editionMetadataKeyForTrack(track) === editionMetadataKeyForNavidrome(candidate) && durationIsCloseOrMissing(track.duration, candidate.duration)) {
+  if (sameNonEmptyKey(editionMetadataKeyForTrack(track), editionMetadataKeyForNavidrome(candidate))) {
     score += 75;
   }
   if (normalizeMetadataText(track.title) === normalizeMetadataText(candidate.title)) score += 30;
@@ -449,8 +452,8 @@ function normalizeMetadataText(value: string) {
   return normalizeForMatch(value, { removeBracketedText: false });
 }
 
-function durationIsCloseOrMissing(left: number | null, right: number | null) {
-  return !left || !right || Math.abs(left - right) <= 5;
+function sameNonEmptyKey(left: string, right: string) {
+  return Boolean(left && right && left === right);
 }
 
 function durationBucket(duration: number | null) {
@@ -487,7 +490,7 @@ function matchMethodLabel(method: NavidromeMetadataMatchMethod) {
   }
 
   if (method === "metadata-size-relaxed-duration") {
-    return "metadata+size with relaxed duration";
+    return "metadata+size";
   }
 
   if (method === "edition-metadata-size") {

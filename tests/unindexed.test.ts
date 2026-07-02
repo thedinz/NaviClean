@@ -22,7 +22,7 @@ test("unindexed view lists unmatched Navidrome diagnostics and drops matched tra
     navidromeEnrichment: {
       status: "unmatched",
       code: "possible-stale-scan",
-      message: "A fresh Navidrome scan may be needed."
+      message: "Organized local file did not match a Navidrome API record."
     }
   });
   const matched = track({
@@ -150,7 +150,7 @@ test("Navidrome match probe explains why a searched candidate was not accepted",
   }
 });
 
-test("Navidrome match probe reports candidates accepted by relaxed metadata matching", async () => {
+test("Navidrome match probe reports candidates accepted by metadata and size matching", async () => {
   const originalFetch = globalThis.fetch;
   const testSettings = settings("/music");
   testSettings.navidrome.baseUrl = "http://navidrome.local";
@@ -209,8 +209,138 @@ test("Navidrome match probe reports candidates accepted by relaxed metadata matc
     const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
     const candidate = result.candidates[0];
 
+    assert.match(result.message, /NaviClean scan/);
     assert.equal(candidate?.acceptedBy, "edition-metadata-size");
     assert.ok(candidate?.rejectedReasons[0]?.includes("would now match"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Navidrome match probe accepts exact metadata and size when durations differ", async () => {
+  const originalFetch = globalThis.fetch;
+  const testSettings = settings("/music");
+  testSettings.navidrome.baseUrl = "http://navidrome.local";
+  testSettings.navidrome.username = "admin";
+  testSettings.navidrome.password = "password";
+  const localTrack = track({
+    id: "unindexed",
+    album: "Music",
+    albumArtist: "311",
+    artist: "311",
+    title: "Freak Out",
+    trackNumber: 2,
+    duration: 248,
+    size: 4827821,
+    relativePath: "311/311 - Music (2001)/311 - Music (2001) - 02 - Freak Out.mp3",
+    absolutePath: "/music/311/311 - Music (2001)/311 - Music (2001) - 02 - Freak Out.mp3",
+    navidromeEnrichment: {
+      status: "unmatched",
+      code: "possible-stale-scan",
+      message: "Organized local file did not match a Navidrome API record."
+    }
+  });
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/rest/search3.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          searchResult3: {
+            song: [
+              {
+                id: "nav-song",
+                title: "Freak Out",
+                artist: "311",
+                albumArtist: "311",
+                album: "Music",
+                track: 2,
+                discNumber: 1,
+                year: 1993,
+                duration: 224,
+                size: 4827821,
+                path: "311/Music/01-02 - Freak Out.mp3"
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
+
+  try {
+    const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
+    const candidate = result.candidates[0];
+
+    assert.match(result.message, /NaviClean scan/);
+    assert.equal(candidate?.acceptedBy, "metadata-size-relaxed-duration");
+    assert.equal(candidate?.checks.metadataKey, "different");
+    assert.ok(candidate?.rejectedReasons[0]?.includes("would now match"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Navidrome match probe does not accept empty metadata-size keys", async () => {
+  const originalFetch = globalThis.fetch;
+  const testSettings = settings("/music");
+  testSettings.navidrome.baseUrl = "http://navidrome.local";
+  testSettings.navidrome.username = "admin";
+  testSettings.navidrome.password = "password";
+  const localTrack = track({
+    id: "unindexed",
+    album: "Music",
+    albumArtist: "311",
+    artist: "311",
+    title: "",
+    trackNumber: null,
+    duration: 248,
+    size: 100,
+    navidromeEnrichment: {
+      status: "unmatched",
+      code: "no-api-match",
+      message: "No Navidrome API record matched this local file."
+    }
+  });
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/rest/search3.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          searchResult3: {
+            song: [
+              {
+                id: "nav-song",
+                title: "",
+                artist: "311",
+                albumArtist: "311",
+                album: "Music",
+                duration: 224,
+                size: 100,
+                path: "311/Music/unknown.mp3"
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
+
+  try {
+    const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
+    const candidate = result.candidates[0];
+
+    assert.equal(candidate?.acceptedBy, null);
+    assert.equal(candidate?.checks.metadataKey, "different");
   } finally {
     globalThis.fetch = originalFetch;
   }

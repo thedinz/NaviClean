@@ -234,7 +234,7 @@ test("scanner uses Navidrome indexed metadata for target naming", async () => {
   }
 });
 
-test("scanner matches Navidrome metadata by exact size with relaxed duration", async () => {
+test("scanner matches Navidrome metadata by exact metadata and size", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-relaxed-"));
   const originalFetch = globalThis.fetch;
   const sourceRelativePath = "311/311 - 311 (1995)/311 - 311 (1995) - 08 - Purpose.mp3";
@@ -280,6 +280,62 @@ test("scanner matches Navidrome metadata by exact size with relaxed duration", a
 
     assert.equal(result.tracks.length, 1);
     assert.equal(track?.targetSource, "navidrome");
+    assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-relaxed-duration");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("scanner matches Navidrome metadata by exact size when parsed durations disagree", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-duration-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath =
+    "311/311 - Music (2001)/311 - Music (2001) - 02 - Freak Out.wav";
+  const contents = wavSilence(30);
+
+  globalThis.fetch = navidromeFetchForSongs([
+    {
+      album: {
+        id: "album-311-music",
+        name: "Music",
+        artist: "311",
+        year: 1993,
+        songCount: 1
+      },
+      song: {
+        id: "song-freak-out",
+        title: "Freak Out",
+        artist: "311",
+        albumArtist: "311",
+        album: "Music",
+        track: 2,
+        discNumber: 1,
+        year: 1993,
+        duration: 54,
+        size: contents.length,
+        path: "311/Music/01-02 - Freak Out.wav",
+        suffix: "wav"
+      }
+    }
+  ]);
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+
+    const scanSettings = settings(root);
+    scanSettings.scan.extensions = [".wav"];
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, "navidrome");
+    assert.equal(track?.duration, 54);
     assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-relaxed-duration");
   } finally {
     globalThis.fetch = originalFetch;
@@ -421,12 +477,12 @@ test("organized local file without Navidrome API match keeps local metadata with
     assert.equal(result.tracks.length, 1);
     assert.equal(track?.targetSource, undefined);
     assert.equal(track?.navidromeEnrichment?.code, "possible-stale-scan");
-    assert.match(track?.navidromeEnrichment?.message ?? "", /fresh Navidrome scan/i);
+    assert.match(track?.navidromeEnrichment?.message ?? "", /inspect match details/i);
     assert.equal(item?.status, "same");
     assert.equal(item?.targetSource, "naviclean");
     assert.equal(item?.targetRelativePath, sourceRelativePath);
     assert.equal(item?.navidromeEnrichment?.code, "possible-stale-scan");
-    assert.ok(plan.warnings.some((warning) => /fresh Navidrome scan/i.test(warning)));
+    assert.ok(plan.warnings.some((warning) => /inspect match details/i.test(warning)));
   } finally {
     globalThis.fetch = originalFetch;
     await fs.rm(root, { force: true, recursive: true });
@@ -557,6 +613,32 @@ function navidromeFetchForSongs(entries: Array<{ album: Record<string, unknown>;
 
     return jsonResponse({ error: "unexpected request" }, 404);
   };
+}
+
+function wavSilence(durationSeconds: number) {
+  const sampleRate = 8000;
+  const channels = 1;
+  const bitsPerSample = 16;
+  const blockAlign = channels * bitsPerSample / 8;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = Math.round(durationSeconds * byteRate);
+  const buffer = Buffer.alloc(44 + dataSize);
+
+  buffer.write("RIFF", 0, "ascii");
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write("WAVE", 8, "ascii");
+  buffer.write("fmt ", 12, "ascii");
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(channels, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(byteRate, 28);
+  buffer.writeUInt16LE(blockAlign, 32);
+  buffer.writeUInt16LE(bitsPerSample, 34);
+  buffer.write("data", 36, "ascii");
+  buffer.writeUInt32LE(dataSize, 40);
+
+  return buffer;
 }
 
 function settings(libraryPath: string): PrivateSettings {

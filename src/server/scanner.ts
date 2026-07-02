@@ -163,13 +163,13 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
 
   if (noApiMatchCount > 0) {
     warnings.push(
-      `Navidrome metadata: ${noApiMatchCount.toLocaleString()} local files did not match any Navidrome API record by absolute path, relative path, filename+size, metadata key, or relaxed metadata+size.`
+      `Navidrome metadata: ${noApiMatchCount.toLocaleString()} local files did not match any Navidrome API record by absolute path, relative path, filename+size, metadata key, or metadata+size.`
     );
   }
 
   if (possibleStaleScanCount > 0) {
     warnings.push(
-      `Navidrome metadata: ${possibleStaleScanCount.toLocaleString()} organized local files may need a fresh Navidrome scan; no matching API path or metadata+size record was returned.`
+      `Navidrome metadata: ${possibleStaleScanCount.toLocaleString()} organized local files did not match any Navidrome API record by path or metadata+size. If these files were recently moved, rescan Navidrome; otherwise inspect match details for metadata/path differences.`
     );
   }
 
@@ -249,12 +249,12 @@ function findNavidromeTrackForFile(index: NavidromeTrackIndex, track: TrackFile)
   const relaxedDurationMatch = uniqueNavidromeMatch(
     index.byMetadataRelaxedDuration.get(trackRelaxedDurationKey(track))
   );
-  if (relaxedDurationMatch && durationIsCloseOrMissing(track.duration, relaxedDurationMatch.duration)) {
+  if (relaxedDurationMatch) {
     return { track: relaxedDurationMatch, method: "metadata-size-relaxed-duration" };
   }
 
   const editionMetadataMatch = uniqueNavidromeMatch(index.byEditionMetadata.get(trackEditionMetadataKey(track)));
-  if (editionMetadataMatch && durationIsCloseOrMissing(track.duration, editionMetadataMatch.duration)) {
+  if (editionMetadataMatch) {
     return { track: editionMetadataMatch, method: "edition-metadata-size" };
   }
 
@@ -354,7 +354,7 @@ function unmatchedNavidromeDiagnostic(track: TrackFile, indexedTrackCount: numbe
       status: "unmatched",
       code: "possible-stale-scan",
       message:
-        "Navidrome returned tracks, but none matched this organized local file by path, filename+size, metadata key, or relaxed metadata+size. A fresh Navidrome scan may be needed.",
+        "Navidrome returned tracks, but none matched this organized local file by path, filename+size, metadata key, or metadata+size. If the file was recently moved, rescan Navidrome; otherwise inspect match details for metadata/path differences.",
       indexedTrackCount
     };
   }
@@ -363,7 +363,7 @@ function unmatchedNavidromeDiagnostic(track: TrackFile, indexedTrackCount: numbe
     status: "unmatched",
     code: "no-api-match",
     message:
-      "No Navidrome API record matched this local file by absolute path, relative path, filename+size, metadata key, or relaxed metadata+size; NaviClean used local metadata and path inference.",
+      "No Navidrome API record matched this local file by absolute path, relative path, filename+size, metadata key, or metadata+size; NaviClean used local metadata and path inference.",
     indexedTrackCount
   };
 }
@@ -382,7 +382,7 @@ function navidromeMatchMethodLabel(method: NavidromeMetadataMatchMethod) {
   }
 
   if (method === "metadata-size-relaxed-duration") {
-    return "metadata and size with relaxed duration";
+    return "metadata and exact size";
   }
 
   if (method === "edition-metadata-size") {
@@ -534,10 +534,6 @@ function editionMetadataKey(track: {
     track.trackNumber,
     track.size
   ].join("|");
-}
-
-function durationIsCloseOrMissing(left: number | null, right: number | null) {
-  return !left || !right || Math.abs(left - right) <= 5;
 }
 
 function durationBucket(duration: number | null) {
