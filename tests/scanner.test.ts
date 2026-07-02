@@ -234,6 +234,116 @@ test("scanner uses Navidrome indexed metadata for target naming", async () => {
   }
 });
 
+test("scanner matches Navidrome metadata by exact size with relaxed duration", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-relaxed-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath = "311/311 - 311 (1995)/311 - 311 (1995) - 08 - Purpose.mp3";
+  const contents = "audio";
+
+  globalThis.fetch = navidromeFetchForSongs([
+    {
+      album: {
+        id: "album-311",
+        name: "311",
+        artist: "311",
+        year: 1995,
+        songCount: 1
+      },
+      song: {
+        id: "song-purpose",
+        title: "Purpose",
+        artist: "311",
+        albumArtist: "311",
+        album: "311",
+        track: 8,
+        discNumber: 1,
+        year: 1995,
+        duration: 164,
+        size: Buffer.byteLength(contents),
+        path: "311/311/01-08 - Purpose.mp3",
+        suffix: "mp3"
+      }
+    }
+  ]);
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+
+    const scanSettings = settings(root);
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, "navidrome");
+    assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-relaxed-duration");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("scanner matches Navidrome metadata when album only differs by edition text", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-edition-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath =
+    "AC DC/AC DC - High Voltage (1994)/AC DC - High Voltage (1994) - 04 - Live Wire.flac";
+  const contents = "audio";
+
+  globalThis.fetch = navidromeFetchForSongs([
+    {
+      album: {
+        id: "album-acdc",
+        name: "High Voltage (international version)",
+        artist: "AC/DC",
+        year: 1976,
+        songCount: 1
+      },
+      song: {
+        id: "song-live-wire",
+        title: "Live Wire",
+        artist: "AC/DC",
+        albumArtist: "AC/DC",
+        album: "High Voltage (international version)",
+        track: 4,
+        discNumber: 1,
+        year: 1976,
+        duration: 349,
+        size: Buffer.byteLength(contents),
+        path: "AC_DC/High Voltage (international version)/01-04 - Live Wire.flac",
+        suffix: "flac"
+      }
+    }
+  ]);
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+
+    const scanSettings = settings(root);
+    scanSettings.scan.extensions = [".flac"];
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, "navidrome");
+    assert.equal(track?.albumArtist, "AC/DC");
+    assert.equal(track?.album, "High Voltage (international version)");
+    assert.equal(track?.navidromeEnrichment?.matchMethod, "edition-metadata-size");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("organized local file without Navidrome API match keeps local metadata with a clear diagnostic", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-unmatched-"));
   const originalFetch = globalThis.fetch;
@@ -413,6 +523,40 @@ function jsonResponse(body: unknown, status = 200) {
     },
     status
   });
+}
+
+function navidromeFetchForSongs(entries: Array<{ album: Record<string, unknown>; song: Record<string, unknown> }>) {
+  return async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/rest/getAlbumList2.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          albumList2: {
+            album: entries.map((entry) => entry.album)
+          }
+        }
+      });
+    }
+
+    if (url.pathname.endsWith("/rest/getAlbum.view")) {
+      const albumId = url.searchParams.get("id");
+      const entry = entries.find((candidate) => candidate.album.id === albumId) ?? entries[0];
+
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          album: {
+            ...entry.album,
+            song: [entry.song]
+          }
+        }
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
 }
 
 function settings(libraryPath: string): PrivateSettings {

@@ -4021,6 +4021,14 @@ function navidromeMatchMethodLabel(method: NonNullable<OrganizePreviewItem["navi
     return "filename+size";
   }
 
+  if (method === "metadata-size-relaxed-duration") {
+    return "metadata+size";
+  }
+
+  if (method === "edition-metadata-size") {
+    return "edition metadata+size";
+  }
+
   return "metadata key";
 }
 

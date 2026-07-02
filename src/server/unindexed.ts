@@ -140,7 +140,7 @@ function compareNavidromeCandidate(track: TrackFile, candidate: NavidromeLibrary
     filenameSize: filenameSizeComparison(track, candidate),
     metadataKey: metadataKeyComparison(track, candidate)
   };
-  const acceptedBy = acceptedMatchMethod(checks);
+  const acceptedBy = acceptedMatchMethod(track, candidate, checks);
   const rejectedReasons = acceptedBy
     ? [`This candidate would now match by ${matchMethodLabel(acceptedBy)}. Run a NaviClean scan to refresh this page.`]
     : navidromeRejectionReasons(track, candidate, checks);
@@ -204,7 +204,11 @@ function metadataKeyComparison(track: TrackFile, candidate: NavidromeLibraryTrac
   return trackMetadataKey(track) === navidromeMetadataKey(candidate) ? "match" : "different";
 }
 
-function acceptedMatchMethod(checks: UnindexedNavidromeCandidate["checks"]): NavidromeMetadataMatchMethod | null {
+function acceptedMatchMethod(
+  track: TrackFile,
+  candidate: NavidromeLibraryTrack,
+  checks: UnindexedNavidromeCandidate["checks"]
+): NavidromeMetadataMatchMethod | null {
   if (checks.absolutePath === "match") {
     return "absolute-path";
   }
@@ -219,6 +223,14 @@ function acceptedMatchMethod(checks: UnindexedNavidromeCandidate["checks"]): Nav
 
   if (checks.metadataKey === "match") {
     return "metadata-key";
+  }
+
+  if (relaxedDurationKeyForTrack(track) === relaxedDurationKeyForNavidrome(candidate) && durationIsCloseOrMissing(track.duration, candidate.duration)) {
+    return "metadata-size-relaxed-duration";
+  }
+
+  if (editionMetadataKeyForTrack(track) === editionMetadataKeyForNavidrome(candidate) && durationIsCloseOrMissing(track.duration, candidate.duration)) {
+    return "edition-metadata-size";
   }
 
   return null;
@@ -304,6 +316,12 @@ function scoreNavidromeCandidate(
   if (checks.relativePath === "match") score += 90;
   if (checks.filenameSize === "match") score += 70;
   if (checks.metadataKey === "match") score += 80;
+  if (relaxedDurationKeyForTrack(track) === relaxedDurationKeyForNavidrome(candidate) && durationIsCloseOrMissing(track.duration, candidate.duration)) {
+    score += 85;
+  }
+  if (editionMetadataKeyForTrack(track) === editionMetadataKeyForNavidrome(candidate) && durationIsCloseOrMissing(track.duration, candidate.duration)) {
+    score += 75;
+  }
   if (normalizeMetadataText(track.title) === normalizeMetadataText(candidate.title)) score += 30;
   if (normalizeMetadataText(track.album) === normalizeMetadataText(candidate.album)) score += 20;
   if (normalizeMetadataText(track.albumArtist || track.artist) === normalizeMetadataText(candidate.albumArtist || candidate.artist)) score += 20;
@@ -339,8 +357,100 @@ function navidromeMetadataKey(track: NavidromeLibraryTrack) {
   ].join("|");
 }
 
+function relaxedDurationKeyForTrack(track: TrackFile) {
+  return relaxedDurationKey({
+    album: track.album,
+    albumArtist: track.albumArtist || track.artist,
+    discNumber: track.discNumber,
+    size: track.size,
+    title: track.title,
+    trackNumber: track.trackNumber
+  });
+}
+
+function relaxedDurationKeyForNavidrome(track: NavidromeLibraryTrack) {
+  return relaxedDurationKey({
+    album: track.album,
+    albumArtist: track.albumArtist || track.artist,
+    discNumber: track.discNumber,
+    size: track.size,
+    title: track.title,
+    trackNumber: track.trackNumber
+  });
+}
+
+function editionMetadataKeyForTrack(track: TrackFile) {
+  return editionMetadataKey({
+    album: track.album,
+    albumArtist: track.albumArtist || track.artist,
+    discNumber: track.discNumber,
+    size: track.size,
+    title: track.title,
+    trackNumber: track.trackNumber
+  });
+}
+
+function editionMetadataKeyForNavidrome(track: NavidromeLibraryTrack) {
+  return editionMetadataKey({
+    album: track.album,
+    albumArtist: track.albumArtist || track.artist,
+    discNumber: track.discNumber,
+    size: track.size,
+    title: track.title,
+    trackNumber: track.trackNumber
+  });
+}
+
+function relaxedDurationKey(track: {
+  album: string;
+  albumArtist: string;
+  discNumber: number | null;
+  size: number | null;
+  title: string;
+  trackNumber: number | null;
+}) {
+  if (!track.albumArtist || !track.album || !track.title || !track.trackNumber || !track.size) {
+    return "";
+  }
+
+  return [
+    normalizeMetadataText(track.albumArtist),
+    normalizeMetadataText(track.album),
+    normalizeMetadataText(track.title),
+    track.discNumber ?? 1,
+    track.trackNumber,
+    track.size
+  ].join("|");
+}
+
+function editionMetadataKey(track: {
+  album: string;
+  albumArtist: string;
+  discNumber: number | null;
+  size: number | null;
+  title: string;
+  trackNumber: number | null;
+}) {
+  if (!track.albumArtist || !track.album || !track.title || !track.trackNumber || !track.size) {
+    return "";
+  }
+
+  return [
+    normalizeMetadataText(track.albumArtist),
+    normalizeForMatch(track.album),
+    normalizeMetadataText(track.title),
+    track.discNumber ?? 1,
+    track.trackNumber,
+    track.size
+  ].join("|");
+}
+
 function normalizeMetadataText(value: string) {
   return normalizeForMatch(value, { removeBracketedText: false });
+}
+
+function durationIsCloseOrMissing(left: number | null, right: number | null) {
+  return !left || !right || Math.abs(left - right) <= 5;
 }
 
 function durationBucket(duration: number | null) {
@@ -374,6 +484,14 @@ function matchMethodLabel(method: NavidromeMetadataMatchMethod) {
 
   if (method === "filename-size") {
     return "filename+size";
+  }
+
+  if (method === "metadata-size-relaxed-duration") {
+    return "metadata+size with relaxed duration";
+  }
+
+  if (method === "edition-metadata-size") {
+    return "edition-compatible metadata+size";
   }
 
   return "metadata key";
