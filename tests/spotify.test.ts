@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
+import { providerMetadataArgsForSpotifyTrack } from "../src/server/providers.js";
 import { getSpotifyAlbumDetail } from "../src/server/spotify.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 
@@ -77,6 +78,63 @@ test("Spotify album detail hydrates track ISRC values", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("NaviClean provider tags Spotify compilation albums for Navidrome", () => {
+  const tags = metadataTags(providerMetadataArgsForSpotifyTrack(providerTrack({ albumType: "compilation" })));
+
+  assert.equal(tags.title, "Track Name");
+  assert.equal(tags.artist, "Track Artist");
+  assert.equal(tags.album, "Compilation Album");
+  assert.equal(tags.album_artist, "Various Artists");
+  assert.equal(tags.track, "7");
+  assert.equal(tags.disc, "2");
+  assert.equal(tags.isrc, "USABC2100001");
+  assert.equal(tags.date, "2026-01-02");
+  assert.equal(tags.releasedate, "2026-01-02");
+  assert.equal(tags.compilation, "1");
+  assert.equal(tags["spotifybu:track_id"], "track-1");
+});
+
+test("NaviClean provider tags non-compilation albums without compilation marker", () => {
+  const tags = metadataTags(providerMetadataArgsForSpotifyTrack(providerTrack({ albumType: "album" })));
+
+  assert.equal(tags.date, "2026-01-02");
+  assert.equal(tags.releasedate, "2026-01-02");
+  assert.equal(tags.compilation, undefined);
+});
+
+function metadataTags(args: string[]) {
+  const tags: Record<string, string> = {};
+
+  for (let index = 0; index < args.length; index += 2) {
+    assert.equal(args[index], "-metadata");
+    const [key, ...valueParts] = String(args[index + 1]).split("=");
+    tags[key] = valueParts.join("=");
+  }
+
+  return tags;
+}
+
+function providerTrack(overrides: { albumType: string }) {
+  return {
+    album: "Compilation Album",
+    albumId: "album-1",
+    albumArtist: "Various Artists",
+    albumImageUrl: null,
+    albumReleaseDate: "2026-01-02",
+    albumReleaseYear: 2026,
+    albumTracksTotal: 20,
+    albumType: overrides.albumType,
+    artists: ["Track Artist"],
+    discNumber: 2,
+    durationMs: 180000,
+    id: "track-1",
+    isrc: "USABC2100001",
+    name: "Track Name",
+    spotifyUrl: "https://open.spotify.com/track/track-1",
+    trackNumber: 7
+  };
+}
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {

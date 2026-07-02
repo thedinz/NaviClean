@@ -70,10 +70,14 @@ type NavidromeSong = {
   isrc?: string;
 };
 
+export type NavidromeLibraryTrackPathStatus = "usable" | "missing" | "outside-library-root";
+
 export type NavidromeLibraryTrack = {
   id: string;
   sourceAbsolutePath: string | null;
   sourceRelativePath: string | null;
+  sourceRawPath: string | null;
+  sourcePathStatus: NavidromeLibraryTrackPathStatus;
   artist: string;
   albumArtist: string;
   album: string;
@@ -235,6 +239,8 @@ async function fetchNavidromeAlbums(settings: PrivateSettings) {
       type: "alphabeticalByName",
       size: String(pageSize),
       offset: String(offset)
+    }, {
+      throwOnError: true
     });
     const page = asArray(body?.albumList2?.album);
 
@@ -255,6 +261,8 @@ async function fetchNavidromeAlbum(settings: PrivateSettings, albumId: string | 
 
   return subsonicJson<NavidromeAlbumDetail>(settings, "rest/getAlbum.view", {
     id: albumId
+  }, {
+    throwOnError: true
   });
 }
 
@@ -272,6 +280,8 @@ function navidromeLibraryTrackFromSong(
     id: stringValue(song.id) || crypto.createHash("sha1").update(JSON.stringify(song)).digest("hex"),
     sourceAbsolutePath: source?.absolutePath ?? null,
     sourceRelativePath: source?.relativePath ?? null,
+    sourceRawPath: source.rawPath,
+    sourcePathStatus: source.status,
     artist,
     albumArtist: albumArtist || artist,
     album: albumTitle,
@@ -294,7 +304,12 @@ function navidromeSongSourcePath(settings: PrivateSettings, songPath: unknown) {
   const value = stringValue(songPath);
 
   if (!value) {
-    return null;
+    return {
+      absolutePath: null,
+      relativePath: null,
+      rawPath: null,
+      status: "missing" as const
+    };
   }
 
   const root = path.resolve(settings.naming.libraryPath);
@@ -303,12 +318,19 @@ function navidromeSongSourcePath(settings: PrivateSettings, songPath: unknown) {
     : path.resolve(root, ...value.split(/[\\/]+/).filter(Boolean));
 
   if (!isInsidePath(root, absolutePath)) {
-    return null;
+    return {
+      absolutePath: null,
+      relativePath: null,
+      rawPath: value,
+      status: "outside-library-root" as const
+    };
   }
 
   return {
     absolutePath,
-    relativePath: toPosixRelative(root, absolutePath)
+    relativePath: toPosixRelative(root, absolutePath),
+    rawPath: value,
+    status: "usable" as const
   };
 }
 
@@ -375,26 +397,51 @@ async function searchNavidromeAlbums(settings: PrivateSettings, query: string) {
 async function subsonicJson<T extends object>(
   settings: PrivateSettings,
   endpoint: string,
-  params: Record<string, string>
+  params: Record<string, string>,
+  options: { throwOnError?: boolean } = {}
 ): Promise<T | null> {
-  const response = await fetch(subsonicUrl(settings.navidrome, endpoint, { ...params, f: "json" }), {
-    headers: {
-      accept: "application/json"
-    }
-  });
+  let response: Response;
 
-  if (!response.ok) {
-    return null;
+  try {
+    response = await fetch(subsonicUrl(settings.navidrome, endpoint, { ...params, f: "json" }), {
+      headers: {
+        accept: "application/json"
+      }
+    });
+  } catch (error) {
+    return subsonicFailure(`Navidrome API request failed: ${(error as Error).message}`, options);
   }
 
-  const body = (await response.json()) as SubsonicResponse<T>;
+  if (!response.ok) {
+    return subsonicFailure(`Navidrome API request failed: HTTP ${response.status}`, options);
+  }
+
+  let body: SubsonicResponse<T>;
+
+  try {
+    body = (await response.json()) as SubsonicResponse<T>;
+  } catch (error) {
+    return subsonicFailure(`Navidrome API request failed: invalid JSON (${(error as Error).message})`, options);
+  }
+
   const subsonic = body["subsonic-response"];
 
   if (subsonic?.status !== "ok") {
-    return null;
+    return subsonicFailure(
+      `Navidrome API request failed: ${subsonic?.error?.message || "Subsonic response was not ok"}`,
+      options
+    );
   }
 
   return subsonic;
+}
+
+function subsonicFailure<T>(message: string, options: { throwOnError?: boolean }): T | null {
+  if (options.throwOnError) {
+    throw new Error(message);
+  }
+
+  return null;
 }
 
 function subsonicUrl(

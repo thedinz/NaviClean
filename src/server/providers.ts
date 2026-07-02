@@ -28,6 +28,7 @@ type CatalogProviderTrack = {
   albumId: string;
   albumArtist: string;
   albumImageUrl: string | null;
+  albumReleaseDate: string;
   albumReleaseYear: number | null;
   albumTracksTotal: number;
   albumType: string;
@@ -660,36 +661,7 @@ async function tagDownloadedFile(filePath: string, track: CatalogProviderTrack) 
   const parsedPath = path.parse(filePath);
   const tempPath = path.join(parsedPath.dir, `${parsedPath.name}.naviclean-tagging${parsedPath.ext}`);
   let coverPath: string | null = null;
-  const metadataArgs = [
-    "-metadata",
-    `title=${track.name}`,
-    "-metadata",
-    `artist=${track.artists.join("; ")}`,
-    "-metadata",
-    `album=${track.album}`,
-    "-metadata",
-    `album_artist=${track.albumArtist}`,
-    "-metadata",
-    `track=${track.trackNumber}`,
-    "-metadata",
-    `disc=${track.discNumber}`
-  ];
-
-  if (track.albumReleaseYear) {
-    metadataArgs.push("-metadata", `date=${track.albumReleaseYear}`);
-  }
-
-  if (track.spotifyUrl) {
-    metadataArgs.push("-metadata", `comment=Spotify metadata: ${track.spotifyUrl}`);
-  }
-
-  for (const tag of spotifyBuMetadataTagsForSpotifyTrack({
-    albumId: track.albumId,
-    isrc: track.isrc,
-    trackId: track.id
-  })) {
-    metadataArgs.push("-metadata", `${tag.key}=${tag.value}`);
-  }
+  const metadataArgs = providerMetadataArgsForSpotifyTrack(track);
 
   try {
     coverPath = await downloadSpotifyAlbumCover(parsedPath.dir, parsedPath.name, track.albumImageUrl);
@@ -711,6 +683,51 @@ async function tagDownloadedFile(filePath: string, track: CatalogProviderTrack) 
       await fs.rm(coverPath, { force: true }).catch(() => undefined);
     }
   }
+}
+
+export function providerMetadataArgsForSpotifyTrack(track: CatalogProviderTrack) {
+  const releaseDate = track.albumReleaseDate || (track.albumReleaseYear ? String(track.albumReleaseYear) : "");
+  const metadataArgs = [
+    "-metadata",
+    `title=${track.name}`,
+    "-metadata",
+    `artist=${track.artists.join("; ")}`,
+    "-metadata",
+    `album=${track.album}`,
+    "-metadata",
+    `album_artist=${track.albumArtist}`,
+    "-metadata",
+    `track=${track.trackNumber}`,
+    "-metadata",
+    `disc=${track.discNumber}`
+  ];
+
+  if (track.isrc) {
+    metadataArgs.push("-metadata", `isrc=${track.isrc}`);
+  }
+
+  if (releaseDate) {
+    metadataArgs.push("-metadata", `date=${releaseDate}`);
+    metadataArgs.push("-metadata", `releasedate=${releaseDate}`);
+  }
+
+  if (track.albumType.trim().toLowerCase() === "compilation") {
+    metadataArgs.push("-metadata", "compilation=1");
+  }
+
+  if (track.spotifyUrl) {
+    metadataArgs.push("-metadata", `comment=Spotify metadata: ${track.spotifyUrl}`);
+  }
+
+  for (const tag of spotifyBuMetadataTagsForSpotifyTrack({
+    albumId: track.albumId,
+    isrc: track.isrc,
+    trackId: track.id
+  })) {
+    metadataArgs.push("-metadata", `${tag.key}=${tag.value}`);
+  }
+
+  return metadataArgs;
 }
 
 async function writeTaggedAudioFile(
@@ -817,6 +834,7 @@ function providerTrackFromSpotify(
     albumId: album.id,
     albumArtist: album.artist.name,
     albumImageUrl: album.imageUrl,
+    albumReleaseDate: album.releaseDate,
     albumReleaseYear: album.releaseYear,
     albumTracksTotal: album.totalTracks,
     albumType: album.albumType,

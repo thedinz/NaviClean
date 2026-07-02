@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Stats } from "node:fs";
 import type {
+  NavidromeMetadataDiagnosticCode,
   OrganizeApplyResult,
   OrganizeCollision,
   OrganizeCollisionCandidate,
@@ -65,6 +66,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       sourceRelativePath: track.relativePath,
       targetRelativePath: target.targetRelativePath,
       targetSource: track.targetSource ?? "naviclean",
+      navidromeEnrichment: track.navidromeEnrichment,
       managedBy: track.managedBy,
       status: "ready",
       message: "Ready"
@@ -130,7 +132,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
 
   return {
     items,
-    warnings: [],
+    warnings: navidromePlanWarnings(tracks),
     summary: {
       ready: items.filter((item) => item.status === "ready").length,
       same: items.filter((item) => item.status === "same").length,
@@ -139,6 +141,71 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       missing: items.filter((item) => item.status === "missing-source").length
     }
   };
+}
+
+function navidromePlanWarnings(tracks: TrackFile[]) {
+  const warnings: string[] = [];
+  const diagnostics = tracks.map((track) => track.navidromeEnrichment).filter(Boolean);
+
+  if (diagnostics.length === 0) {
+    return warnings;
+  }
+
+  const matched = diagnostics.filter((diagnostic) => diagnostic?.code === "matched").length;
+
+  warnings.push(
+    `Navidrome metadata: ${matched.toLocaleString()} matched / ${tracks.length.toLocaleString()} files in the last scan.`
+  );
+
+  for (const code of navidromePlanWarningOrder) {
+    const count = diagnostics.filter((diagnostic) => diagnostic?.code === code).length;
+
+    if (count > 0) {
+      warnings.push(navidromePlanWarning(code, count));
+    }
+  }
+
+  return warnings;
+}
+
+const navidromePlanWarningOrder: NavidromeMetadataDiagnosticCode[] = [
+  "settings-missing",
+  "api-request-failed",
+  "zero-tracks",
+  "no-api-match",
+  "possible-stale-scan",
+  "track-no-usable-path",
+  "path-outside-library-root"
+];
+
+function navidromePlanWarning(code: NavidromeMetadataDiagnosticCode, count: number) {
+  const formattedCount = count.toLocaleString();
+
+  if (code === "settings-missing") {
+    return `Navidrome metadata: ${formattedCount} files used local metadata because Navidrome credentials/settings were missing.`;
+  }
+
+  if (code === "api-request-failed") {
+    return `Navidrome metadata: ${formattedCount} files used local metadata because the Navidrome API request failed.`;
+  }
+
+  if (code === "zero-tracks") {
+    return `Navidrome metadata: ${formattedCount} files used local metadata because Navidrome returned zero tracks.`;
+  }
+
+  if (code === "possible-stale-scan") {
+    return `Navidrome metadata: ${formattedCount} organized files may need a fresh Navidrome scan; no matching API path or metadata record was returned.`;
+  }
+
+  if (code === "track-no-usable-path") {
+    return `Navidrome metadata: ${formattedCount} indexed tracks had no usable API path.`;
+  }
+
+  if (code === "path-outside-library-root") {
+    return `Navidrome metadata: ${formattedCount} indexed tracks pointed outside the configured library root.`;
+  }
+
+  return `Navidrome metadata: ${formattedCount} local files did not match any API record by absolute path, relative path, filename+size, or metadata key.`;
 }
 
 function buildCollision(

@@ -2,7 +2,7 @@ import { parseFile } from "music-metadata";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ScanStatus, TrackFile } from "../shared/types.js";
+import type { NavidromeMetadataEnrichment, NavidromeMetadataMatchMethod, ScanStatus, TrackFile } from "../shared/types.js";
 import { saveCatalog } from "./catalog.js";
 import { buildDuplicateKey } from "./matching.js";
 import { fetchNavidromeLibraryTracks, type NavidromeLibraryTrack } from "./navidrome.js";
@@ -70,7 +70,18 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
   const warnings: string[] = [];
 
   if (!settings.navidrome.baseUrl || !settings.navidrome.username || !settings.navidrome.password) {
-    return { tracks, warnings };
+    return {
+      tracks: tracks.map((track) =>
+        withNavidromeDiagnostic(track, {
+          status: "skipped",
+          code: "settings-missing",
+          message: "Navidrome metadata was not checked because the Navidrome URL, username, or password is missing."
+        })
+      ),
+      warnings: tracks.length
+        ? [`Navidrome metadata: settings missing; skipped enrichment for ${tracks.length.toLocaleString()} files.`]
+        : warnings
+    };
   }
 
   let navidromeTracks: NavidromeLibraryTrack[];
@@ -79,14 +90,26 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
     navidromeTracks = await fetchNavidromeLibraryTracks(settings);
   } catch (error) {
     return {
-      tracks,
+      tracks: tracks.map((track) =>
+        withNavidromeDiagnostic(track, {
+          status: "skipped",
+          code: "api-request-failed",
+          message: `Navidrome metadata was not checked because the API request failed: ${(error as Error).message}`
+        })
+      ),
       warnings: [`Navidrome metadata scan skipped: ${(error as Error).message}`]
     };
   }
 
   if (navidromeTracks.length === 0) {
     return {
-      tracks,
+      tracks: tracks.map((track) =>
+        withNavidromeDiagnostic(track, {
+          status: "skipped",
+          code: "zero-tracks",
+          message: "Navidrome returned zero tracks, so NaviClean used local file metadata and path inference."
+        })
+      ),
       warnings: ["Navidrome metadata scan returned no tracks; local file metadata was used."]
     };
   }
@@ -95,23 +118,42 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
   let matched = 0;
   const unmatchedExamples: string[] = [];
   const enrichedTracks = tracks.map((track) => {
-    const navidromeTrack = findNavidromeTrackForFile(index, track);
+    const navidromeMatch = findNavidromeTrackForFile(index, track);
 
-    if (!navidromeTrack) {
+    if (!navidromeMatch) {
       if (unmatchedExamples.length < 5) {
         unmatchedExamples.push(track.relativePath);
       }
-      return track;
+      return withNavidromeDiagnostic(track, unmatchedNavidromeDiagnostic(track, navidromeTracks.length));
     }
 
     matched += 1;
-    return trackFileFromNavidromeTrack(track, navidromeTrack, settings);
+    return trackFileFromNavidromeTrack(track, navidromeMatch.track, settings, navidromeMatch.method, navidromeTracks.length);
   });
-  const tracksWithUsablePaths = navidromeTracks.filter((track) => track.sourceAbsolutePath || track.sourceRelativePath).length;
+  const tracksWithUsablePaths = navidromeTracks.filter((track) => track.sourcePathStatus === "usable").length;
+  const tracksWithoutPaths = navidromeTracks.filter((track) => track.sourcePathStatus === "missing").length;
+  const tracksOutsideLibrary = navidromeTracks.filter((track) => track.sourcePathStatus === "outside-library-root").length;
+  const unmatchedDiagnostics = enrichedTracks
+    .map((track) => track.navidromeEnrichment)
+    .filter((diagnostic): diagnostic is NavidromeMetadataEnrichment => Boolean(diagnostic));
+  const noApiMatchCount = unmatchedDiagnostics.filter((diagnostic) => diagnostic.code === "no-api-match").length;
+  const possibleStaleScanCount = unmatchedDiagnostics.filter((diagnostic) => diagnostic.code === "possible-stale-scan").length;
 
   warnings.push(
     `Navidrome metadata: ${matched.toLocaleString()} matched / ${tracks.length.toLocaleString()} files (${navidromeTracks.length.toLocaleString()} indexed tracks).`
   );
+
+  if (tracksWithoutPaths > 0) {
+    warnings.push(
+      `Navidrome metadata: ${tracksWithoutPaths.toLocaleString()} indexed tracks did not expose a usable path.`
+    );
+  }
+
+  if (tracksOutsideLibrary > 0) {
+    warnings.push(
+      `Navidrome metadata: ${tracksOutsideLibrary.toLocaleString()} indexed tracks point outside the configured library root (${path.resolve(settings.naming.libraryPath)}).`
+    );
+  }
 
   if (tracksWithUsablePaths < navidromeTracks.length) {
     warnings.push(
@@ -119,8 +161,20 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
     );
   }
 
+  if (noApiMatchCount > 0) {
+    warnings.push(
+      `Navidrome metadata: ${noApiMatchCount.toLocaleString()} local files did not match any Navidrome API record by absolute path, relative path, filename+size, or metadata key.`
+    );
+  }
+
+  if (possibleStaleScanCount > 0) {
+    warnings.push(
+      `Navidrome metadata: ${possibleStaleScanCount.toLocaleString()} organized local files may need a fresh Navidrome scan; no matching API path or metadata record was returned.`
+    );
+  }
+
   if (matched < tracks.length && unmatchedExamples.length > 0) {
-    warnings.push(`Navidrome unmatched examples (no matching indexed path): ${unmatchedExamples.join("; ")}`);
+    warnings.push(`Navidrome unmatched examples: ${unmatchedExamples.join("; ")}`);
   }
 
   return {
@@ -134,6 +188,11 @@ type NavidromeTrackIndex = {
   byRelativePath: Map<string, NavidromeLibraryTrack>;
   byFilenameAndSize: Map<string, NavidromeLibraryTrack | null>;
   byMetadata: Map<string, NavidromeLibraryTrack | null>;
+};
+
+type NavidromeTrackMatch = {
+  track: NavidromeLibraryTrack;
+  method: NavidromeMetadataMatchMethod;
 };
 
 function buildNavidromeTrackIndex(tracks: NavidromeLibraryTrack[]): NavidromeTrackIndex {
@@ -160,20 +219,36 @@ function buildNavidromeTrackIndex(tracks: NavidromeLibraryTrack[]): NavidromeTra
   return index;
 }
 
-function findNavidromeTrackForFile(index: NavidromeTrackIndex, track: TrackFile) {
-  return (
-    index.byAbsolutePath.get(pathKey(track.absolutePath)) ??
-    index.byRelativePath.get(relativePathKey(track.relativePath)) ??
-    uniqueNavidromeMatch(index.byFilenameAndSize.get(filenameSizeKey(track.relativePath, track.size))) ??
-    uniqueNavidromeMatch(index.byMetadata.get(trackMetadataKey(track))) ??
-    null
-  );
+function findNavidromeTrackForFile(index: NavidromeTrackIndex, track: TrackFile): NavidromeTrackMatch | null {
+  const absolutePathMatch = index.byAbsolutePath.get(pathKey(track.absolutePath));
+  if (absolutePathMatch) {
+    return { track: absolutePathMatch, method: "absolute-path" };
+  }
+
+  const relativePathMatch = index.byRelativePath.get(relativePathKey(track.relativePath));
+  if (relativePathMatch) {
+    return { track: relativePathMatch, method: "relative-path" };
+  }
+
+  const filenameSizeMatch = uniqueNavidromeMatch(index.byFilenameAndSize.get(filenameSizeKey(track.relativePath, track.size)));
+  if (filenameSizeMatch) {
+    return { track: filenameSizeMatch, method: "filename-size" };
+  }
+
+  const metadataMatch = uniqueNavidromeMatch(index.byMetadata.get(trackMetadataKey(track)));
+  if (metadataMatch) {
+    return { track: metadataMatch, method: "metadata-key" };
+  }
+
+  return null;
 }
 
 function trackFileFromNavidromeTrack(
   track: TrackFile,
   navidromeTrack: NavidromeLibraryTrack,
-  settings: PrivateSettings
+  settings: PrivateSettings,
+  matchMethod: NavidromeMetadataMatchMethod,
+  indexedTrackCount: number
 ): TrackFile {
   const artist = cleanDisplayValue(navidromeTrack.artist, track.artist);
   const albumArtist = cleanDisplayValue(navidromeTrack.albumArtist || navidromeTrack.artist, track.albumArtist || artist);
@@ -226,6 +301,13 @@ function trackFileFromNavidromeTrack(
       isrc
     }),
     issues,
+    navidromeEnrichment: {
+      status: "matched",
+      code: "matched",
+      message: `Matched Navidrome metadata by ${navidromeMatchMethodLabel(matchMethod)}.`,
+      matchMethod,
+      indexedTrackCount
+    },
     targetSource: "navidrome"
   } satisfies TrackFile;
   const target = targetForTrack(partialTrack, settings);
@@ -235,6 +317,53 @@ function trackFileFromNavidromeTrack(
     targetPath: target.targetPath,
     targetRelativePath: target.targetRelativePath
   };
+}
+
+function withNavidromeDiagnostic(track: TrackFile, navidromeEnrichment: NavidromeMetadataEnrichment): TrackFile {
+  return {
+    ...track,
+    navidromeEnrichment
+  };
+}
+
+function unmatchedNavidromeDiagnostic(track: TrackFile, indexedTrackCount: number): NavidromeMetadataEnrichment {
+  const possibleStaleScan =
+    track.targetRelativePath &&
+    relativePathKey(track.relativePath) === relativePathKey(track.targetRelativePath);
+
+  if (possibleStaleScan) {
+    return {
+      status: "unmatched",
+      code: "possible-stale-scan",
+      message:
+        "Navidrome returned tracks, but none matched this organized local file by path, filename+size, or metadata key. A fresh Navidrome scan may be needed.",
+      indexedTrackCount
+    };
+  }
+
+  return {
+    status: "unmatched",
+    code: "no-api-match",
+    message:
+      "No Navidrome API record matched this local file by absolute path, relative path, filename+size, or metadata key; NaviClean used local metadata and path inference.",
+    indexedTrackCount
+  };
+}
+
+function navidromeMatchMethodLabel(method: NavidromeMetadataMatchMethod) {
+  if (method === "absolute-path") {
+    return "absolute path";
+  }
+
+  if (method === "relative-path") {
+    return "relative path";
+  }
+
+  if (method === "filename-size") {
+    return "filename and size";
+  }
+
+  return "metadata key";
 }
 
 function addUniqueNavidromeMatch(

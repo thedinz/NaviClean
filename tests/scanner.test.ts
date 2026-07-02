@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { hasSpotifyBuIdentityTags, scanLibrary } from "../src/server/scanner.js";
+import { buildOrganizePlan } from "../src/server/organizer.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 import { spotifyBuMetadataTagsForSpotifyTrack } from "../src/server/spotifybu.js";
 
@@ -226,6 +227,178 @@ test("scanner uses Navidrome indexed metadata for target naming", async () => {
     assert.equal(
       track?.targetRelativePath,
       "Album Artist/Album Artist - Best Of (2020)/Album Artist - Best Of (2020) - 09 - Shared Song.mp3"
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("organized local file without Navidrome API match keeps local metadata with a clear diagnostic", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-unmatched-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath =
+    "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 01 - Track Name.mp3";
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/rest/getAlbumList2.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          albumList2: {
+            album: [
+              {
+                id: "album-other",
+                name: "Other Album",
+                artist: "Other Artist",
+                year: 2024,
+                songCount: 1
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    if (url.pathname.endsWith("/rest/getAlbum.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          album: {
+            id: "album-other",
+            name: "Other Album",
+            artist: "Other Artist",
+            year: 2024,
+            songCount: 1,
+            song: [
+              {
+                id: "song-other",
+                title: "Other Song",
+                artist: "Other Artist",
+                albumArtist: "Other Artist",
+                album: "Other Album",
+                track: 1,
+                year: 2024,
+                duration: 200,
+                path: "Other Artist/Other Artist - Other Album (2024)/Other Artist - Other Album (2024) - 01 - Other Song.mp3",
+                suffix: "mp3"
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "not real audio");
+
+    const scanSettings = settings(root);
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+    const plan = await buildOrganizePlan(result.tracks, scanSettings);
+    const item = plan.items[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, undefined);
+    assert.equal(track?.navidromeEnrichment?.code, "possible-stale-scan");
+    assert.match(track?.navidromeEnrichment?.message ?? "", /fresh Navidrome scan/i);
+    assert.equal(item?.status, "same");
+    assert.equal(item?.targetSource, "naviclean");
+    assert.equal(item?.targetRelativePath, sourceRelativePath);
+    assert.equal(item?.navidromeEnrichment?.code, "possible-stale-scan");
+    assert.ok(plan.warnings.some((warning) => /fresh Navidrome scan/i.test(warning)));
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("scanner counts and reports Navidrome API paths outside the configured library root", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-outside-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath =
+    "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 01 - Track Name.mp3";
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/rest/getAlbumList2.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          albumList2: {
+            album: [
+              {
+                id: "album-outside",
+                name: "Outside Album",
+                artist: "Outside Artist",
+                year: 2025,
+                songCount: 1
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    if (url.pathname.endsWith("/rest/getAlbum.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          album: {
+            id: "album-outside",
+            name: "Outside Album",
+            artist: "Outside Artist",
+            year: 2025,
+            songCount: 1,
+            song: [
+              {
+                id: "song-outside",
+                title: "Outside Song",
+                artist: "Outside Artist",
+                albumArtist: "Outside Artist",
+                album: "Outside Album",
+                track: 1,
+                year: 2025,
+                duration: 210,
+                path: "/outside-mount/Outside Artist/Outside Song.mp3",
+                suffix: "mp3"
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "not real audio");
+
+    const scanSettings = settings(root);
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+
+    assert.ok(
+      result.warnings.some((warning) =>
+        warning.includes("1 indexed tracks point outside the configured library root")
+      ),
+      result.warnings.join("\n")
     );
   } finally {
     globalThis.fetch = originalFetch;
