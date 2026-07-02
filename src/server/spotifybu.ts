@@ -5,14 +5,20 @@ export type SpotifyBuTagContainer = {
 
 export type SpotifyBuMetadataSource = {
   albumId?: string | null;
-  albumSpotifyUrl?: string | null;
+  isrc?: string | null;
   trackId: string;
-  trackSpotifyUrl?: string | null;
 };
 
-const spotifyBuTrackIdentityKeys = new Set(["spotifybu:track_id", "spotifybu:track_uri"]);
-const spotifyBuTrackIdentityLookupKeys = new Set(
-  Array.from(spotifyBuTrackIdentityKeys, normalizeTagLookupKey)
+const spotifyBuIdentityVersion = "1";
+const spotifyBuIdentityKeys = [
+  "spotifybu:track_id",
+  "spotifybu:track_uri",
+  "spotifybu:album_id",
+  "spotifybu:isrc",
+  "spotifybu:identity_version"
+];
+const spotifyBuIdentityKeyAliases = new Set(
+  spotifyBuIdentityKeys.flatMap((key) => spotifyBuAliasesForKey(key)).map(normalizeSpotifyBuTagKey)
 );
 
 export function hasSpotifyBuIdentityTags(tags: SpotifyBuTagContainer | null | undefined) {
@@ -20,7 +26,7 @@ export function hasSpotifyBuIdentityTags(tags: SpotifyBuTagContainer | null | un
 }
 
 export function spotifyBuMetadataTagsForSpotifyTrack(source: SpotifyBuMetadataSource) {
-  const tags = [
+  return [
     {
       key: "spotifybu:track_id",
       value: source.trackId
@@ -28,37 +34,20 @@ export function spotifyBuMetadataTagsForSpotifyTrack(source: SpotifyBuMetadataSo
     {
       key: "spotifybu:track_uri",
       value: `spotify:track:${source.trackId}`
+    },
+    {
+      key: "spotifybu:album_id",
+      value: source.albumId ?? ""
+    },
+    {
+      key: "spotifybu:isrc",
+      value: normalizeSpotifyBuIsrc(source.isrc)
+    },
+    {
+      key: "spotifybu:identity_version",
+      value: spotifyBuIdentityVersion
     }
   ];
-
-  if (source.trackSpotifyUrl) {
-    tags.push({
-      key: "spotifybu:track_url",
-      value: source.trackSpotifyUrl
-    });
-  }
-
-  if (source.albumId) {
-    tags.push(
-      {
-        key: "spotifybu:album_id",
-        value: source.albumId
-      },
-      {
-        key: "spotifybu:album_uri",
-        value: `spotify:album:${source.albumId}`
-      }
-    );
-  }
-
-  if (source.albumSpotifyUrl) {
-    tags.push({
-      key: "spotifybu:album_url",
-      value: source.albumSpotifyUrl
-    });
-  }
-
-  return tags;
 }
 
 function hasSpotifyBuIdentityCommonTag(common: SpotifyBuTagContainer["common"]) {
@@ -67,7 +56,7 @@ function hasSpotifyBuIdentityCommonTag(common: SpotifyBuTagContainer["common"]) 
   }
 
   return Object.entries(common).some(([key, value]) =>
-    spotifyBuTagKeyIsTrackIdentity(key) && tagValueIsPresent(value)
+    spotifyBuTagKeyIsIdentity(key) && tagValueIsPresent(value)
   );
 }
 
@@ -77,34 +66,44 @@ function hasSpotifyBuIdentityNativeTag(native: SpotifyBuTagContainer["native"] |
   }
 
   return Object.values(native).some((tags) =>
-    tags.some((tag) => spotifyBuTagKeyIsTrackIdentity(tag.id) && tagValueIsPresent(tag.value))
+    tags.some((tag) => spotifyBuTagKeyIsIdentity(tag.id) && tagValueIsPresent(tag.value))
   );
 }
 
-function spotifyBuTagKeyIsTrackIdentity(key: string) {
-  const lowerKey = key.trim().toLowerCase();
+function spotifyBuTagKeyIsIdentity(key: string) {
+  const normalizedKey = normalizeSpotifyBuTagKey(key);
 
-  if (spotifyBuTrackIdentityKeys.has(lowerKey)) {
+  if (spotifyBuIdentityKeyAliases.has(normalizedKey)) {
     return true;
   }
 
-  const parts = lowerKey.split(":").filter(Boolean);
+  const parts = key.trim().toLowerCase().split(":").filter(Boolean);
   for (let index = 0; index < parts.length; index += 1) {
     const suffix = parts.slice(index).join(":");
 
-    if (
-      spotifyBuTrackIdentityKeys.has(suffix) ||
-      spotifyBuTrackIdentityLookupKeys.has(normalizeTagLookupKey(suffix))
-    ) {
+    if (spotifyBuIdentityKeyAliases.has(normalizeSpotifyBuTagKey(suffix))) {
       return true;
     }
   }
 
-  return spotifyBuTrackIdentityLookupKeys.has(normalizeTagLookupKey(lowerKey));
+  return false;
 }
 
-function normalizeTagLookupKey(value: string) {
+function spotifyBuAliasesForKey(key: string) {
+  const name = key.replace(/^spotifybu:/, "");
+  return [
+    key,
+    `spotifybu_${name}`,
+    `----:com.apple.itunes:spotifybu:${name}`
+  ];
+}
+
+function normalizeSpotifyBuTagKey(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function normalizeSpotifyBuIsrc(value: string | null | undefined) {
+  return typeof value === "string" ? value.replace(/[^a-z0-9]/gi, "").toUpperCase() : "";
 }
 
 function tagValueIsPresent(value: unknown): boolean {

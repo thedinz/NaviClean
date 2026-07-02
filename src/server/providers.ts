@@ -29,13 +29,13 @@ type CatalogProviderTrack = {
   albumArtist: string;
   albumImageUrl: string | null;
   albumReleaseYear: number | null;
-  albumSpotifyUrl: string;
   albumTracksTotal: number;
   albumType: string;
   artists: string[];
   discNumber: number;
   durationMs: number;
   id: string;
+  isrc: string | null;
   name: string;
   spotifyUrl: string;
   trackNumber: number;
@@ -685,9 +685,8 @@ async function tagDownloadedFile(filePath: string, track: CatalogProviderTrack) 
 
   for (const tag of spotifyBuMetadataTagsForSpotifyTrack({
     albumId: track.albumId,
-    albumSpotifyUrl: track.albumSpotifyUrl,
-    trackId: track.id,
-    trackSpotifyUrl: track.spotifyUrl
+    isrc: track.isrc,
+    trackId: track.id
   })) {
     metadataArgs.push("-metadata", `${tag.key}=${tag.value}`);
   }
@@ -819,13 +818,13 @@ function providerTrackFromSpotify(
     albumArtist: album.artist.name,
     albumImageUrl: album.imageUrl,
     albumReleaseYear: album.releaseYear,
-    albumSpotifyUrl: album.spotifyUrl,
     albumTracksTotal: album.totalTracks,
     albumType: album.albumType,
     artists: track.artists.length ? track.artists : [album.artist.name],
     discNumber: track.discNumber,
     durationMs: track.duration * 1000,
     id: track.id,
+    isrc: track.isrc,
     name: track.name,
     spotifyUrl: track.spotifyUrl,
     trackNumber: track.trackNumber

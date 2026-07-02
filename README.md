@@ -68,7 +68,7 @@ This keeps NaviClean and Navidrome looking at the same library state. If Navidro
 
 The Discover page can connect to Spotify with client credentials, search catalog artists, show album discographies beside local library coverage, and stage missing album tracks for provider download. Spotify is used for metadata and artwork only; downloads come from configured external providers and require the user to confirm they are authorized to download the selected tracks. The Docker image includes `ffmpeg` and current `yt-dlp` for YouTube/JioSaavn provider jobs.
 
-NaviClean provider downloads use the same standard target-path renderer as the organizer and write SpotifyBU-compatible identity tags such as `spotifybu:track_id` and `spotifybu:track_uri`. Those tags let later scans recognize the files as SpotifyBU-managed so NaviClean does not keep re-organizing Spotify-sourced downloads.
+NaviClean provider downloads use the same standard target-path renderer as the organizer and write SpotifyBU Identity Tags v1: `spotifybu:track_id`, `spotifybu:track_uri`, `spotifybu:album_id`, `spotifybu:isrc`, and `spotifybu:identity_version`. Those tags let later scans recognize the files as SpotifyBU-managed so NaviClean does not keep re-organizing Spotify-sourced downloads. NaviClean reads the canonical colon keys plus SpotifyBU's underscore and iTunes aliases.
 
 ## Library artwork
 
