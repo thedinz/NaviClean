@@ -382,6 +382,22 @@ export type LibraryTrashResult = {
   errors: string[];
 };
 
+export type UnindexedFilesView = {
+  libraryPath: string;
+  total: number;
+  totalSize: number;
+  counts: {
+    noApiMatch: number;
+    possibleStaleScan: number;
+    other: number;
+  };
+  tracks: TrackFile[];
+};
+
+export type UnindexedTrashResult = LibraryTrashResult & {
+  unindexed: UnindexedFilesView;
+};
+
 export type EmptyFolderItem = {
   id: string;
   relativePath: string;

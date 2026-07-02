@@ -25,6 +25,7 @@ import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin, restoreRecycleB
 import { scanLibrary } from "./scanner.js";
 import { loadSettings, toSettingsView, updateSettings } from "./settings.js";
 import { fetchNavidromeArtwork, testNavidromeConnection } from "./navidrome.js";
+import { listUnindexedFiles, trashUnindexedFiles } from "./unindexed.js";
 import {
   buildSpotifyDownloadPlan,
   getSpotifyAlbumDetail,
@@ -321,6 +322,33 @@ app.delete("/api/library/empty-folders", asyncHandler(async (req, res) => {
 
 app.get("/api/library/non-music-files", asyncHandler(async (_req, res) => {
   res.json(await listNonMusicFiles(await loadSettingsForPlanning()));
+}));
+
+app.get("/api/library/unindexed", asyncHandler(async (_req, res) => {
+  const catalog = await loadCatalog();
+  res.json(listUnindexedFiles(await loadSettingsForPlanning(), catalog.tracks));
+}));
+
+app.post("/api/library/unindexed/trash", asyncHandler(async (req, res) => {
+  const trackIds = Array.isArray(req.body.trackIds) ? req.body.trackIds.map(String).filter(Boolean) : [];
+
+  if (trackIds.length === 0) {
+    res.status(400).json({ error: "trackIds are required" });
+    return;
+  }
+
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+  const result = await trashUnindexedFiles(settings, catalog.tracks, trackIds);
+
+  await saveCatalog(result.tracks);
+  invalidateOrganizeEvaluationCache();
+  res.json({
+    trashed: result.trashed,
+    removedTrackIds: result.removedTrackIds,
+    errors: result.errors,
+    unindexed: result.unindexed
+  });
 }));
 
 app.get("/api/library/non-music-files/group", asyncHandler(async (req, res) => {
