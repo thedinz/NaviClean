@@ -150,6 +150,72 @@ test("Navidrome match probe explains why a searched candidate was not accepted",
   }
 });
 
+test("Navidrome match probe reports candidates accepted by relaxed metadata matching", async () => {
+  const originalFetch = globalThis.fetch;
+  const testSettings = settings("/music");
+  testSettings.navidrome.baseUrl = "http://navidrome.local";
+  testSettings.navidrome.username = "admin";
+  testSettings.navidrome.password = "password";
+  const localTrack = track({
+    id: "unindexed",
+    album: "High Voltage",
+    albumArtist: "AC/DC",
+    artist: "AC/DC",
+    title: "Live Wire",
+    trackNumber: 4,
+    duration: 350,
+    size: 125213835,
+    relativePath: "AC DC/AC DC - High Voltage (1994)/AC DC - High Voltage (1994) - 04 - Live Wire.flac",
+    absolutePath: "/music/AC DC/AC DC - High Voltage (1994)/AC DC - High Voltage (1994) - 04 - Live Wire.flac",
+    navidromeEnrichment: {
+      status: "unmatched",
+      code: "no-api-match",
+      message: "No Navidrome API record matched this local file."
+    }
+  });
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/rest/search3.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          searchResult3: {
+            song: [
+              {
+                id: "nav-song",
+                title: "Live Wire",
+                artist: "AC/DC",
+                albumArtist: "AC/DC",
+                album: "High Voltage (international version)",
+                track: 4,
+                discNumber: 1,
+                year: 1976,
+                duration: 349,
+                size: 125213835,
+                path: "AC_DC/High Voltage (international version)/01-04 - Live Wire.flac"
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
+
+  try {
+    const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
+    const candidate = result.candidates[0];
+
+    assert.equal(candidate?.acceptedBy, "edition-metadata-size");
+    assert.ok(candidate?.rejectedReasons[0]?.includes("would now match"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     headers: {

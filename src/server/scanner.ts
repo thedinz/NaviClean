@@ -163,13 +163,13 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
 
   if (noApiMatchCount > 0) {
     warnings.push(
-      `Navidrome metadata: ${noApiMatchCount.toLocaleString()} local files did not match any Navidrome API record by absolute path, relative path, filename+size, or metadata key.`
+      `Navidrome metadata: ${noApiMatchCount.toLocaleString()} local files did not match any Navidrome API record by absolute path, relative path, filename+size, metadata key, or relaxed metadata+size.`
     );
   }
 
   if (possibleStaleScanCount > 0) {
     warnings.push(
-      `Navidrome metadata: ${possibleStaleScanCount.toLocaleString()} organized local files may need a fresh Navidrome scan; no matching API path or metadata record was returned.`
+      `Navidrome metadata: ${possibleStaleScanCount.toLocaleString()} organized local files may need a fresh Navidrome scan; no matching API path or metadata+size record was returned.`
     );
   }
 
@@ -188,6 +188,8 @@ type NavidromeTrackIndex = {
   byRelativePath: Map<string, NavidromeLibraryTrack>;
   byFilenameAndSize: Map<string, NavidromeLibraryTrack | null>;
   byMetadata: Map<string, NavidromeLibraryTrack | null>;
+  byMetadataRelaxedDuration: Map<string, NavidromeLibraryTrack | null>;
+  byEditionMetadata: Map<string, NavidromeLibraryTrack | null>;
 };
 
 type NavidromeTrackMatch = {
@@ -200,7 +202,9 @@ function buildNavidromeTrackIndex(tracks: NavidromeLibraryTrack[]): NavidromeTra
     byAbsolutePath: new Map(),
     byRelativePath: new Map(),
     byFilenameAndSize: new Map(),
-    byMetadata: new Map()
+    byMetadata: new Map(),
+    byMetadataRelaxedDuration: new Map(),
+    byEditionMetadata: new Map()
   };
 
   for (const track of tracks) {
@@ -214,6 +218,8 @@ function buildNavidromeTrackIndex(tracks: NavidromeLibraryTrack[]): NavidromeTra
     }
 
     addUniqueNavidromeMatch(index.byMetadata, navidromeMetadataKey(track), track);
+    addUniqueNavidromeMatch(index.byMetadataRelaxedDuration, navidromeRelaxedDurationKey(track), track);
+    addUniqueNavidromeMatch(index.byEditionMetadata, navidromeEditionMetadataKey(track), track);
   }
 
   return index;
@@ -238,6 +244,18 @@ function findNavidromeTrackForFile(index: NavidromeTrackIndex, track: TrackFile)
   const metadataMatch = uniqueNavidromeMatch(index.byMetadata.get(trackMetadataKey(track)));
   if (metadataMatch) {
     return { track: metadataMatch, method: "metadata-key" };
+  }
+
+  const relaxedDurationMatch = uniqueNavidromeMatch(
+    index.byMetadataRelaxedDuration.get(trackRelaxedDurationKey(track))
+  );
+  if (relaxedDurationMatch && durationIsCloseOrMissing(track.duration, relaxedDurationMatch.duration)) {
+    return { track: relaxedDurationMatch, method: "metadata-size-relaxed-duration" };
+  }
+
+  const editionMetadataMatch = uniqueNavidromeMatch(index.byEditionMetadata.get(trackEditionMetadataKey(track)));
+  if (editionMetadataMatch && durationIsCloseOrMissing(track.duration, editionMetadataMatch.duration)) {
+    return { track: editionMetadataMatch, method: "edition-metadata-size" };
   }
 
   return null;
@@ -336,7 +354,7 @@ function unmatchedNavidromeDiagnostic(track: TrackFile, indexedTrackCount: numbe
       status: "unmatched",
       code: "possible-stale-scan",
       message:
-        "Navidrome returned tracks, but none matched this organized local file by path, filename+size, or metadata key. A fresh Navidrome scan may be needed.",
+        "Navidrome returned tracks, but none matched this organized local file by path, filename+size, metadata key, or relaxed metadata+size. A fresh Navidrome scan may be needed.",
       indexedTrackCount
     };
   }
@@ -345,7 +363,7 @@ function unmatchedNavidromeDiagnostic(track: TrackFile, indexedTrackCount: numbe
     status: "unmatched",
     code: "no-api-match",
     message:
-      "No Navidrome API record matched this local file by absolute path, relative path, filename+size, or metadata key; NaviClean used local metadata and path inference.",
+      "No Navidrome API record matched this local file by absolute path, relative path, filename+size, metadata key, or relaxed metadata+size; NaviClean used local metadata and path inference.",
     indexedTrackCount
   };
 }
@@ -361,6 +379,14 @@ function navidromeMatchMethodLabel(method: NavidromeMetadataMatchMethod) {
 
   if (method === "filename-size") {
     return "filename and size";
+  }
+
+  if (method === "metadata-size-relaxed-duration") {
+    return "metadata and size with relaxed duration";
+  }
+
+  if (method === "edition-metadata-size") {
+    return "edition-compatible metadata and size";
   }
 
   return "metadata key";
@@ -420,6 +446,98 @@ function trackMetadataKey(track: TrackFile) {
     durationBucket(track.duration),
     track.size ?? ""
   ].join("|");
+}
+
+function navidromeRelaxedDurationKey(track: NavidromeLibraryTrack) {
+  return relaxedDurationKey({
+    album: track.album,
+    albumArtist: track.albumArtist || track.artist,
+    size: track.size,
+    title: track.title,
+    trackNumber: track.trackNumber,
+    discNumber: track.discNumber
+  });
+}
+
+function trackRelaxedDurationKey(track: TrackFile) {
+  return relaxedDurationKey({
+    album: track.album,
+    albumArtist: track.albumArtist || track.artist,
+    size: track.size,
+    title: track.title,
+    trackNumber: track.trackNumber,
+    discNumber: track.discNumber
+  });
+}
+
+function navidromeEditionMetadataKey(track: NavidromeLibraryTrack) {
+  return editionMetadataKey({
+    album: track.album,
+    albumArtist: track.albumArtist || track.artist,
+    size: track.size,
+    title: track.title,
+    trackNumber: track.trackNumber,
+    discNumber: track.discNumber
+  });
+}
+
+function trackEditionMetadataKey(track: TrackFile) {
+  return editionMetadataKey({
+    album: track.album,
+    albumArtist: track.albumArtist || track.artist,
+    size: track.size,
+    title: track.title,
+    trackNumber: track.trackNumber,
+    discNumber: track.discNumber
+  });
+}
+
+function relaxedDurationKey(track: {
+  album: string;
+  albumArtist: string;
+  size: number | null;
+  title: string;
+  trackNumber: number | null;
+  discNumber: number | null;
+}) {
+  if (!track.albumArtist || !track.album || !track.title || !track.trackNumber || !track.size) {
+    return "";
+  }
+
+  return [
+    normalizeForMatch(track.albumArtist, { removeBracketedText: false }),
+    normalizeForMatch(track.album, { removeBracketedText: false }),
+    normalizeForMatch(track.title, { removeBracketedText: false }),
+    track.discNumber ?? 1,
+    track.trackNumber,
+    track.size
+  ].join("|");
+}
+
+function editionMetadataKey(track: {
+  album: string;
+  albumArtist: string;
+  size: number | null;
+  title: string;
+  trackNumber: number | null;
+  discNumber: number | null;
+}) {
+  if (!track.albumArtist || !track.album || !track.title || !track.trackNumber || !track.size) {
+    return "";
+  }
+
+  return [
+    normalizeForMatch(track.albumArtist, { removeBracketedText: false }),
+    normalizeForMatch(track.album),
+    normalizeForMatch(track.title, { removeBracketedText: false }),
+    track.discNumber ?? 1,
+    track.trackNumber,
+    track.size
+  ].join("|");
+}
+
+function durationIsCloseOrMissing(left: number | null, right: number | null) {
+  return !left || !right || Math.abs(left - right) <= 5;
 }
 
 function durationBucket(duration: number | null) {

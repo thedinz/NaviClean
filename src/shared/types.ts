@@ -253,7 +253,13 @@ export type SettingsUpdate = {
   cleanup?: Partial<CleanupSettings>;
 };
 
-export type NavidromeMetadataMatchMethod = "absolute-path" | "relative-path" | "filename-size" | "metadata-key";
+export type NavidromeMetadataMatchMethod =
+  | "absolute-path"
+  | "relative-path"
+  | "filename-size"
+  | "metadata-key"
+  | "metadata-size-relaxed-duration"
+  | "edition-metadata-size";
 
 export type NavidromeMetadataDiagnosticCode =
   | "matched"
