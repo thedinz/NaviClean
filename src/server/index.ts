@@ -27,14 +27,12 @@ import { loadSettings, toSettingsView, updateSettings } from "./settings.js";
 import { fetchNavidromeArtwork, testNavidromeConnection } from "./navidrome.js";
 import {
   buildSpotifyDownloadPlan,
-  enrichTracksWithSpotifyOrganizeMetadata,
   getSpotifyAlbumDetail,
   getSpotifyArtistDiscography,
   matchLibraryArtistsToSpotify,
   searchSpotifyArtists,
   testSpotifyConnection
 } from "./spotify.js";
-import type { SpotifyOrganizeEnrichmentOptions } from "./spotify.js";
 
 const app = express();
 const port = Number(process.env.PORT || 8080);
@@ -567,10 +565,7 @@ app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
     invalidateOrganizeEvaluationCache();
   }
 
-  const refreshed = await rebuildOrganizeEvaluation({ ...latestCatalog, tracks }, settings, {
-    includeSummaryWarning: false,
-    lookupMissing: false
-  });
+  const refreshed = await rebuildOrganizeEvaluation({ ...latestCatalog, tracks }, settings);
   res.json({ ...result, plan: refreshed.plan });
 }));
 
@@ -589,10 +584,7 @@ app.post("/api/organize/trash", asyncHandler(async (req, res) => {
   const result = await trashOrganizeCandidate(settings, planned.tracks, itemId, candidateId);
   const savedCatalog = await saveCatalog(result.tracks);
   invalidateOrganizeEvaluationCache();
-  const refreshed = await rebuildOrganizeEvaluation(savedCatalog, settings, {
-    includeSummaryWarning: false,
-    lookupMissing: false
-  });
+  const refreshed = await rebuildOrganizeEvaluation(savedCatalog, settings);
 
   res.json({
     trashed: result.trashed,
@@ -625,10 +617,7 @@ app.post("/api/organize/trash/bulk", asyncHandler(async (req, res) => {
   const result = await trashOrganizeCandidates(settings, planned.tracks, selections);
   const savedCatalog = await saveCatalog(result.tracks);
   invalidateOrganizeEvaluationCache();
-  const refreshed = await rebuildOrganizeEvaluation(savedCatalog, settings, {
-    includeSummaryWarning: false,
-    lookupMissing: false
-  });
+  const refreshed = await rebuildOrganizeEvaluation(savedCatalog, settings);
 
   res.json({
     trashed: result.trashed,
@@ -847,23 +836,6 @@ async function loadSettingsForPlanning() {
   return loadSettings();
 }
 
-async function buildSpotifyAwareOrganizePlan(
-  tracks: Awaited<ReturnType<typeof loadCatalog>>["tracks"],
-  settings: Awaited<ReturnType<typeof loadSettings>>,
-  options?: SpotifyOrganizeEnrichmentOptions
-) {
-  const enriched = await enrichTracksWithSpotifyOrganizeMetadata(settings, tracks, options);
-  const plan = await buildOrganizePlan(enriched.tracks, settings);
-
-  return {
-    tracks: enriched.tracks,
-    plan: {
-      ...plan,
-      warnings: [...enriched.warnings, ...plan.warnings]
-    } satisfies OrganizePlan
-  };
-}
-
 async function getOrganizeEvaluation(catalog: CatalogSnapshot, settings: PlanningSettings): Promise<OrganizeEvaluation> {
   const key = organizeEvaluationKey(catalog, settings);
 
@@ -871,21 +843,17 @@ async function getOrganizeEvaluation(catalog: CatalogSnapshot, settings: Plannin
     return cachedOrganizeEvaluation;
   }
 
-  return rebuildOrganizeEvaluation(catalog, settings, {
-    includeSummaryWarning: false,
-    lookupMissing: false
-  });
+  return rebuildOrganizeEvaluation(catalog, settings);
 }
 
 async function rebuildOrganizeEvaluation(
   catalog: CatalogSnapshot,
   settings: PlanningSettings,
-  options?: SpotifyOrganizeEnrichmentOptions,
   cacheToken = organizeEvaluationCacheToken
 ): Promise<OrganizeEvaluation> {
   const key = organizeEvaluationKey(catalog, settings);
-  const { tracks, plan } = await buildSpotifyAwareOrganizePlan(catalog.tracks, settings, options);
-  const evaluation = organizeEvaluationFromPlan(key, catalog, tracks, plan);
+  const plan = await buildOrganizePlan(catalog.tracks, settings);
+  const evaluation = organizeEvaluationFromPlan(key, catalog, catalog.tracks, plan);
 
   if (cacheToken === organizeEvaluationCacheToken) {
     cachedOrganizeEvaluation = evaluation;
@@ -917,8 +885,7 @@ function organizeEvaluationKey(catalog: CatalogSnapshot, settings: PlanningSetti
   return JSON.stringify({
     catalogUpdatedAt: catalog.updatedAt,
     trackCount: catalog.tracks.length,
-    naming: settings.naming,
-    spotify: settings.catalog.spotify
+    naming: settings.naming
   });
 }
 

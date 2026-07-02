@@ -50,9 +50,25 @@ NaviClean uses one selected naming mode at a time:
 
 NaviClean appends the original extension before planning moves. A normal standard target path looks like `Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track`. Missing release years are written as `Unknown Year`. In standard mode, the rendered target path is canonical, so a different year, folder name, or filename is treated as organization work instead of being accepted as close enough.
 
+## Recommended workflow
+
+NaviClean now keeps a simpler metadata boundary: existing library files are organized from the scan catalog, with Navidrome metadata used when Navidrome can match the file. Spotify lookups are not used to rename existing tracks during organizer preview/apply. Spotify metadata is only used for the Discover/download flow, where NaviClean already knows the album and track identity.
+
+Use this flow when cleaning a mounted Navidrome library:
+
+1. Run a full Navidrome scan/sync first and wait for it to finish.
+2. Run a NaviClean scan. This reads the files and enriches matched tracks from Navidrome.
+3. Preview organization in NaviClean, resolve conflicts/missing files, and apply the moves.
+4. Run a full Navidrome scan/sync again so Navidrome sees the new paths and any new tags.
+5. Run a fresh NaviClean scan before doing another organization or duplicate-cleanup pass.
+
+This keeps NaviClean and Navidrome looking at the same library state. If Navidrome is stale after a large move, a later NaviClean scan may appear to find new organization work because Navidrome has finally caught up with different metadata/path information.
+
 ## Spotify catalog discovery
 
 The Discover page can connect to Spotify with client credentials, search catalog artists, show album discographies beside local library coverage, and stage missing album tracks for provider download. Spotify is used for metadata and artwork only; downloads come from configured external providers and require the user to confirm they are authorized to download the selected tracks. The Docker image includes `ffmpeg` and current `yt-dlp` for YouTube/JioSaavn provider jobs.
+
+NaviClean provider downloads use the same standard target-path renderer as the organizer and write SpotifyBU-compatible identity tags such as `spotifybu:track_id` and `spotifybu:track_uri`. Those tags let later scans recognize the files as SpotifyBU-managed so NaviClean does not keep re-organizing Spotify-sourced downloads.
 
 ## Library artwork
 

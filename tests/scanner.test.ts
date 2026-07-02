@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { hasSpotifyBuIdentityTags, scanLibrary } from "../src/server/scanner.js";
 import type { PrivateSettings } from "../src/server/settings.js";
+import { spotifyBuMetadataTagsForSpotifyTrack } from "../src/server/spotifybu.js";
 
 test("scanner recognizes SpotifyBU track identity tags", () => {
   assert.equal(
@@ -52,6 +53,33 @@ test("scanner requires SpotifyBU track id or uri for managed identity", () => {
       } as Record<string, unknown>
     }),
     false
+  );
+});
+
+test("SpotifyBU metadata helper emits scanner-recognized identity tags", () => {
+  const tags = spotifyBuMetadataTagsForSpotifyTrack({
+    albumId: "spotify-album-id",
+    albumSpotifyUrl: "https://open.spotify.com/album/spotify-album-id",
+    trackId: "spotify-track-id",
+    trackSpotifyUrl: "https://open.spotify.com/track/spotify-track-id"
+  });
+
+  assert.deepEqual(
+    tags.map((tag) => tag.key),
+    [
+      "spotifybu:track_id",
+      "spotifybu:track_uri",
+      "spotifybu:track_url",
+      "spotifybu:album_id",
+      "spotifybu:album_uri",
+      "spotifybu:album_url"
+    ]
+  );
+  assert.equal(
+    hasSpotifyBuIdentityTags({
+      common: Object.fromEntries(tags.map((tag) => [tag.key, tag.value]))
+    }),
+    true
   );
 });
 
