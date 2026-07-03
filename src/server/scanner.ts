@@ -5,7 +5,7 @@ import path from "node:path";
 import type { NavidromeMetadataEnrichment, NavidromeMetadataMatchMethod, ScanStatus, TrackFile } from "../shared/types.js";
 import { saveCatalog } from "./catalog.js";
 import { buildDuplicateKey } from "./matching.js";
-import { fetchNavidromeLibraryTracks, type NavidromeLibraryTrack } from "./navidrome.js";
+import { fetchNavidromeLibraryTracks, searchNavidromeLibraryTrackCandidates, type NavidromeLibraryTrack } from "./navidrome.js";
 import { targetForTrack } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
 import { hasSpotifyBuIdentityTags } from "./spotifybu.js";
@@ -116,20 +116,53 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
 
   const index = buildNavidromeTrackIndex(navidromeTracks);
   let matched = 0;
+  let searchFallbackMatched = 0;
+  let searchFallbackFailures = 0;
   const unmatchedExamples: string[] = [];
-  const enrichedTracks = tracks.map((track) => {
+  const unmatchedTracks: Array<{ index: number; track: TrackFile }> = [];
+  const enrichedTracks: TrackFile[] = new Array(tracks.length);
+
+  tracks.forEach((track, trackIndex) => {
     const navidromeMatch = findNavidromeTrackForFile(index, track);
 
     if (!navidromeMatch) {
-      if (unmatchedExamples.length < 5) {
-        unmatchedExamples.push(track.relativePath);
-      }
-      return withNavidromeDiagnostic(track, unmatchedNavidromeDiagnostic(track, navidromeTracks.length));
+      unmatchedTracks.push({ index: trackIndex, track });
+      return;
     }
 
     matched += 1;
-    return trackFileFromNavidromeTrack(track, navidromeMatch.track, settings, navidromeMatch.method, navidromeTracks.length);
+    enrichedTracks[trackIndex] = trackFileFromNavidromeTrack(track, navidromeMatch.track, settings, navidromeMatch.method, navidromeTracks.length);
   });
+
+  for (let offset = 0; offset < unmatchedTracks.length; offset += 6) {
+    const batch = unmatchedTracks.slice(offset, offset + 6);
+    const batchMatches = await Promise.all(
+      batch.map(async ({ track }) => {
+        try {
+          return await findNavidromeSearchFallbackForFile(settings, track);
+        } catch {
+          searchFallbackFailures += 1;
+          return null;
+        }
+      })
+    );
+
+    batch.forEach(({ index: trackIndex, track }, batchIndex) => {
+      const navidromeMatch = batchMatches[batchIndex];
+
+      if (!navidromeMatch) {
+        if (unmatchedExamples.length < 5) {
+          unmatchedExamples.push(track.relativePath);
+        }
+        enrichedTracks[trackIndex] = withNavidromeDiagnostic(track, unmatchedNavidromeDiagnostic(track, navidromeTracks.length));
+        return;
+      }
+
+      matched += 1;
+      searchFallbackMatched += 1;
+      enrichedTracks[trackIndex] = trackFileFromNavidromeTrack(track, navidromeMatch.track, settings, navidromeMatch.method, navidromeTracks.length);
+    });
+  }
   const tracksWithUsablePaths = navidromeTracks.filter((track) => track.sourcePathStatus === "usable").length;
   const tracksWithoutPaths = navidromeTracks.filter((track) => track.sourcePathStatus === "missing").length;
   const tracksOutsideLibrary = navidromeTracks.filter((track) => track.sourcePathStatus === "outside-library-root").length;
@@ -142,6 +175,18 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
   warnings.push(
     `Navidrome metadata: ${matched.toLocaleString()} matched / ${tracks.length.toLocaleString()} files (${navidromeTracks.length.toLocaleString()} indexed tracks).`
   );
+
+  if (searchFallbackMatched > 0) {
+    warnings.push(
+      `Navidrome metadata: ${searchFallbackMatched.toLocaleString()} files matched through Navidrome search fallback after the full album catalog did not expose a matching key.`
+    );
+  }
+
+  if (searchFallbackFailures > 0) {
+    warnings.push(
+      `Navidrome metadata: search fallback failed for ${searchFallbackFailures.toLocaleString()} unmatched files.`
+    );
+  }
 
   if (tracksWithoutPaths > 0) {
     warnings.push(
@@ -256,6 +301,55 @@ function findNavidromeTrackForFile(index: NavidromeTrackIndex, track: TrackFile)
   const editionMetadataMatch = uniqueNavidromeMatch(index.byEditionMetadata.get(trackEditionMetadataKey(track)));
   if (editionMetadataMatch) {
     return { track: editionMetadataMatch, method: "edition-metadata-size" };
+  }
+
+  return null;
+}
+
+async function findNavidromeSearchFallbackForFile(
+  settings: PrivateSettings,
+  track: TrackFile
+): Promise<NavidromeTrackMatch | null> {
+  const result = await searchNavidromeLibraryTrackCandidates(settings, {
+    album: track.album,
+    albumArtist: track.albumArtist,
+    artist: track.artist,
+    title: track.title
+  });
+  const matches = result.tracks
+    .map((candidate) => findNavidromeCandidateMatch(track, candidate))
+    .filter((match): match is NavidromeTrackMatch => Boolean(match));
+
+  if (matches.length !== 1) {
+    return null;
+  }
+
+  return matches[0];
+}
+
+function findNavidromeCandidateMatch(track: TrackFile, candidate: NavidromeLibraryTrack): NavidromeTrackMatch | null {
+  if (candidate.sourceAbsolutePath && pathKey(candidate.sourceAbsolutePath) === pathKey(track.absolutePath)) {
+    return { track: candidate, method: "absolute-path" };
+  }
+
+  if (candidate.sourceRelativePath && relativePathKey(candidate.sourceRelativePath) === relativePathKey(track.relativePath)) {
+    return { track: candidate, method: "relative-path" };
+  }
+
+  if (sameNonEmptyKey(filenameSizeKey(candidate.sourceRelativePath, candidate.size), filenameSizeKey(track.relativePath, track.size))) {
+    return { track: candidate, method: "filename-size" };
+  }
+
+  if (sameNonEmptyKey(navidromeMetadataKey(candidate), trackMetadataKey(track))) {
+    return { track: candidate, method: "metadata-key" };
+  }
+
+  if (sameNonEmptyKey(navidromeRelaxedDurationKey(candidate), trackRelaxedDurationKey(track))) {
+    return { track: candidate, method: "metadata-size-relaxed-duration" };
+  }
+
+  if (sameNonEmptyKey(navidromeEditionMetadataKey(candidate), trackEditionMetadataKey(track))) {
+    return { track: candidate, method: "edition-metadata-size" };
   }
 
   return null;
@@ -534,6 +628,10 @@ function editionMetadataKey(track: {
     track.trackNumber,
     track.size
   ].join("|");
+}
+
+function sameNonEmptyKey(left: string, right: string) {
+  return Boolean(left && right && left === right);
 }
 
 function durationBucket(duration: number | null) {
