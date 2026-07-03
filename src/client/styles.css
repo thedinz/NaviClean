@@ -317,6 +317,18 @@ button:disabled {
   line-height: 1;
 }
 
+.metric-card strong.metric-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #53615d;
+  font-size: 1rem;
+}
+
+.metric-card strong.metric-loading span {
+  color: inherit;
+}
+
 .metric-card.teal {
   border-top: 4px solid #16877c;
 }
@@ -677,6 +689,54 @@ legend {
 
 .non-music-table {
   min-width: 980px;
+}
+
+.unindexed-table {
+  min-width: 1080px;
+  table-layout: fixed;
+}
+
+.unindexed-table th:first-child,
+.unindexed-table td:first-child {
+  width: 40px;
+}
+
+.unindexed-table th:nth-child(2),
+.unindexed-table td:nth-child(2) {
+  width: 170px;
+}
+
+.unindexed-table th:nth-child(3),
+.unindexed-table td:nth-child(3) {
+  width: 270px;
+}
+
+.unindexed-table th:nth-child(4),
+.unindexed-table td:nth-child(4) {
+  width: 350px;
+}
+
+.unindexed-table th:nth-child(5),
+.unindexed-table td:nth-child(5) {
+  width: 160px;
+}
+
+.unindexed-table th:nth-child(6),
+.unindexed-table td:nth-child(6) {
+  width: 90px;
+  text-align: center;
+}
+
+.unindexed-table .quality-pill {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: flex-start;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.unindexed-table td:nth-child(5) span:not(.quality-pill) {
+  white-space: nowrap;
 }
 
 .non-music-group-row td:first-child,
