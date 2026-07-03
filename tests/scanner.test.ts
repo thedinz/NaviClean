@@ -400,6 +400,119 @@ test("scanner matches Navidrome metadata when album only differs by edition text
   }
 });
 
+test("scanner falls back to Navidrome search when album catalog misses an edition metadata key", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-search-fallback-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath =
+    "AC-DC/AC-DC - High Voltage (1989)/AC-DC - High Voltage (1989) - 01 - Baby, Please Don't Go.flac";
+  const contents = "audio";
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/rest/getAlbumList2.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          albumList2: {
+            album: [
+              {
+                id: "album-acdc",
+                name: "High Voltage (Australian version)",
+                artist: "AC/DC",
+                year: 1975,
+                songCount: 1
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    if (url.pathname.endsWith("/rest/getAlbum.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          album: {
+            id: "album-acdc",
+            name: "High Voltage (Australian version)",
+            artist: "AC/DC",
+            year: 1975,
+            songCount: 1,
+            song: [
+              {
+                id: "song-acdc",
+                title: "Baby, Please Don't Go",
+                artist: "AC/DC",
+                albumArtist: "AC/DC",
+                album: "High Voltage (Australian version)",
+                track: 1,
+                discNumber: 1,
+                year: 1975,
+                duration: 291,
+                path: "AC_DC/High Voltage (Australian version)/01-01 - Baby, Please Don't Go.flac",
+                suffix: "flac"
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    if (url.pathname.endsWith("/rest/search3.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          searchResult3: {
+            song: [
+              {
+                id: "song-acdc",
+                title: "Baby, Please Don't Go",
+                artist: "AC/DC",
+                albumArtist: "AC/DC",
+                album: "High Voltage (Australian version)",
+                track: 1,
+                discNumber: 1,
+                year: 1975,
+                duration: 291,
+                size: Buffer.byteLength(contents),
+                path: "AC_DC/High Voltage (Australian version)/01-01 - Baby, Please Don't Go.flac",
+                suffix: "flac"
+              }
+            ]
+          }
+        }
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+
+    const scanSettings = settings(root);
+    scanSettings.scan.extensions = [".flac"];
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, "navidrome");
+    assert.equal(track?.albumArtist, "AC/DC");
+    assert.equal(track?.album, "High Voltage (Australian version)");
+    assert.equal(track?.navidromeEnrichment?.matchMethod, "edition-metadata-size");
+    assert.ok(result.warnings.some((warning) => warning.includes("matched through Navidrome search fallback")));
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("organized local file without Navidrome API match keeps local metadata with a clear diagnostic", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-unmatched-"));
   const originalFetch = globalThis.fetch;
