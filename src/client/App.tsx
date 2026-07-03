@@ -202,6 +202,7 @@ function Shell({
   const [page, setPage] = useState<Page>("dashboard");
   const [scan, setScan] = useState<ScanStatus | null>(null);
   const [stats, setStats] = useState<LibraryStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
   const [scanBusy, setScanBusy] = useState(false);
   const [signOutBusy, setSignOutBusy] = useState(false);
@@ -213,9 +214,15 @@ function Shell({
   };
 
   const loadStats = async () => {
-    const nextStats = await api<LibraryStats>("/stats");
-    setStats(nextStats);
-    return nextStats;
+    setStatsLoading(true);
+
+    try {
+      const nextStats = await api<LibraryStats>("/stats");
+      setStats(nextStats);
+      return nextStats;
+    } finally {
+      setStatsLoading(false);
+    }
   };
 
   const refreshStats = async () => {
@@ -223,11 +230,17 @@ function Shell({
 
     if (!nextScan.running) {
       await loadStats();
+      return;
     }
+
+    setStatsLoading(false);
   };
 
   useEffect(() => {
-    refreshStats().catch((caught) => setNotice((caught as Error).message));
+    refreshStats().catch((caught) => {
+      setStatsLoading(false);
+      setNotice((caught as Error).message);
+    });
   }, []);
 
   useEffect(() => {
@@ -243,7 +256,10 @@ function Shell({
           }
           return null;
         })
-        .catch((caught) => setNotice((caught as Error).message));
+        .catch((caught) => {
+          setStatsLoading(false);
+          setNotice((caught as Error).message);
+        });
     }, 1500);
     return () => window.clearInterval(interval);
   }, [scan?.running]);
@@ -349,7 +365,7 @@ function Shell({
           </div>
         </header>
 
-        {page === "dashboard" && <Dashboard stats={stats} scan={scan} />}
+        {page === "dashboard" && <Dashboard stats={stats} statsLoading={statsLoading} scan={scan} />}
         {page === "library" && <LibraryPage onChanged={refreshStats} />}
         {page === "empty-folders" && <EmptyFoldersPage />}
         {page === "non-music" && <NonMusicFilesPage />}
@@ -423,13 +439,22 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthInfo) => void }) {
   );
 }
 
-function Dashboard({ stats, scan }: { stats: LibraryStats | null; scan: ScanStatus | null }) {
+function Dashboard({
+  stats,
+  statsLoading,
+  scan
+}: {
+  stats: LibraryStats | null;
+  statsLoading: boolean;
+  scan: ScanStatus | null;
+}) {
   const metrics = [
-    { label: "Tracks", value: stats?.totalTracks ?? 0, tone: "teal" },
-    { label: "Duplicate groups", value: stats?.duplicateGroups ?? 0, tone: "rose" },
-    { label: "Pending moves", value: stats?.pendingMoves ?? 0, tone: "amber" },
-    { label: "Metadata flags", value: stats?.missingMetadata ?? 0, tone: "ink" }
+    { label: "Tracks", value: stats?.totalTracks ?? null, tone: "teal" },
+    { label: "Duplicate groups", value: stats?.duplicateGroups ?? null, tone: "rose" },
+    { label: "Pending moves", value: stats?.pendingMoves ?? null, tone: "amber" },
+    { label: "Metadata flags", value: stats?.missingMetadata ?? null, tone: "ink" }
   ];
+  const statsPending = statsLoading || !stats;
 
   return (
     <section className="content-grid">
@@ -437,10 +462,20 @@ function Dashboard({ stats, scan }: { stats: LibraryStats | null; scan: ScanStat
         {metrics.map((metric) => (
           <article className={`metric-card ${metric.tone}`} key={metric.label}>
             <span>{metric.label}</span>
-            <strong>{metric.value.toLocaleString()}</strong>
+            {metric.value === null ? (
+              <strong className="metric-loading">
+                <Loader2 className="spin" size={22} />
+                <span>Loading</span>
+              </strong>
+            ) : (
+              <strong>{metric.value.toLocaleString()}</strong>
+            )}
           </article>
         ))}
       </div>
+      {statsPending && (
+        <ActionProgress label="Loading library totals, duplicate groups, pending moves, and metadata flags" />
+      )}
 
       <article className="panel wide">
         <div className="panel-title">
