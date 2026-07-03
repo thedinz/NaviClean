@@ -9,7 +9,7 @@ import type {
   UnindexedTrashResult
 } from "../shared/types.js";
 import { trashLibraryTracks } from "./library.js";
-import { searchNavidromeLibraryTrackCandidates, type NavidromeLibraryTrack } from "./navidrome.js";
+import { fetchNavidromeLibraryTracks, searchNavidromeLibraryTrackCandidates, type NavidromeLibraryTrack } from "./navidrome.js";
 import type { PrivateSettings } from "./settings.js";
 import { normalizeForMatch } from "./utils.js";
 
@@ -87,7 +87,11 @@ export async function findUnindexedNavidromeMatches(
     artist: track.artist,
     title: track.title
   });
-  const candidates = result.tracks.map((candidate) => compareNavidromeCandidate(track, candidate));
+  const preliminaryCandidates = result.tracks.map((candidate) => compareNavidromeCandidate(track, candidate));
+  const scanMatchContext = preliminaryCandidates.some((candidate) => candidate.acceptedBy)
+    ? await fullScanMatchContext(settings, track)
+    : null;
+  const candidates = result.tracks.map((candidate) => compareNavidromeCandidate(track, candidate, scanMatchContext));
   const acceptedCount = candidates.filter((candidate) => candidate.acceptedBy).length;
 
   return {
@@ -136,16 +140,145 @@ function reasonRank(track: TrackFile) {
   return 2;
 }
 
-function compareNavidromeCandidate(track: TrackFile, candidate: NavidromeLibraryTrack): UnindexedNavidromeCandidate {
+type NavidromeTrackIndex = {
+  byAbsolutePath: Map<string, NavidromeLibraryTrack>;
+  byRelativePath: Map<string, NavidromeLibraryTrack>;
+  byFilenameAndSize: Map<string, NavidromeLibraryTrack | null>;
+  byMetadata: Map<string, NavidromeLibraryTrack | null>;
+  byMetadataRelaxedDuration: Map<string, NavidromeLibraryTrack | null>;
+  byEditionMetadata: Map<string, NavidromeLibraryTrack | null>;
+};
+
+type NavidromeTrackMatch = {
+  track: NavidromeLibraryTrack;
+  method: NavidromeMetadataMatchMethod;
+};
+
+type FullScanMatchContext = {
+  error: string | null;
+  index: NavidromeTrackIndex | null;
+  match: NavidromeTrackMatch | null;
+};
+
+async function fullScanMatchContext(settings: PrivateSettings, track: TrackFile): Promise<FullScanMatchContext> {
+  try {
+    const navidromeTracks = await fetchNavidromeLibraryTracks(settings);
+    const index = buildNavidromeTrackIndex(navidromeTracks);
+
+    return {
+      error: null,
+      index,
+      match: findNavidromeTrackForFile(index, track)
+    };
+  } catch (error) {
+    return {
+      error: (error as Error).message,
+      index: null,
+      match: null
+    };
+  }
+}
+
+function buildNavidromeTrackIndex(tracks: NavidromeLibraryTrack[]): NavidromeTrackIndex {
+  const index: NavidromeTrackIndex = {
+    byAbsolutePath: new Map(),
+    byRelativePath: new Map(),
+    byFilenameAndSize: new Map(),
+    byMetadata: new Map(),
+    byMetadataRelaxedDuration: new Map(),
+    byEditionMetadata: new Map()
+  };
+
+  for (const track of tracks) {
+    if (track.sourceAbsolutePath) {
+      index.byAbsolutePath.set(pathKey(track.sourceAbsolutePath), track);
+    }
+
+    if (track.sourceRelativePath) {
+      index.byRelativePath.set(relativePathKey(track.sourceRelativePath), track);
+      addUniqueNavidromeMatch(index.byFilenameAndSize, filenameSizeKey(track.sourceRelativePath, track.size), track);
+    }
+
+    addUniqueNavidromeMatch(index.byMetadata, navidromeMetadataKey(track), track);
+    addUniqueNavidromeMatch(index.byMetadataRelaxedDuration, relaxedDurationKeyForNavidrome(track), track);
+    addUniqueNavidromeMatch(index.byEditionMetadata, editionMetadataKeyForNavidrome(track), track);
+  }
+
+  return index;
+}
+
+function findNavidromeTrackForFile(index: NavidromeTrackIndex, track: TrackFile): NavidromeTrackMatch | null {
+  const absolutePathMatch = index.byAbsolutePath.get(pathKey(track.absolutePath));
+  if (absolutePathMatch) {
+    return { track: absolutePathMatch, method: "absolute-path" };
+  }
+
+  const relativePathMatch = index.byRelativePath.get(relativePathKey(track.relativePath));
+  if (relativePathMatch) {
+    return { track: relativePathMatch, method: "relative-path" };
+  }
+
+  const filenameSizeMatch = uniqueNavidromeMatch(index.byFilenameAndSize.get(filenameSizeKey(track.relativePath, track.size)));
+  if (filenameSizeMatch) {
+    return { track: filenameSizeMatch, method: "filename-size" };
+  }
+
+  const metadataMatch = uniqueNavidromeMatch(index.byMetadata.get(trackMetadataKey(track)));
+  if (metadataMatch) {
+    return { track: metadataMatch, method: "metadata-key" };
+  }
+
+  const relaxedDurationMatch = uniqueNavidromeMatch(index.byMetadataRelaxedDuration.get(relaxedDurationKeyForTrack(track)));
+  if (relaxedDurationMatch) {
+    return { track: relaxedDurationMatch, method: "metadata-size-relaxed-duration" };
+  }
+
+  const editionMetadataMatch = uniqueNavidromeMatch(index.byEditionMetadata.get(editionMetadataKeyForTrack(track)));
+  if (editionMetadataMatch) {
+    return { track: editionMetadataMatch, method: "edition-metadata-size" };
+  }
+
+  return null;
+}
+
+function addUniqueNavidromeMatch(
+  map: Map<string, NavidromeLibraryTrack | null>,
+  key: string,
+  track: NavidromeLibraryTrack
+) {
+  if (!key) {
+    return;
+  }
+
+  map.set(key, map.has(key) ? null : track);
+}
+
+function uniqueNavidromeMatch(track: NavidromeLibraryTrack | null | undefined) {
+  return track ?? null;
+}
+
+function compareNavidromeCandidate(
+  track: TrackFile,
+  candidate: NavidromeLibraryTrack,
+  scanMatchContext?: FullScanMatchContext | null
+): UnindexedNavidromeCandidate {
   const checks = {
     absolutePath: pathComparison(track.absolutePath, candidate.sourceAbsolutePath, pathKey),
     relativePath: pathComparison(track.relativePath, candidate.sourceRelativePath, relativePathKey),
     filenameSize: filenameSizeComparison(track, candidate),
     metadataKey: metadataKeyComparison(track, candidate)
   };
-  const acceptedBy = acceptedMatchMethod(track, candidate, checks);
+  const individualAcceptedBy = acceptedMatchMethod(track, candidate, checks);
+  const acceptedBy =
+    scanMatchContext && scanMatchContext.match?.track.id === candidate.id
+      ? scanMatchContext.match.method
+      : scanMatchContext
+      ? null
+      : individualAcceptedBy;
   const rejectedReasons = acceptedBy
     ? [`This candidate would now match by ${matchMethodLabel(acceptedBy)}. Run a NaviClean scan to refresh this page.`]
+    : individualAcceptedBy && scanMatchContext
+    ? fullScanRejectionReasons(track, candidate, individualAcceptedBy, scanMatchContext)
     : navidromeRejectionReasons(track, candidate, checks);
 
   return {
@@ -170,6 +303,81 @@ function compareNavidromeCandidate(track: TrackFile, candidate: NavidromeLibrary
       isrc: candidate.isrc
     }
   };
+}
+
+function fullScanRejectionReasons(
+  track: TrackFile,
+  candidate: NavidromeLibraryTrack,
+  method: NavidromeMetadataMatchMethod,
+  context: FullScanMatchContext
+) {
+  if (context.error) {
+    return [
+      `This candidate matches by ${matchMethodLabel(method)} in Navidrome search, but NaviClean could not verify the full scan catalog: ${context.error}.`
+    ];
+  }
+
+  if (context.match) {
+    return [
+      `This candidate matches by ${matchMethodLabel(method)} in Navidrome search, but a full NaviClean scan would choose another Navidrome record first by ${matchMethodLabel(context.match.method)}.`
+    ];
+  }
+
+  const lookup = scanLookupForMethod(context.index, track, method);
+
+  if (lookup === null) {
+    return [
+      `This candidate matches by ${matchMethodLabel(method)} in Navidrome search, but the full Navidrome catalog has multiple records with that same match key. NaviClean leaves it unmatched instead of guessing.`
+    ];
+  }
+
+  if (!lookup) {
+    return [
+      `This candidate matches by ${matchMethodLabel(method)} in Navidrome search, but the full Navidrome album catalog used by scans does not expose the same match key. NaviClean cannot use it during a scan.`
+    ];
+  }
+
+  if (lookup.id !== candidate.id) {
+    return [
+      `This candidate matches by ${matchMethodLabel(method)} in Navidrome search, but the full Navidrome catalog maps that key to a different record. NaviClean leaves this search candidate unmatched.`
+    ];
+  }
+
+  return [
+    `This candidate matches by ${matchMethodLabel(method)} in Navidrome search, but NaviClean did not accept it during the full scan catalog check.`
+  ];
+}
+
+function scanLookupForMethod(
+  index: NavidromeTrackIndex | null,
+  track: TrackFile,
+  method: NavidromeMetadataMatchMethod
+): NavidromeLibraryTrack | null | undefined {
+  if (!index) {
+    return undefined;
+  }
+
+  if (method === "absolute-path") {
+    return index.byAbsolutePath.get(pathKey(track.absolutePath));
+  }
+
+  if (method === "relative-path") {
+    return index.byRelativePath.get(relativePathKey(track.relativePath));
+  }
+
+  if (method === "filename-size") {
+    return index.byFilenameAndSize.get(filenameSizeKey(track.relativePath, track.size));
+  }
+
+  if (method === "metadata-key") {
+    return index.byMetadata.get(trackMetadataKey(track));
+  }
+
+  if (method === "metadata-size-relaxed-duration") {
+    return index.byMetadataRelaxedDuration.get(relaxedDurationKeyForTrack(track));
+  }
+
+  return index.byEditionMetadata.get(editionMetadataKeyForTrack(track));
 }
 
 function compareCandidateMatches(left: UnindexedNavidromeCandidate, right: UnindexedNavidromeCandidate) {

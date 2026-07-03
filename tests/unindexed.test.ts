@@ -174,36 +174,32 @@ test("Navidrome match probe reports candidates accepted by metadata and size mat
     }
   });
 
-  globalThis.fetch = async (input) => {
-    const url = new URL(String(input));
-
-    if (url.pathname.endsWith("/rest/search3.view")) {
-      return jsonResponse({
-        "subsonic-response": {
-          status: "ok",
-          searchResult3: {
-            song: [
-              {
-                id: "nav-song",
-                title: "Live Wire",
-                artist: "AC/DC",
-                albumArtist: "AC/DC",
-                album: "High Voltage (international version)",
-                track: 4,
-                discNumber: 1,
-                year: 1976,
-                duration: 349,
-                size: 125213835,
-                path: "AC_DC/High Voltage (international version)/01-04 - Live Wire.flac"
-              }
-            ]
-          }
-        }
-      });
-    }
-
-    return jsonResponse({ error: "unexpected request" }, 404);
+  const navidromeSong = {
+    id: "nav-song",
+    title: "Live Wire",
+    artist: "AC/DC",
+    albumArtist: "AC/DC",
+    album: "High Voltage (international version)",
+    track: 4,
+    discNumber: 1,
+    year: 1976,
+    duration: 349,
+    size: 125213835,
+    path: "AC_DC/High Voltage (international version)/01-04 - Live Wire.flac"
   };
+
+  globalThis.fetch = navidromeFetchForSearchAndSongs([navidromeSong], [
+    {
+      album: {
+        id: "album-acdc",
+        name: "High Voltage (international version)",
+        artist: "AC/DC",
+        year: 1976,
+        songCount: 1
+      },
+      song: navidromeSong
+    }
+  ]);
 
   try {
     const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
@@ -241,36 +237,32 @@ test("Navidrome match probe accepts exact metadata and size when durations diffe
     }
   });
 
-  globalThis.fetch = async (input) => {
-    const url = new URL(String(input));
-
-    if (url.pathname.endsWith("/rest/search3.view")) {
-      return jsonResponse({
-        "subsonic-response": {
-          status: "ok",
-          searchResult3: {
-            song: [
-              {
-                id: "nav-song",
-                title: "Freak Out",
-                artist: "311",
-                albumArtist: "311",
-                album: "Music",
-                track: 2,
-                discNumber: 1,
-                year: 1993,
-                duration: 224,
-                size: 4827821,
-                path: "311/Music/01-02 - Freak Out.mp3"
-              }
-            ]
-          }
-        }
-      });
-    }
-
-    return jsonResponse({ error: "unexpected request" }, 404);
+  const navidromeSong = {
+    id: "nav-song",
+    title: "Freak Out",
+    artist: "311",
+    albumArtist: "311",
+    album: "Music",
+    track: 2,
+    discNumber: 1,
+    year: 1993,
+    duration: 224,
+    size: 4827821,
+    path: "311/Music/01-02 - Freak Out.mp3"
   };
+
+  globalThis.fetch = navidromeFetchForSearchAndSongs([navidromeSong], [
+    {
+      album: {
+        id: "album-311",
+        name: "Music",
+        artist: "311",
+        year: 1993,
+        songCount: 1
+      },
+      song: navidromeSong
+    }
+  ]);
 
   try {
     const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
@@ -280,6 +272,84 @@ test("Navidrome match probe accepts exact metadata and size when durations diffe
     assert.equal(candidate?.acceptedBy, "metadata-size-relaxed-duration");
     assert.equal(candidate?.checks.metadataKey, "different");
     assert.ok(candidate?.rejectedReasons[0]?.includes("would now match"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Navidrome match probe rejects search-only matches that are ambiguous in the full scan catalog", async () => {
+  const originalFetch = globalThis.fetch;
+  const testSettings = settings("/music");
+  testSettings.navidrome.baseUrl = "http://navidrome.local";
+  testSettings.navidrome.username = "admin";
+  testSettings.navidrome.password = "password";
+  const localTrack = track({
+    id: "unindexed",
+    album: "High Voltage",
+    albumArtist: "AC/DC",
+    artist: "AC/DC",
+    title: "Baby, Please Don't Go",
+    trackNumber: 1,
+    duration: 292,
+    size: 29086348,
+    relativePath: "AC-DC/AC-DC - High Voltage (1989)/AC-DC - High Voltage (1989) - 01 - Baby, Please Don't Go.flac",
+    absolutePath: "/music/AC-DC/AC-DC - High Voltage (1989)/AC-DC - High Voltage (1989) - 01 - Baby, Please Don't Go.flac",
+    navidromeEnrichment: {
+      status: "unmatched",
+      code: "possible-stale-scan",
+      message: "Organized local file did not match a Navidrome API record."
+    }
+  });
+  const searchSong = {
+    id: "nav-song-a",
+    title: "Baby, Please Don't Go",
+    artist: "AC/DC",
+    albumArtist: "AC/DC",
+    album: "High Voltage (Australian version)",
+    track: 1,
+    discNumber: 1,
+    year: 1975,
+    duration: 291,
+    size: 29086348,
+    path: "AC_DC/High Voltage (Australian version)/01-01 - Baby, Please Don't Go.flac"
+  };
+  const duplicateSong = {
+    ...searchSong,
+    id: "nav-song-b",
+    album: "High Voltage (1976 remaster)",
+    path: "AC_DC/High Voltage (1976 remaster)/01-01 - Baby, Please Don't Go.flac"
+  };
+
+  globalThis.fetch = navidromeFetchForSearchAndSongs([searchSong], [
+    {
+      album: {
+        id: "album-acdc-a",
+        name: "High Voltage (Australian version)",
+        artist: "AC/DC",
+        year: 1975,
+        songCount: 1
+      },
+      song: searchSong
+    },
+    {
+      album: {
+        id: "album-acdc-b",
+        name: "High Voltage (1976 remaster)",
+        artist: "AC/DC",
+        year: 1976,
+        songCount: 1
+      },
+      song: duplicateSong
+    }
+  ]);
+
+  try {
+    const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
+    const candidate = result.candidates[0];
+
+    assert.doesNotMatch(result.message, /NaviClean scan/);
+    assert.equal(candidate?.acceptedBy, null);
+    assert.ok(candidate?.rejectedReasons[0]?.includes("multiple records with that same match key"));
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -353,6 +423,54 @@ function jsonResponse(body: unknown, status = 200) {
     },
     status
   });
+}
+
+function navidromeFetchForSearchAndSongs(
+  searchSongs: Record<string, unknown>[],
+  entries: Array<{ album: Record<string, unknown>; song: Record<string, unknown> }>
+) {
+  return async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/rest/search3.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          searchResult3: {
+            song: searchSongs
+          }
+        }
+      });
+    }
+
+    if (url.pathname.endsWith("/rest/getAlbumList2.view")) {
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          albumList2: {
+            album: entries.map((entry) => entry.album)
+          }
+        }
+      });
+    }
+
+    if (url.pathname.endsWith("/rest/getAlbum.view")) {
+      const albumId = url.searchParams.get("id");
+      const entry = entries.find((candidate) => candidate.album.id === albumId) ?? entries[0];
+
+      return jsonResponse({
+        "subsonic-response": {
+          status: "ok",
+          album: {
+            ...entry.album,
+            song: [entry.song]
+          }
+        }
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
 }
 
 function settings(libraryPath: string): PrivateSettings {
