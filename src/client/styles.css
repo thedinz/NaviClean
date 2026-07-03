@@ -329,6 +329,11 @@ button:disabled {
   color: inherit;
 }
 
+.metric-card strong.metric-empty {
+  color: #53615d;
+  font-size: 1rem;
+}
+
 .metric-card.teal {
   border-top: 4px solid #16877c;
 }
@@ -1065,6 +1070,11 @@ td span {
   color: #66440f;
 }
 
+.fresh-scan-banner .primary-button {
+  width: fit-content;
+  margin-top: 2px;
+}
+
 .notice-bar strong,
 .notice-bar span {
   display: block;
@@ -1496,6 +1506,7 @@ select:disabled {
 
 [data-theme="dark"] .eyebrow,
 [data-theme="dark"] .metric-card span,
+[data-theme="dark"] .metric-card strong.metric-empty,
 [data-theme="dark"] .split span,
 [data-theme="dark"] .status-row,
 [data-theme="dark"] .summary-chips,

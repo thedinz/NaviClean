@@ -365,7 +365,9 @@ function Shell({
           </div>
         </header>
 
-        {page === "dashboard" && <Dashboard stats={stats} statsLoading={statsLoading} scan={scan} />}
+        {page === "dashboard" && (
+          <Dashboard stats={stats} statsLoading={statsLoading} scan={scan} scanBusy={scanBusy} onScan={startScan} />
+        )}
         {page === "library" && <LibraryPage onChanged={refreshStats} />}
         {page === "empty-folders" && <EmptyFoldersPage />}
         {page === "non-music" && <NonMusicFilesPage />}
@@ -442,11 +444,15 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthInfo) => void }) {
 function Dashboard({
   stats,
   statsLoading,
-  scan
+  scan,
+  scanBusy,
+  onScan
 }: {
   stats: LibraryStats | null;
   statsLoading: boolean;
   scan: ScanStatus | null;
+  scanBusy: boolean;
+  onScan: () => Promise<void>;
 }) {
   const metrics = [
     { label: "Tracks", value: stats?.totalTracks ?? null, tone: "teal" },
@@ -454,7 +460,10 @@ function Dashboard({
     { label: "Pending moves", value: stats?.pendingMoves ?? null, tone: "amber" },
     { label: "Metadata flags", value: stats?.missingMetadata ?? null, tone: "ink" }
   ];
-  const statsPending = statsLoading || !stats;
+  const scanRunning = Boolean(scan?.running);
+  const scanRequired = Boolean(stats && !stats.workflow.scanned && !scanRunning);
+  const statsPending = !scanRunning && !scanRequired && (statsLoading || !stats);
+  const metricMode = scanRunning && !stats ? "scanning" : statsPending ? "loading" : scanRequired ? "scan-needed" : "value";
 
   return (
     <section className="content-grid">
@@ -462,19 +471,36 @@ function Dashboard({
         {metrics.map((metric) => (
           <article className={`metric-card ${metric.tone}`} key={metric.label}>
             <span>{metric.label}</span>
-            {metric.value === null ? (
+            {metricMode === "loading" ? (
               <strong className="metric-loading">
                 <Loader2 className="spin" size={22} />
                 <span>Loading</span>
               </strong>
+            ) : metricMode === "scanning" ? (
+              <strong className="metric-loading">
+                <Loader2 className="spin" size={22} />
+                <span>Scanning</span>
+              </strong>
+            ) : metricMode === "scan-needed" ? (
+              <strong className="metric-empty">Scan needed</strong>
             ) : (
-              <strong>{metric.value.toLocaleString()}</strong>
+              <strong>{(metric.value ?? 0).toLocaleString()}</strong>
             )}
           </article>
         ))}
       </div>
       {statsPending && (
         <ActionProgress label="Loading library totals, duplicate groups, pending moves, and metadata flags" />
+      )}
+      {scanRequired && (
+        <div className="notice-bar safety fresh-scan-banner" role="status">
+          <strong>Fresh scan needed</strong>
+          <span>No saved scan data was found. Run a fresh scan to rebuild the Library Console totals.</span>
+          <button className="primary-button" type="button" onClick={onScan} disabled={scanBusy || scanRunning}>
+            {scanBusy || scanRunning ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+            <span>{scanBusy || scanRunning ? "Scanning" : "Scan now"}</span>
+          </button>
+        </div>
       )}
 
       <article className="panel wide">
