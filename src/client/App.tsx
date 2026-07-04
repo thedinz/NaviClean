@@ -4090,6 +4090,10 @@ function navidromeMatchMethodLabel(method: NonNullable<OrganizePreviewItem["navi
     return "edition metadata+size";
   }
 
+  if (method === "metadata-size-title-suffix") {
+    return "metadata+size title suffix";
+  }
+
   return "metadata key";
 }
 

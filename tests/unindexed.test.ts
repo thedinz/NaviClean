@@ -277,6 +277,70 @@ test("Navidrome match probe accepts exact metadata and size when durations diffe
   }
 });
 
+test("Navidrome match probe accepts provider title suffix differences", async () => {
+  const originalFetch = globalThis.fetch;
+  const testSettings = settings("/music");
+  testSettings.navidrome.baseUrl = "http://navidrome.local";
+  testSettings.navidrome.username = "admin";
+  testSettings.navidrome.password = "password";
+  const localTrack = track({
+    id: "unindexed",
+    album: "My Jesus",
+    albumArtist: "Anne Wilson",
+    artist: "Anne Wilson",
+    title: "Prelude (Scatter)",
+    trackNumber: 1,
+    duration: 59,
+    size: 3520275,
+    isrc: "USUM72202474",
+    relativePath: "Anne Wilson/Anne Wilson - My Jesus (2022)/Anne Wilson - My Jesus (2022) - 01 - Prelude (Scatter).mp3",
+    absolutePath: "/music/Anne Wilson/Anne Wilson - My Jesus (2022)/Anne Wilson - My Jesus (2022) - 01 - Prelude (Scatter).mp3",
+    navidromeEnrichment: {
+      status: "unmatched",
+      code: "possible-stale-scan",
+      message: "Organized local file did not match a Navidrome API record."
+    }
+  });
+  const navidromeSong = {
+    id: "nav-song",
+    title: "Prelude (Scatter) (PMEDIA)",
+    artist: "Anne Wilson",
+    albumArtist: "Anne Wilson",
+    album: "My Jesus",
+    track: 1,
+    discNumber: 1,
+    year: 2022,
+    duration: 58,
+    size: 3520275,
+    path: "Anne Wilson/My Jesus/01-01 - Prelude (Scatter) (PMEDIA).mp3"
+  };
+
+  globalThis.fetch = navidromeFetchForSearchAndSongs([navidromeSong], [
+    {
+      album: {
+        id: "album-anne-wilson",
+        name: "My Jesus",
+        artist: "Anne Wilson",
+        year: 2022,
+        songCount: 1
+      },
+      song: navidromeSong
+    }
+  ]);
+
+  try {
+    const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
+    const candidate = result.candidates[0];
+
+    assert.match(result.message, /NaviClean scan/);
+    assert.equal(candidate?.acceptedBy, "metadata-size-title-suffix");
+    assert.equal(candidate?.checks.metadataKey, "different");
+    assert.ok(candidate?.rejectedReasons[0]?.includes("provider title suffix"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("Navidrome match probe rejects search-only matches that are ambiguous in the full scan catalog", async () => {
   const originalFetch = globalThis.fetch;
   const testSettings = settings("/music");

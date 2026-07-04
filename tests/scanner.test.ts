@@ -343,6 +343,65 @@ test("scanner matches Navidrome metadata by exact size when parsed durations dis
   }
 });
 
+test("scanner matches Navidrome metadata when only a provider title suffix differs", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-title-suffix-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath =
+    "Anne Wilson/Anne Wilson - My Jesus (2022)/Anne Wilson - My Jesus (2022) - 01 - Prelude (Scatter).mp3";
+  const contents = "audio";
+
+  globalThis.fetch = navidromeFetchForSongs([
+    {
+      album: {
+        id: "album-anne-wilson",
+        name: "My Jesus",
+        artist: "Anne Wilson",
+        year: 2022,
+        songCount: 1
+      },
+      song: {
+        id: "song-prelude",
+        title: "Prelude (Scatter) (PMEDIA)",
+        artist: "Anne Wilson",
+        albumArtist: "Anne Wilson",
+        album: "My Jesus",
+        track: 1,
+        discNumber: 1,
+        year: 2022,
+        duration: 58,
+        size: Buffer.byteLength(contents),
+        path: "Anne Wilson/My Jesus/01-01 - Prelude (Scatter) (PMEDIA).mp3",
+        suffix: "mp3"
+      }
+    }
+  ]);
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+
+    const scanSettings = settings(root);
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, "navidrome");
+    assert.equal(track?.title, "Prelude (Scatter)");
+    assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-title-suffix");
+    assert.equal(
+      track?.targetRelativePath,
+      "Anne Wilson/Anne Wilson - My Jesus (2022)/Anne Wilson - My Jesus (2022) - 01 - Prelude (Scatter).mp3"
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("scanner matches Navidrome metadata when album only differs by edition text", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-edition-"));
   const originalFetch = globalThis.fetch;
