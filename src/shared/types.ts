@@ -260,7 +260,8 @@ export type NavidromeMetadataMatchMethod =
   | "metadata-key"
   | "metadata-size-relaxed-duration"
   | "edition-metadata-size"
-  | "metadata-size-title-suffix";
+  | "metadata-size-title-suffix"
+  | "metadata-size-track-agnostic";
 
 export type NavidromeMetadataDiagnosticCode =
   | "matched"

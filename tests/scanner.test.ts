@@ -343,6 +343,63 @@ test("scanner matches Navidrome metadata by exact size when parsed durations dis
   }
 });
 
+test("scanner matches Navidrome metadata when only the release track number differs", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-track-slot-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath =
+    "Cage the Elephant/Cage the Elephant - Ain't No Rest For The Wicked (2008)/Cage the Elephant - Ain't No Rest For The Wicked (2008) - 01 - Ain't No Rest for the Wicked.flac";
+  const contents = "audio";
+
+  globalThis.fetch = navidromeFetchForSongs([
+    {
+      album: {
+        id: "album-cage",
+        name: "Ain't No Rest For The Wicked",
+        artist: "Cage the Elephant",
+        year: 2008,
+        songCount: 3
+      },
+      song: {
+        id: "song-wicked",
+        title: "Ain't No Rest for the Wicked",
+        artist: "Cage the Elephant",
+        albumArtist: "Cage the Elephant",
+        album: "Ain't No Rest For The Wicked",
+        track: 3,
+        discNumber: 1,
+        year: 2008,
+        duration: 175,
+        size: Buffer.byteLength(contents),
+        path: "Cage the Elephant/Ain't No Rest For The Wicked/01-03 - Ain't No Rest for the Wicked.flac",
+        suffix: "flac"
+      }
+    }
+  ]);
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+
+    const scanSettings = settings(root);
+    scanSettings.scan.extensions = [".flac"];
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, "navidrome");
+    assert.equal(track?.trackNumber, 1);
+    assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-track-agnostic");
+    assert.equal(track?.targetRelativePath, sourceRelativePath);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("scanner matches Navidrome metadata when only a provider title suffix differs", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-title-suffix-"));
   const originalFetch = globalThis.fetch;
@@ -396,6 +453,62 @@ test("scanner matches Navidrome metadata when only a provider title suffix diffe
       track?.targetRelativePath,
       "Anne Wilson/Anne Wilson - My Jesus (2022)/Anne Wilson - My Jesus (2022) - 01 - Prelude (Scatter).mp3"
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("scanner matches Navidrome metadata when title has junk artist disambiguation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-title-disambiguation-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath =
+    "Chris Knight/Chris Knight - A Pretty Good Guy (2001)/Chris Knight - A Pretty Good Guy (2001) - 01 - Becky's Bible.mp3";
+  const contents = "audio";
+
+  globalThis.fetch = navidromeFetchForSongs([
+    {
+      album: {
+        id: "album-chris-knight",
+        name: "A Pretty Good Guy",
+        artist: "Chris Knight",
+        year: 2001,
+        songCount: 1
+      },
+      song: {
+        id: "song-beckys-bible",
+        title: "Becky's Bible (Chris Knight - Country Music Singer, b-1960, -)",
+        artist: "Chris Knight",
+        albumArtist: "Chris Knight",
+        album: "A Pretty Good Guy",
+        track: 1,
+        discNumber: 1,
+        year: 2001,
+        duration: 266,
+        size: Buffer.byteLength(contents),
+        path: "Chris Knight/A Pretty Good Guy/01-01 - Becky's Bible (Chris Knight - Country Music Singer, b-1960, -).mp3",
+        suffix: "mp3"
+      }
+    }
+  ]);
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+
+    const scanSettings = settings(root);
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, "navidrome");
+    assert.equal(track?.title, "Becky's Bible");
+    assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-title-suffix");
+    assert.equal(track?.targetRelativePath, sourceRelativePath);
   } finally {
     globalThis.fetch = originalFetch;
     await fs.rm(root, { force: true, recursive: true });
