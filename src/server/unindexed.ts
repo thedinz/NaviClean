@@ -148,6 +148,7 @@ type NavidromeTrackIndex = {
   byMetadataRelaxedDuration: Map<string, NavidromeLibraryTrack | null>;
   byEditionMetadata: Map<string, NavidromeLibraryTrack | null>;
   byTitleSuffixMetadata: Map<string, NavidromeLibraryTrack | null>;
+  byTrackAgnosticMetadata: Map<string, NavidromeLibraryTrack | null>;
 };
 
 type NavidromeTrackMatch = {
@@ -188,7 +189,8 @@ function buildNavidromeTrackIndex(tracks: NavidromeLibraryTrack[]): NavidromeTra
     byMetadata: new Map(),
     byMetadataRelaxedDuration: new Map(),
     byEditionMetadata: new Map(),
-    byTitleSuffixMetadata: new Map()
+    byTitleSuffixMetadata: new Map(),
+    byTrackAgnosticMetadata: new Map()
   };
 
   for (const track of tracks) {
@@ -205,6 +207,7 @@ function buildNavidromeTrackIndex(tracks: NavidromeLibraryTrack[]): NavidromeTra
     addUniqueNavidromeMatch(index.byMetadataRelaxedDuration, relaxedDurationKeyForNavidrome(track), track);
     addUniqueNavidromeMatch(index.byEditionMetadata, editionMetadataKeyForNavidrome(track), track);
     addUniqueNavidromeMatch(index.byTitleSuffixMetadata, titleSuffixMetadataKeyForNavidrome(track), track);
+    addUniqueNavidromeMatch(index.byTrackAgnosticMetadata, trackAgnosticMetadataKeyForNavidrome(track), track);
   }
 
   return index;
@@ -244,6 +247,11 @@ function findNavidromeTrackForFile(index: NavidromeTrackIndex, track: TrackFile)
   const titleSuffixMetadataMatch = uniqueNavidromeMatch(index.byTitleSuffixMetadata.get(titleSuffixMetadataKeyForTrack(track)));
   if (titleSuffixMetadataMatch) {
     return { track: titleSuffixMetadataMatch, method: "metadata-size-title-suffix" };
+  }
+
+  const trackAgnosticMetadataMatch = uniqueNavidromeMatch(index.byTrackAgnosticMetadata.get(trackAgnosticMetadataKeyForTrack(track)));
+  if (trackAgnosticMetadataMatch) {
+    return { track: trackAgnosticMetadataMatch, method: "metadata-size-track-agnostic" };
   }
 
   return null;
@@ -389,7 +397,11 @@ function scanLookupForMethod(
     return index.byEditionMetadata.get(editionMetadataKeyForTrack(track));
   }
 
-  return index.byTitleSuffixMetadata.get(titleSuffixMetadataKeyForTrack(track));
+  if (method === "metadata-size-title-suffix") {
+    return index.byTitleSuffixMetadata.get(titleSuffixMetadataKeyForTrack(track));
+  }
+
+  return index.byTrackAgnosticMetadata.get(trackAgnosticMetadataKeyForTrack(track));
 }
 
 function compareCandidateMatches(left: UnindexedNavidromeCandidate, right: UnindexedNavidromeCandidate) {
@@ -458,6 +470,10 @@ function acceptedMatchMethod(
 
   if (sameNonEmptyKey(titleSuffixMetadataKeyForTrack(track), titleSuffixMetadataKeyForNavidrome(candidate))) {
     return "metadata-size-title-suffix";
+  }
+
+  if (sameNonEmptyKey(trackAgnosticMetadataKeyForTrack(track), trackAgnosticMetadataKeyForNavidrome(candidate))) {
+    return "metadata-size-track-agnostic";
   }
 
   return null;
@@ -552,6 +568,9 @@ function scoreNavidromeCandidate(
   if (sameNonEmptyKey(titleSuffixMetadataKeyForTrack(track), titleSuffixMetadataKeyForNavidrome(candidate))) {
     score += 82;
   }
+  if (sameNonEmptyKey(trackAgnosticMetadataKeyForTrack(track), trackAgnosticMetadataKeyForNavidrome(candidate))) {
+    score += 84;
+  }
   if (normalizeMetadataText(track.title) === normalizeMetadataText(candidate.title)) score += 30;
   if (normalizeMetadataText(track.album) === normalizeMetadataText(candidate.album)) score += 20;
   if (normalizeMetadataText(track.albumArtist || track.artist) === normalizeMetadataText(candidate.albumArtist || candidate.artist)) score += 20;
@@ -631,6 +650,15 @@ function titleSuffixMetadataKeyForTrack(track: TrackFile) {
   });
 }
 
+function trackAgnosticMetadataKeyForTrack(track: TrackFile) {
+  return trackAgnosticMetadataKey({
+    album: track.album,
+    albumArtist: track.albumArtist || track.artist,
+    size: track.size,
+    title: track.title
+  });
+}
+
 function editionMetadataKeyForNavidrome(track: NavidromeLibraryTrack) {
   return editionMetadataKey({
     album: track.album,
@@ -639,6 +667,15 @@ function editionMetadataKeyForNavidrome(track: NavidromeLibraryTrack) {
     size: track.size,
     title: track.title,
     trackNumber: track.trackNumber
+  });
+}
+
+function trackAgnosticMetadataKeyForNavidrome(track: NavidromeLibraryTrack) {
+  return trackAgnosticMetadataKey({
+    album: track.album,
+    albumArtist: track.albumArtist || track.artist,
+    size: track.size,
+    title: track.title
   });
 }
 
@@ -712,9 +749,27 @@ function titleSuffixMetadataKey(track: {
   return [
     normalizeArtistMetadataText(track.albumArtist),
     normalizeMetadataText(track.album),
-    normalizeMetadataText(stripProviderTitleSuffix(track.title)),
+    normalizeMetadataText(stripProviderTitleSuffix(track.title, track.albumArtist)),
     track.discNumber ?? 1,
     track.trackNumber,
+    track.size
+  ].join("|");
+}
+
+function trackAgnosticMetadataKey(track: {
+  album: string;
+  albumArtist: string;
+  size: number | null;
+  title: string;
+}) {
+  if (!track.albumArtist || !track.album || !track.title || !track.size) {
+    return "";
+  }
+
+  return [
+    normalizeArtistMetadataText(track.albumArtist),
+    normalizeForMatch(track.album),
+    normalizeMetadataText(track.title),
     track.size
   ].join("|");
 }
@@ -727,8 +782,27 @@ function normalizeArtistMetadataText(value: string) {
   return normalizeMetadataText(value).replace(/^the\s+/, "");
 }
 
-function stripProviderTitleSuffix(value: string) {
-  return value.replace(/\s+\((?:pmedia)\)\s*$/i, "").trim();
+function stripProviderTitleSuffix(value: string, albumArtist: string) {
+  return value
+    .replace(/\s+\(([^)]*)\)\s*$/i, (match, suffix: string) =>
+      providerTitleSuffixIsNoise(suffix, albumArtist) ? "" : match
+    )
+    .trim();
+}
+
+function providerTitleSuffixIsNoise(suffix: string, albumArtist: string) {
+  const normalizedSuffix = normalizeMetadataText(suffix);
+
+  if (normalizedSuffix === "pmedia") {
+    return true;
+  }
+
+  const normalizedArtist = normalizeArtistMetadataText(albumArtist);
+  return Boolean(
+    normalizedArtist &&
+      normalizedSuffix.includes(normalizedArtist) &&
+      /\b(?:music|singer|artist|band|born|b\s+\d{4})\b/.test(normalizedSuffix)
+  );
 }
 
 function sameNonEmptyKey(left: string, right: string) {
@@ -778,6 +852,10 @@ function matchMethodLabel(method: NavidromeMetadataMatchMethod) {
 
   if (method === "metadata-size-title-suffix") {
     return "metadata+size with provider title suffix";
+  }
+
+  if (method === "metadata-size-track-agnostic") {
+    return "metadata+size without track number";
   }
 
   return "metadata key";

@@ -277,6 +277,94 @@ test("Navidrome match probe accepts exact metadata and size when durations diffe
   }
 });
 
+test("Navidrome match probe accepts release track-number drift but rejects meaningful title versions", async () => {
+  const originalFetch = globalThis.fetch;
+  const testSettings = settings("/music");
+  testSettings.navidrome.baseUrl = "http://navidrome.local";
+  testSettings.navidrome.username = "admin";
+  testSettings.navidrome.password = "password";
+  const localTrack = track({
+    id: "unindexed",
+    album: "Ain't No Rest For The Wicked",
+    albumArtist: "Cage the Elephant",
+    artist: "Cage the Elephant",
+    title: "Ain't No Rest for the Wicked",
+    trackNumber: 1,
+    duration: 175,
+    size: 22836714,
+    relativePath:
+      "Cage the Elephant/Cage the Elephant - Ain't No Rest For The Wicked (2008)/Cage the Elephant - Ain't No Rest For The Wicked (2008) - 01 - Ain't No Rest for the Wicked.flac",
+    absolutePath:
+      "/music/Cage the Elephant/Cage the Elephant - Ain't No Rest For The Wicked (2008)/Cage the Elephant - Ain't No Rest For The Wicked (2008) - 01 - Ain't No Rest for the Wicked.flac",
+    navidromeEnrichment: {
+      status: "unmatched",
+      code: "possible-stale-scan",
+      message: "Organized local file did not match a Navidrome API record."
+    }
+  });
+  const vocalSong = {
+    id: "nav-vocal",
+    title: "Ain't No Rest for the Wicked",
+    artist: "Cage the Elephant",
+    albumArtist: "Cage the Elephant",
+    album: "Ain't No Rest For The Wicked",
+    track: 3,
+    discNumber: 1,
+    year: 2008,
+    duration: 175,
+    size: 22836714,
+    path: "Cage the Elephant/Ain't No Rest For The Wicked/01-03 - Ain't No Rest for the Wicked.flac"
+  };
+  const instrumentalSong = {
+    id: "nav-instrumental",
+    title: "Ain't No Rest for the Wicked (instrumental version)",
+    artist: "Cage the Elephant",
+    albumArtist: "Cage the Elephant",
+    album: "Ain't No Rest For The Wicked",
+    track: 2,
+    discNumber: 1,
+    year: 2008,
+    duration: 175,
+    size: 22836714,
+    path: "Cage the Elephant/Ain't No Rest For The Wicked/01-02 - Ain't No Rest for the Wicked (instrumental version).flac"
+  };
+
+  globalThis.fetch = navidromeFetchForSearchAndSongs([vocalSong, instrumentalSong], [
+    {
+      album: {
+        id: "album-cage-vocal",
+        name: "Ain't No Rest For The Wicked",
+        artist: "Cage the Elephant",
+        year: 2008,
+        songCount: 1
+      },
+      song: vocalSong
+    },
+    {
+      album: {
+        id: "album-cage-instrumental",
+        name: "Ain't No Rest For The Wicked",
+        artist: "Cage the Elephant",
+        year: 2008,
+        songCount: 1
+      },
+      song: instrumentalSong
+    }
+  ]);
+
+  try {
+    const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
+    const vocalCandidate = result.candidates.find((candidate) => candidate.id === "nav-vocal");
+    const instrumentalCandidate = result.candidates.find((candidate) => candidate.id === "nav-instrumental");
+
+    assert.match(result.message, /NaviClean scan/);
+    assert.equal(vocalCandidate?.acceptedBy, "metadata-size-track-agnostic");
+    assert.equal(instrumentalCandidate?.acceptedBy, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("Navidrome match probe accepts provider title suffix differences", async () => {
   const originalFetch = globalThis.fetch;
   const testSettings = settings("/music");
@@ -335,6 +423,68 @@ test("Navidrome match probe accepts provider title suffix differences", async ()
     assert.match(result.message, /NaviClean scan/);
     assert.equal(candidate?.acceptedBy, "metadata-size-title-suffix");
     assert.equal(candidate?.checks.metadataKey, "different");
+    assert.ok(candidate?.rejectedReasons[0]?.includes("provider title suffix"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Navidrome match probe accepts junk artist disambiguation title suffixes", async () => {
+  const originalFetch = globalThis.fetch;
+  const testSettings = settings("/music");
+  testSettings.navidrome.baseUrl = "http://navidrome.local";
+  testSettings.navidrome.username = "admin";
+  testSettings.navidrome.password = "password";
+  const localTrack = track({
+    id: "unindexed",
+    album: "A Pretty Good Guy",
+    albumArtist: "Chris Knight",
+    artist: "Chris Knight",
+    title: "Becky's Bible",
+    trackNumber: 1,
+    duration: 266,
+    size: 8014367,
+    relativePath: "Chris Knight/Chris Knight - A Pretty Good Guy (2001)/Chris Knight - A Pretty Good Guy (2001) - 01 - Becky's Bible.mp3",
+    absolutePath: "/music/Chris Knight/Chris Knight - A Pretty Good Guy (2001)/Chris Knight - A Pretty Good Guy (2001) - 01 - Becky's Bible.mp3",
+    navidromeEnrichment: {
+      status: "unmatched",
+      code: "possible-stale-scan",
+      message: "Organized local file did not match a Navidrome API record."
+    }
+  });
+  const navidromeSong = {
+    id: "nav-song",
+    title: "Becky's Bible (Chris Knight - Country Music Singer, b-1960, -)",
+    artist: "Chris Knight",
+    albumArtist: "Chris Knight",
+    album: "A Pretty Good Guy",
+    track: 1,
+    discNumber: 1,
+    year: 2001,
+    duration: 266,
+    size: 8014367,
+    path: "Chris Knight/A Pretty Good Guy/01-01 - Becky's Bible (Chris Knight - Country Music Singer, b-1960, -).mp3"
+  };
+
+  globalThis.fetch = navidromeFetchForSearchAndSongs([navidromeSong], [
+    {
+      album: {
+        id: "album-chris-knight",
+        name: "A Pretty Good Guy",
+        artist: "Chris Knight",
+        year: 2001,
+        songCount: 1
+      },
+      song: navidromeSong
+    }
+  ]);
+
+  try {
+    const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
+    const candidate = result.candidates[0];
+
+    assert.match(result.message, /NaviClean scan/);
+    assert.equal(candidate?.acceptedBy, "metadata-size-title-suffix");
     assert.ok(candidate?.rejectedReasons[0]?.includes("provider title suffix"));
   } finally {
     globalThis.fetch = originalFetch;
