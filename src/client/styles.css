@@ -1070,6 +1070,19 @@ td span {
   color: #66440f;
 }
 
+.app-risk-banner {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  margin-bottom: 18px;
+  border: 1px solid rgba(217, 148, 43, 0.32);
+}
+
+.app-risk-banner svg {
+  margin-top: 1px;
+  flex: 0 0 auto;
+}
+
 .fresh-scan-banner .primary-button {
   width: fit-content;
   margin-top: 2px;
