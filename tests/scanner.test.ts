@@ -402,6 +402,67 @@ test("scanner matches Navidrome metadata when only a provider title suffix diffe
   }
 });
 
+test("scanner matches Navidrome metadata across leading artist articles and redundant album years", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-artist-article-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath =
+    "Beach Boys/Beach Boys - Greatest Hits (2012)/Beach Boys - Greatest Hits (2012) - 01 - That's Why God Made the Radio.flac";
+  const contents = "audio";
+
+  globalThis.fetch = navidromeFetchForSongs([
+    {
+      album: {
+        id: "album-beach-boys",
+        name: "Greatest Hits (2012)",
+        artist: "The Beach Boys",
+        year: 2012,
+        songCount: 1
+      },
+      song: {
+        id: "song-radio",
+        title: "That's Why God Made the Radio",
+        artist: "The Beach Boys",
+        albumArtist: "The Beach Boys",
+        album: "Greatest Hits (2012)",
+        track: 1,
+        discNumber: 1,
+        year: 2012,
+        duration: 200,
+        size: Buffer.byteLength(contents),
+        path: "The Beach Boys - Beach Boys/Greatest Hits (2012)/01-01 - That's Why God Made the Radio.flac",
+        suffix: "flac"
+      }
+    }
+  ]);
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+
+    const scanSettings = settings(root);
+    scanSettings.scan.extensions = [".flac"];
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, "navidrome");
+    assert.equal(track?.albumArtist, "The Beach Boys");
+    assert.equal(track?.album, "Greatest Hits");
+    assert.equal(track?.navidromeEnrichment?.matchMethod, "edition-metadata-size");
+    assert.equal(
+      track?.targetRelativePath,
+      "The Beach Boys/The Beach Boys - Greatest Hits (2012)/The Beach Boys - Greatest Hits (2012) - 01 - That's Why God Made the Radio.flac"
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("scanner matches Navidrome metadata when album only differs by edition text", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-edition-"));
   const originalFetch = globalThis.fetch;

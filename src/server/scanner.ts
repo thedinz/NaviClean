@@ -376,7 +376,7 @@ function trackFileFromNavidromeTrack(
 ): TrackFile {
   const artist = cleanDisplayValue(navidromeTrack.artist, track.artist);
   const albumArtist = cleanDisplayValue(navidromeTrack.albumArtist || navidromeTrack.artist, track.albumArtist || artist);
-  const album = cleanDisplayValue(navidromeTrack.album, track.album);
+  const album = cleanDisplayValue(cleanNavidromeAlbumTitle(navidromeTrack.album, navidromeTrack.year), track.album);
   const title = cleanDisplayValue(
     matchMethod === "metadata-size-title-suffix" ? track.title : navidromeTrack.title,
     track.title
@@ -503,6 +503,14 @@ function navidromeMatchMethodLabel(method: NavidromeMetadataMatchMethod) {
   }
 
   return "metadata key";
+}
+
+function cleanNavidromeAlbumTitle(album: string, year: number | null) {
+  if (!year) {
+    return album;
+  }
+
+  return album.replace(new RegExp(`\\s*\\(${year}\\)\\s*$`), "").trim() || album;
 }
 
 function addUniqueNavidromeMatch(
@@ -640,7 +648,7 @@ function relaxedDurationKey(track: {
   }
 
   return [
-    normalizeForMatch(track.albumArtist, { removeBracketedText: false }),
+    normalizeArtistMetadataText(track.albumArtist),
     normalizeForMatch(track.album, { removeBracketedText: false }),
     normalizeForMatch(track.title, { removeBracketedText: false }),
     track.discNumber ?? 1,
@@ -662,7 +670,7 @@ function editionMetadataKey(track: {
   }
 
   return [
-    normalizeForMatch(track.albumArtist, { removeBracketedText: false }),
+    normalizeArtistMetadataText(track.albumArtist),
     normalizeForMatch(track.album),
     normalizeForMatch(track.title, { removeBracketedText: false }),
     track.discNumber ?? 1,
@@ -684,7 +692,7 @@ function titleSuffixMetadataKey(track: {
   }
 
   return [
-    normalizeForMatch(track.albumArtist, { removeBracketedText: false }),
+    normalizeArtistMetadataText(track.albumArtist),
     normalizeForMatch(track.album, { removeBracketedText: false }),
     normalizeForMatch(stripProviderTitleSuffix(track.title), { removeBracketedText: false }),
     track.discNumber ?? 1,
@@ -695,6 +703,10 @@ function titleSuffixMetadataKey(track: {
 
 function stripProviderTitleSuffix(value: string) {
   return value.replace(/\s+\((?:pmedia)\)\s*$/i, "").trim();
+}
+
+function normalizeArtistMetadataText(value: string) {
+  return normalizeForMatch(value, { removeBracketedText: false }).replace(/^the\s+/, "");
 }
 
 function sameNonEmptyKey(left: string, right: string) {

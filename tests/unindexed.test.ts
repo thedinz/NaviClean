@@ -341,6 +341,68 @@ test("Navidrome match probe accepts provider title suffix differences", async ()
   }
 });
 
+test("Navidrome match probe accepts leading artist articles and redundant album years", async () => {
+  const originalFetch = globalThis.fetch;
+  const testSettings = settings("/music");
+  testSettings.navidrome.baseUrl = "http://navidrome.local";
+  testSettings.navidrome.username = "admin";
+  testSettings.navidrome.password = "password";
+  const localTrack = track({
+    id: "unindexed",
+    album: "Greatest Hits",
+    albumArtist: "Beach Boys",
+    artist: "The Beach Boys",
+    title: "That's Why God Made the Radio",
+    trackNumber: 1,
+    duration: 200,
+    size: 21599650,
+    relativePath: "Beach Boys/Beach Boys - Greatest Hits (2012)/Beach Boys - Greatest Hits (2012) - 01 - That's Why God Made the Radio.flac",
+    absolutePath: "/music/Beach Boys/Beach Boys - Greatest Hits (2012)/Beach Boys - Greatest Hits (2012) - 01 - That's Why God Made the Radio.flac",
+    navidromeEnrichment: {
+      status: "unmatched",
+      code: "possible-stale-scan",
+      message: "Organized local file did not match a Navidrome API record."
+    }
+  });
+  const navidromeSong = {
+    id: "nav-song",
+    title: "That's Why God Made the Radio",
+    artist: "The Beach Boys",
+    albumArtist: "The Beach Boys",
+    album: "Greatest Hits (2012)",
+    track: 1,
+    discNumber: 1,
+    year: 2012,
+    duration: 200,
+    size: 21599650,
+    path: "The Beach Boys - Beach Boys/Greatest Hits (2012)/01-01 - That's Why God Made the Radio.flac"
+  };
+
+  globalThis.fetch = navidromeFetchForSearchAndSongs([navidromeSong], [
+    {
+      album: {
+        id: "album-beach-boys",
+        name: "Greatest Hits (2012)",
+        artist: "The Beach Boys",
+        year: 2012,
+        songCount: 1
+      },
+      song: navidromeSong
+    }
+  ]);
+
+  try {
+    const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
+    const candidate = result.candidates[0];
+
+    assert.match(result.message, /NaviClean scan/);
+    assert.equal(candidate?.acceptedBy, "edition-metadata-size");
+    assert.equal(candidate?.checks.metadataKey, "different");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("Navidrome match probe rejects search-only matches that are ambiguous in the full scan catalog", async () => {
   const originalFetch = globalThis.fetch;
   const testSettings = settings("/music");
