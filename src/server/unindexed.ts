@@ -666,7 +666,7 @@ function relaxedDurationKey(track: {
   }
 
   return [
-    normalizeMetadataText(track.albumArtist),
+    normalizeArtistMetadataText(track.albumArtist),
     normalizeMetadataText(track.album),
     normalizeMetadataText(track.title),
     track.discNumber ?? 1,
@@ -688,7 +688,7 @@ function editionMetadataKey(track: {
   }
 
   return [
-    normalizeMetadataText(track.albumArtist),
+    normalizeArtistMetadataText(track.albumArtist),
     normalizeForMatch(track.album),
     normalizeMetadataText(track.title),
     track.discNumber ?? 1,
@@ -710,7 +710,7 @@ function titleSuffixMetadataKey(track: {
   }
 
   return [
-    normalizeMetadataText(track.albumArtist),
+    normalizeArtistMetadataText(track.albumArtist),
     normalizeMetadataText(track.album),
     normalizeMetadataText(stripProviderTitleSuffix(track.title)),
     track.discNumber ?? 1,
@@ -721,6 +721,10 @@ function titleSuffixMetadataKey(track: {
 
 function normalizeMetadataText(value: string) {
   return normalizeForMatch(value, { removeBracketedText: false });
+}
+
+function normalizeArtistMetadataText(value: string) {
+  return normalizeMetadataText(value).replace(/^the\s+/, "");
 }
 
 function stripProviderTitleSuffix(value: string) {
