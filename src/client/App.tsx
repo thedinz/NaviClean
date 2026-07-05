@@ -365,6 +365,17 @@ function Shell({
           </div>
         </header>
 
+        <div className="notice-bar safety app-risk-banner" role="note">
+          <CircleAlert size={18} aria-hidden="true" />
+          <div>
+            <strong>Whole-library caution</strong>
+            <span>
+              NaviClean sorting is improving on a near daily basis. Review previews and backups before applying changes
+              across an entire library; use whole-library cleanup at your own risk.
+            </span>
+          </div>
+        </div>
+
         {page === "dashboard" && (
           <Dashboard stats={stats} statsLoading={statsLoading} scan={scan} scanBusy={scanBusy} onScan={startScan} />
         )}
