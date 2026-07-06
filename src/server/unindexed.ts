@@ -843,10 +843,20 @@ function normalizeArtistMetadataText(value: string) {
 
 function stripProviderTitleSuffix(value: string, albumArtist: string) {
   return value
-    .replace(/\s+\(([^)]*)\)\s*$/i, (match, suffix: string) =>
-      providerTitleSuffixIsNoise(suffix, albumArtist) ? "" : match
+    .replace(/\s+\(([^)]*)\)\s*$/i, (match, suffix: string, offset: number, fullValue: string) =>
+      titleSuffixIsNoise(fullValue.slice(0, offset), suffix, albumArtist) ? "" : match
     )
     .trim();
+}
+
+function titleSuffixIsNoise(baseTitle: string, suffix: string, albumArtist: string) {
+  const normalizedBaseTitle = normalizeMetadataText(baseTitle);
+
+  if (normalizedBaseTitle && normalizedBaseTitle === normalizeMetadataText(suffix)) {
+    return true;
+  }
+
+  return providerTitleSuffixIsNoise(suffix, albumArtist);
 }
 
 function providerTitleSuffixIsNoise(suffix: string, albumArtist: string) {
@@ -910,7 +920,7 @@ function matchMethodLabel(method: NavidromeMetadataMatchMethod) {
   }
 
   if (method === "metadata-size-title-suffix") {
-    return "metadata+size with provider title suffix";
+    return "metadata+size with compatible title suffix";
   }
 
   if (method === "metadata-size-track-agnostic") {

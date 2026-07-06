@@ -681,6 +681,62 @@ test("scanner matches Navidrome metadata when title has junk artist disambiguati
   }
 });
 
+test("scanner matches Navidrome metadata when title repeats in a parenthetical suffix", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-title-repeat-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath =
+    "The Yardbirds/The Yardbirds - Eric Clapton & Friends - From Yardbirds to Bluesbreakers (1992)/The Yardbirds - Eric Clapton & Friends - From Yardbirds to Bluesbreakers (1992) - 01 - I Wish You Would.flac";
+  const contents = "audio";
+
+  globalThis.fetch = navidromeFetchForSongs([
+    {
+      album: {
+        id: "album-yardbirds",
+        name: "Eric Clapton & Friends: From Yardbirds to Bluesbreakers",
+        artist: "The Yardbirds",
+        year: 1992,
+        songCount: 1
+      },
+      song: {
+        id: "song-i-wish-you-would",
+        title: "I Wish You Would (I Wish You Would)",
+        artist: "The Yardbirds",
+        albumArtist: "The Yardbirds",
+        album: "Eric Clapton & Friends: From Yardbirds to Bluesbreakers",
+        track: 1,
+        discNumber: 1,
+        year: 1992,
+        duration: 135,
+        size: Buffer.byteLength(contents),
+        path: "The Yardbirds/Eric Clapton & Friends: From Yardbirds to Bluesbreakers/01-01 - I Wish You Would (I Wish You Would).flac",
+        suffix: "flac"
+      }
+    }
+  ]);
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+
+    const scanSettings = settings(root);
+    scanSettings.scan.extensions = [".flac"];
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, "navidrome");
+    assert.equal(track?.title, "I Wish You Would");
+    assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-title-suffix");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("scanner matches Navidrome metadata across leading artist articles and redundant album years", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-artist-article-"));
   const originalFetch = globalThis.fetch;

@@ -536,7 +536,7 @@ function navidromeMatchMethodLabel(method: NavidromeMetadataMatchMethod) {
   }
 
   if (method === "metadata-size-title-suffix") {
-    return "metadata and size with a provider title suffix";
+    return "metadata and size with a compatible title suffix";
   }
 
   if (method === "metadata-size-track-agnostic") {
@@ -824,10 +824,20 @@ function artistAgnosticMetadataKey(track: {
 
 function stripProviderTitleSuffix(value: string, albumArtist: string) {
   return value
-    .replace(/\s+\(([^)]*)\)\s*$/i, (match, suffix: string) =>
-      providerTitleSuffixIsNoise(suffix, albumArtist) ? "" : match
+    .replace(/\s+\(([^)]*)\)\s*$/i, (match, suffix: string, offset: number, fullValue: string) =>
+      titleSuffixIsNoise(fullValue.slice(0, offset), suffix, albumArtist) ? "" : match
     )
     .trim();
+}
+
+function titleSuffixIsNoise(baseTitle: string, suffix: string, albumArtist: string) {
+  const normalizedBaseTitle = normalizeForMatch(baseTitle, { removeBracketedText: false });
+
+  if (normalizedBaseTitle && normalizedBaseTitle === normalizeForMatch(suffix, { removeBracketedText: false })) {
+    return true;
+  }
+
+  return providerTitleSuffixIsNoise(suffix, albumArtist);
 }
 
 function providerTitleSuffixIsNoise(suffix: string, albumArtist: string) {

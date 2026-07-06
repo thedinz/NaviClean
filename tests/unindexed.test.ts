@@ -489,7 +489,7 @@ test("Navidrome match probe accepts provider title suffix differences", async ()
     assert.match(result.message, /NaviClean scan/);
     assert.equal(candidate?.acceptedBy, "metadata-size-title-suffix");
     assert.equal(candidate?.checks.metadataKey, "different");
-    assert.ok(candidate?.rejectedReasons[0]?.includes("provider title suffix"));
+    assert.ok(candidate?.rejectedReasons[0]?.includes("compatible title suffix"));
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -551,7 +551,72 @@ test("Navidrome match probe accepts junk artist disambiguation title suffixes", 
 
     assert.match(result.message, /NaviClean scan/);
     assert.equal(candidate?.acceptedBy, "metadata-size-title-suffix");
-    assert.ok(candidate?.rejectedReasons[0]?.includes("provider title suffix"));
+    assert.ok(candidate?.rejectedReasons[0]?.includes("compatible title suffix"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Navidrome match probe accepts duplicate title parenthetical suffixes", async () => {
+  const originalFetch = globalThis.fetch;
+  const testSettings = settings("/music");
+  testSettings.navidrome.baseUrl = "http://navidrome.local";
+  testSettings.navidrome.username = "admin";
+  testSettings.navidrome.password = "password";
+  const localTrack = track({
+    id: "unindexed",
+    album: "Eric Clapton & Friends: From Yardbirds to Bluesbreakers",
+    albumArtist: "The Yardbirds",
+    artist: "The Yardbirds",
+    title: "I Wish You Would",
+    trackNumber: 1,
+    duration: 136,
+    size: 15013116,
+    relativePath:
+      "The Yardbirds/The Yardbirds - Eric Clapton & Friends - From Yardbirds to Bluesbreakers (1992)/The Yardbirds - Eric Clapton & Friends - From Yardbirds to Bluesbreakers (1992) - 01 - I Wish You Would.flac",
+    absolutePath:
+      "/music/The Yardbirds/The Yardbirds - Eric Clapton & Friends - From Yardbirds to Bluesbreakers (1992)/The Yardbirds - Eric Clapton & Friends - From Yardbirds to Bluesbreakers (1992) - 01 - I Wish You Would.flac",
+    navidromeEnrichment: {
+      status: "unmatched",
+      code: "possible-stale-scan",
+      message: "Organized local file did not match a Navidrome API record."
+    }
+  });
+  const navidromeSong = {
+    id: "nav-song",
+    title: "I Wish You Would (I Wish You Would)",
+    artist: "The Yardbirds",
+    albumArtist: "The Yardbirds",
+    album: "Eric Clapton & Friends: From Yardbirds to Bluesbreakers",
+    track: 1,
+    discNumber: 1,
+    year: 1992,
+    duration: 135,
+    size: 15013116,
+    path: "The Yardbirds/Eric Clapton & Friends: From Yardbirds to Bluesbreakers/01-01 - I Wish You Would (I Wish You Would).flac"
+  };
+
+  globalThis.fetch = navidromeFetchForSearchAndSongs([navidromeSong], [
+    {
+      album: {
+        id: "album-yardbirds",
+        name: "Eric Clapton & Friends: From Yardbirds to Bluesbreakers",
+        artist: "The Yardbirds",
+        year: 1992,
+        songCount: 1
+      },
+      song: navidromeSong
+    }
+  ]);
+
+  try {
+    const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
+    const candidate = result.candidates[0];
+
+    assert.match(result.message, /NaviClean scan/);
+    assert.equal(candidate?.acceptedBy, "metadata-size-title-suffix");
+    assert.equal(candidate?.checks.metadataKey, "different");
+    assert.ok(candidate?.rejectedReasons[0]?.includes("would now match"));
   } finally {
     globalThis.fetch = originalFetch;
   }
