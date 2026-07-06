@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
+import { advancedDiagnosticsEnabled } from "./diagnostics.js";
 import { loadSettings } from "./settings.js";
 
 type Session = {
@@ -44,6 +45,7 @@ export async function getAuthInfo(req: Request) {
 
   if (!settings.auth.enabled) {
     return {
+      advancedDiagnosticsEnabled: advancedDiagnosticsEnabled(),
       authEnabled: false,
       authenticated: true,
       username: settings.auth.username
@@ -52,6 +54,7 @@ export async function getAuthInfo(req: Request) {
 
   const session = readSession(req);
   return {
+    advancedDiagnosticsEnabled: advancedDiagnosticsEnabled(),
     authEnabled: true,
     authenticated: Boolean(session),
     username: session?.username || null

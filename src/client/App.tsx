@@ -122,12 +122,14 @@ const trashArchiveExtensions = new Set([".7z", ".gz", ".rar", ".tar", ".zip"]);
 const trashVideoExtensions = new Set([".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm", ".wmv"]);
 const trashJunkExtensions = new Set([".bak", ".crdownload", ".part", ".tmp"]);
 
-const navItems: Array<{ id: Page; label: string; icon: typeof Gauge }> = [
+type NavItem = { id: Page; label: string; icon: typeof Gauge; advancedDiagnostics?: boolean };
+
+const navItems: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
   { id: "library", label: "Library", icon: Database },
   { id: "empty-folders", label: "Empty Folders", icon: FolderX },
   { id: "non-music", label: "Non-Music Files", icon: FileQuestion },
-  { id: "unindexed", label: "Unindexed", icon: CircleAlert },
+  { id: "unindexed", label: "Diagnostics", icon: CircleAlert, advancedDiagnostics: true },
   { id: "discover", label: "Discover", icon: Music2 },
   { id: "organize", label: "Organize", icon: FolderInput },
   { id: "duplicates", label: "Duplicates", icon: CopyX },
@@ -288,7 +290,12 @@ function Shell({
 
     try {
       await api<{ ok: boolean }>("/auth/logout", { method: "POST" });
-      onAuthChange({ authEnabled: true, authenticated: false, username: null });
+      onAuthChange({
+        advancedDiagnosticsEnabled: auth.advancedDiagnosticsEnabled,
+        authEnabled: true,
+        authenticated: false,
+        username: null
+      });
     } catch (caught) {
       setNotice((caught as Error).message);
     } finally {
@@ -300,7 +307,18 @@ function Shell({
     onThemeChange(theme === "dark" ? "light" : "dark");
   };
 
-  const active = navItems.find((item) => item.id === page) || navItems[0];
+  const visibleNavItems = useMemo(
+    () => navItems.filter((item) => !item.advancedDiagnostics || auth.advancedDiagnosticsEnabled),
+    [auth.advancedDiagnosticsEnabled]
+  );
+
+  useEffect(() => {
+    if (page === "unindexed" && !auth.advancedDiagnosticsEnabled) {
+      setPage("dashboard");
+    }
+  }, [auth.advancedDiagnosticsEnabled, page]);
+
+  const active = visibleNavItems.find((item) => item.id === page) || visibleNavItems[0];
   const ThemeIcon = theme === "dark" ? Sun : Moon;
 
   return (
@@ -315,7 +333,7 @@ function Shell({
         </div>
 
         <nav className="nav-list">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
             return (
               <button
@@ -382,14 +400,18 @@ function Shell({
         {page === "library" && <LibraryPage onChanged={refreshStats} />}
         {page === "empty-folders" && <EmptyFoldersPage />}
         {page === "non-music" && <NonMusicFilesPage />}
-        {page === "unindexed" && <UnindexedPage lastScanFinishedAt={stats?.lastScanFinishedAt ?? null} onChanged={refreshStats} />}
+        {auth.advancedDiagnosticsEnabled && page === "unindexed" && (
+          <UnindexedPage lastScanFinishedAt={stats?.lastScanFinishedAt ?? null} onChanged={refreshStats} />
+        )}
         {page === "discover" && <DiscoverPage />}
         {page === "duplicates" && (
           <DuplicatesPage stats={stats} onChanged={refreshStats} onOpenOrganize={() => setPage("organize")} />
         )}
         {page === "organize" && <OrganizePage stats={stats} onChanged={refreshStats} />}
         {page === "trash" && <TrashPage />}
-        {page === "settings" && <SettingsPage onAuthChange={onAuthChange} />}
+        {page === "settings" && (
+          <SettingsPage advancedDiagnosticsEnabled={auth.advancedDiagnosticsEnabled} onAuthChange={onAuthChange} />
+        )}
         <VersionFooter />
       </main>
     </div>
@@ -3506,7 +3528,13 @@ function DiscoverPage() {
   );
 }
 
-function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void }) {
+function SettingsPage({
+  advancedDiagnosticsEnabled,
+  onAuthChange
+}: {
+  advancedDiagnosticsEnabled: boolean;
+  onAuthChange: (auth: AuthInfo) => void;
+}) {
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [adminPassword, setAdminPassword] = useState("");
   const [navidromePassword, setNavidromePassword] = useState("");
@@ -3568,6 +3596,7 @@ function SettingsPage({ onAuthChange }: { onAuthChange: (auth: AuthInfo) => void
       setNavidromePassword("");
       setSpotifyClientSecret("");
       onAuthChange({
+        advancedDiagnosticsEnabled,
         authEnabled: next.auth.enabled,
         authenticated: true,
         username: next.auth.username

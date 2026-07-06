@@ -11,6 +11,7 @@ It scans a mounted music library, browses artists, albums, and tracks, previews 
 - Music volume: `/music`
 - Runtime user: `PUID=1000`, `PGID=1000`
 - Reverse proxy: `NAVICLEAN_TRUST_PROXY=1`, `NAVICLEAN_SECURE_COOKIES=auto`, `NAVICLEAN_COOKIE_SAMESITE=lax`
+- Advanced diagnostics: `NAVICLEAN_ADVANCED_DIAGNOSTICS=1` shows the internal Diagnostics page and enables its matching-inspection API routes
 - Image: `ghcr.io/thedinz/naviclean:latest`
 
 ## Docker Compose
@@ -31,6 +32,7 @@ services:
       NAVICLEAN_TRUST_PROXY: ${NAVICLEAN_TRUST_PROXY:-1}
       NAVICLEAN_SECURE_COOKIES: ${NAVICLEAN_SECURE_COOKIES:-auto}
       NAVICLEAN_COOKIE_SAMESITE: ${NAVICLEAN_COOKIE_SAMESITE:-lax}
+      NAVICLEAN_ADVANCED_DIAGNOSTICS: ${NAVICLEAN_ADVANCED_DIAGNOSTICS:-0}
     volumes:
       - ${NAVICLEAN_DATA_PATH:-./data}:/data
       - ${NAVICLEAN_MUSIC_PATH:-./music}:/music
