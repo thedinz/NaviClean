@@ -405,8 +405,13 @@ function trackFileFromNavidromeTrack(
   matchMethod: NavidromeMetadataMatchMethod,
   indexedTrackCount: number
 ): TrackFile {
-  const artist = cleanDisplayValue(navidromeTrack.artist, track.artist);
-  const albumArtist = cleanDisplayValue(navidromeTrack.albumArtist || navidromeTrack.artist, track.albumArtist || artist);
+  const navidromeArtist = cleanDisplayValue(navidromeTrack.artist, track.artist);
+  const navidromeAlbumArtist = cleanDisplayValue(
+    navidromeTrack.albumArtist || navidromeTrack.artist,
+    track.albumArtist || navidromeArtist
+  );
+  const albumArtist = preferredLatinArtistAlias(track.albumArtist || track.artist, navidromeAlbumArtist, navidromeTrack);
+  const artist = preferredLatinArtistAlias(track.artist, navidromeArtist, navidromeTrack);
   const album = cleanDisplayValue(cleanNavidromeAlbumTitle(navidromeTrack.album, navidromeTrack.year), track.album);
   const title = cleanDisplayValue(
     matchMethod === "metadata-size-title-suffix" ? track.title : navidromeTrack.title,
@@ -838,6 +843,44 @@ function providerTitleSuffixIsNoise(suffix: string, albumArtist: string) {
       normalizedSuffix.includes(normalizedArtist) &&
       /\b(?:music|singer|artist|band|born|b\s+\d{4})\b/.test(normalizedSuffix)
   );
+}
+
+function preferredLatinArtistAlias(localValue: string, navidromeValue: string, navidromeTrack: NavidromeLibraryTrack) {
+  if (
+    !localValue ||
+    !latinOnlyText(localValue) ||
+    !containsNonLatinLetter(navidromeValue) ||
+    !navidromePathContainsArtistAlias(navidromeTrack, localValue)
+  ) {
+    return navidromeValue;
+  }
+
+  return localValue;
+}
+
+function navidromePathContainsArtistAlias(track: NavidromeLibraryTrack, artist: string) {
+  const aliasKey = pathTokenKey(artist);
+  const folder = (track.sourceRelativePath || track.sourceRawPath || "").split(/[\\/]/).find(Boolean);
+
+  if (!aliasKey || !folder) {
+    return false;
+  }
+
+  return folder
+    .split(/\s+(?:\u2022|\u00e2\u20ac\u00a2)\s+/u)
+    .some((part) => pathTokenKey(part) === aliasKey);
+}
+
+function latinOnlyText(value: string) {
+  return containsLatinLetter(value) && !containsNonLatinLetter(value);
+}
+
+function containsLatinLetter(value: string) {
+  return Array.from(value).some((char) => /\p{Script=Latin}/u.test(char));
+}
+
+function containsNonLatinLetter(value: string) {
+  return Array.from(value).some((char) => /\p{L}/u.test(char) && !/\p{Script=Latin}/u.test(char));
 }
 
 function normalizeArtistMetadataText(value: string) {
