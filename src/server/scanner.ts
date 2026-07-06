@@ -9,7 +9,14 @@ import { fetchNavidromeLibraryTracks, searchNavidromeLibraryTrackCandidates, typ
 import { targetForTrack } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
 import { hasSpotifyBuIdentityTags } from "./spotifybu.js";
-import { cleanDisplayValue, normalizeForMatch, sha1, titleFromFilename, toPosixRelative } from "./utils.js";
+import {
+  cleanDisplayValue,
+  normalizeForMatch,
+  repairUtf16MojibakeText,
+  sha1,
+  titleFromFilename,
+  toPosixRelative
+} from "./utils.js";
 
 export { hasSpotifyBuIdentityTags };
 
@@ -855,13 +862,15 @@ async function readTrack(filePath: string, root: string, settings: PrivateSettin
   const common = metadata?.common;
   const commonRecord = common as Record<string, unknown> | undefined;
   const format = metadata?.format;
-  const artist = cleanDisplayValue(common?.artist || common?.artists?.[0] || inferred.artist, "Unknown Artist");
-  const albumArtist = cleanDisplayValue(
+  const artist = cleanDisplayText(common?.artist || common?.artists?.[0] || inferred.artist, "Unknown Artist", "artist", issues);
+  const albumArtist = cleanDisplayText(
     common?.albumartist || common?.artist || common?.artists?.[0] || inferred.albumArtist || inferred.artist,
-    artist
+    artist,
+    "album artist",
+    issues
   );
-  const album = cleanDisplayValue(common?.album || inferred.album, "Unknown Album");
-  const title = cleanDisplayValue(common?.title || inferred.title, titleFromFilename(filePath));
+  const album = cleanDisplayText(common?.album || inferred.album, "Unknown Album", "album", issues);
+  const title = cleanDisplayText(common?.title || inferred.title, titleFromFilename(filePath), "title", issues);
   const trackNumber = common?.track?.no || inferred.trackNumber || null;
   const trackTotal = common?.track?.of || null;
   const discNumber = common?.disk?.no || inferred.discNumber || null;
@@ -956,6 +965,18 @@ function fileId(filePath: string, size: number, mtimeMs: number) {
 
 function cleanNullable(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function cleanDisplayText(value: unknown, fallback: string, field: string, issues: string[]) {
+  const displayValue = cleanDisplayValue(value, fallback);
+  const repaired = repairUtf16MojibakeText(displayValue);
+
+  if (repaired && repaired !== displayValue) {
+    issues.push(`Repaired corrupted text encoding in ${field}`);
+    return repaired;
+  }
+
+  return displayValue;
 }
 
 type InferredMetadata = {
