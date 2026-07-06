@@ -508,6 +508,64 @@ test("scanner matches Navidrome metadata when local album artist is wrong", asyn
   }
 });
 
+test("scanner preserves a Latin artist alias from paired Navidrome artist folders", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-latin-alias-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath =
+    "Junya Nakano/Junya Nakano - Unreleased Tracks 1999 vol.1+2 (2017)/Junya Nakano - Unreleased Tracks 1999 vol.1+2 (2017) - 16 - M16 - Dark night - 19990223.flac";
+  const contents = "audio";
+
+  globalThis.fetch = navidromeFetchForSongs([
+    {
+      album: {
+        id: "album-unreleased",
+        name: "Unreleased Tracks 1999 vol.1+2",
+        artist: "\u4ef2\u91ce\u9806\u4e5f",
+        year: 2017,
+        songCount: 32
+      },
+      song: {
+        id: "song-dark-night",
+        title: "M16 - Dark night - 19990223",
+        artist: "\u4ef2\u91ce\u9806\u4e5f",
+        albumArtist: "\u4ef2\u91ce\u9806\u4e5f",
+        album: "Unreleased Tracks 1999 vol.1+2",
+        track: 16,
+        discNumber: 1,
+        year: 2017,
+        duration: 188,
+        size: Buffer.byteLength(contents),
+        path: "\u4ef2\u91ce\u9806\u4e5f \u2022 Junya Nakano/Unreleased Tracks 1999 vol.1+2/01-16 - M16 - Dark night - 19990223.flac",
+        suffix: "flac"
+      }
+    }
+  ]);
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+
+    const scanSettings = settings(root);
+    scanSettings.scan.extensions = [".flac"];
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, "navidrome");
+    assert.equal(track?.artist, "Junya Nakano");
+    assert.equal(track?.albumArtist, "Junya Nakano");
+    assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-artist-agnostic");
+    assert.equal(track?.targetRelativePath, sourceRelativePath);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("scanner matches Navidrome metadata when only a provider title suffix differs", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-title-suffix-"));
   const originalFetch = globalThis.fetch;
