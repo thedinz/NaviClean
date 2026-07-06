@@ -119,6 +119,54 @@ test("scanner infers the release year when the parent artist folder stripped tra
   }
 });
 
+test("scanner repairs UTF-16 mojibake text in inferred titles", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-mojibake-"));
+  const corruptedTitle =
+    "y\u59fe\u6f00\u7500\u2700\u7200\u6500 \u4200\u6500\u6100\u7500\u7400\u6900\u6600\u7500\u6c00 \u2800\u6500\u6400\u6900\u7400\u2900";
+  const sourceRelativePath =
+    `James Blunt/James Blunt - You're Beautiful (2005)/James Blunt - You're Beautiful (2005) - 01 - ${corruptedTitle}.mp3`;
+  const targetRelativePath =
+    "James Blunt/James Blunt - You're Beautiful (2005)/James Blunt - You're Beautiful (2005) - 01 - You're Beautiful (edit).mp3";
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "not real audio");
+
+    const result = await scanLibrary(settings(root));
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.title, "You're Beautiful (edit)");
+    assert.ok(track?.issues.includes("Repaired corrupted text encoding in title"));
+    assert.equal(track?.targetRelativePath, targetRelativePath);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("scanner does not repair legitimate non-Latin titles as mojibake", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-unicode-title-"));
+  const sourceRelativePath =
+    "Akiko/Akiko - Unicode Album (2024)/Akiko - Unicode Album (2024) - 01 - 美しい曲.mp3";
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "not real audio");
+
+    const result = await scanLibrary(settings(root));
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.title, "美しい曲");
+    assert.equal(track?.issues.some((issue) => issue.includes("corrupted text encoding")), false);
+    assert.equal(track?.targetRelativePath, sourceRelativePath);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("scanner does not block on uncached Spotify lookups", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-spotify-"));
   const originalFetch = globalThis.fetch;
