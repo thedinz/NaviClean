@@ -622,6 +622,72 @@ test("Navidrome match probe accepts duplicate title parenthetical suffixes", asy
   }
 });
 
+test("Navidrome match probe accepts album edition text plus title version suffixes", async () => {
+  const originalFetch = globalThis.fetch;
+  const testSettings = settings("/music");
+  testSettings.navidrome.baseUrl = "http://navidrome.local";
+  testSettings.navidrome.username = "admin";
+  testSettings.navidrome.password = "password";
+  const localTrack = track({
+    id: "unindexed",
+    album: "The Essential Collection",
+    albumArtist: "Daryl Hall & John Oates",
+    artist: "Daryl Hall & John Oates",
+    title: "Out of Touch",
+    trackNumber: 13,
+    duration: 250,
+    size: 10609473,
+    isrc: "USRC10000836",
+    relativePath:
+      "Daryl Hall & John Oates/Daryl Hall & John Oates - The Essential Collection (2001)/Daryl Hall & John Oates - The Essential Collection (2001) - 13 - Out of Touch.mp3",
+    absolutePath:
+      "/music/Daryl Hall & John Oates/Daryl Hall & John Oates - The Essential Collection (2001)/Daryl Hall & John Oates - The Essential Collection (2001) - 13 - Out of Touch.mp3",
+    navidromeEnrichment: {
+      status: "unmatched",
+      code: "possible-stale-scan",
+      message: "Organized local file did not match a Navidrome API record."
+    }
+  });
+  const navidromeSong = {
+    id: "nav-song",
+    title: "Out of Touch (single version)",
+    artist: "Daryl Hall & John Oates",
+    albumArtist: "Daryl Hall & John Oates",
+    album: "The Essential Collection (RCA Records / BMG)",
+    track: 13,
+    discNumber: 1,
+    year: 2001,
+    duration: 250,
+    size: 10609473,
+    path: "Daryl Hall & John Oates/The Essential Collection (RCA Records _ BMG)/01-13 - Out of Touch (single version).mp3"
+  };
+
+  globalThis.fetch = navidromeFetchForSearchAndSongs([navidromeSong], [
+    {
+      album: {
+        id: "album-hall-oates",
+        name: "The Essential Collection (RCA Records / BMG)",
+        artist: "Daryl Hall & John Oates",
+        year: 2001,
+        songCount: 1
+      },
+      song: navidromeSong
+    }
+  ]);
+
+  try {
+    const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
+    const candidate = result.candidates[0];
+
+    assert.match(result.message, /NaviClean scan/);
+    assert.equal(candidate?.acceptedBy, "edition-title-suffix-metadata-size");
+    assert.equal(candidate?.checks.metadataKey, "different");
+    assert.ok(candidate?.rejectedReasons[0]?.includes("would now match"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("Navidrome match probe accepts leading artist articles and redundant album years", async () => {
   const originalFetch = globalThis.fetch;
   const testSettings = settings("/music");
