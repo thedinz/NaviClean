@@ -448,6 +448,66 @@ test("scanner matches Navidrome metadata when only the release track number diff
   }
 });
 
+test("scanner matches Navidrome metadata when local album artist is wrong", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-artist-mismatch-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath =
+    "Leonard Cohen/Leonard Cohen - Live at Radio City (2007)/Leonard Cohen - Live at Radio City (2007) - 02-07 - Lie in Our Graves.flac";
+  const contents = "audio";
+
+  globalThis.fetch = navidromeFetchForSongs([
+    {
+      album: {
+        id: "album-live-radio-city",
+        name: "Live at Radio City",
+        artist: "Dave Matthews",
+        year: 2007,
+        songCount: 25
+      },
+      song: {
+        id: "song-lie-in-our-graves",
+        title: "Lie in Our Graves",
+        artist: "Dave Matthews",
+        albumArtist: "Dave Matthews",
+        album: "Live at Radio City",
+        track: 7,
+        discNumber: 2,
+        year: 2007,
+        duration: 395,
+        size: Buffer.byteLength(contents),
+        path: "Dave Matthews • Leonard Cohen/Live at Radio City/02-07 - Lie in Our Graves.flac",
+        suffix: "flac"
+      }
+    }
+  ]);
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+
+    const scanSettings = settings(root);
+    scanSettings.scan.extensions = [".flac"];
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, "navidrome");
+    assert.equal(track?.albumArtist, "Dave Matthews");
+    assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-artist-agnostic");
+    assert.equal(
+      track?.targetRelativePath,
+      "Dave Matthews/Dave Matthews - Live at Radio City (2007)/Dave Matthews - Live at Radio City (2007) - 02-07 - Lie in Our Graves.flac"
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("scanner matches Navidrome metadata when only a provider title suffix differs", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-title-suffix-"));
   const originalFetch = globalThis.fetch;

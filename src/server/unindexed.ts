@@ -149,6 +149,7 @@ type NavidromeTrackIndex = {
   byEditionMetadata: Map<string, NavidromeLibraryTrack | null>;
   byTitleSuffixMetadata: Map<string, NavidromeLibraryTrack | null>;
   byTrackAgnosticMetadata: Map<string, NavidromeLibraryTrack | null>;
+  byArtistAgnosticMetadata: Map<string, NavidromeLibraryTrack | null>;
 };
 
 type NavidromeTrackMatch = {
@@ -190,7 +191,8 @@ function buildNavidromeTrackIndex(tracks: NavidromeLibraryTrack[]): NavidromeTra
     byMetadataRelaxedDuration: new Map(),
     byEditionMetadata: new Map(),
     byTitleSuffixMetadata: new Map(),
-    byTrackAgnosticMetadata: new Map()
+    byTrackAgnosticMetadata: new Map(),
+    byArtistAgnosticMetadata: new Map()
   };
 
   for (const track of tracks) {
@@ -208,6 +210,7 @@ function buildNavidromeTrackIndex(tracks: NavidromeLibraryTrack[]): NavidromeTra
     addUniqueNavidromeMatch(index.byEditionMetadata, editionMetadataKeyForNavidrome(track), track);
     addUniqueNavidromeMatch(index.byTitleSuffixMetadata, titleSuffixMetadataKeyForNavidrome(track), track);
     addUniqueNavidromeMatch(index.byTrackAgnosticMetadata, trackAgnosticMetadataKeyForNavidrome(track), track);
+    addUniqueNavidromeMatch(index.byArtistAgnosticMetadata, artistAgnosticMetadataKeyForNavidrome(track), track);
   }
 
   return index;
@@ -252,6 +255,11 @@ function findNavidromeTrackForFile(index: NavidromeTrackIndex, track: TrackFile)
   const trackAgnosticMetadataMatch = uniqueNavidromeMatch(index.byTrackAgnosticMetadata.get(trackAgnosticMetadataKeyForTrack(track)));
   if (trackAgnosticMetadataMatch) {
     return { track: trackAgnosticMetadataMatch, method: "metadata-size-track-agnostic" };
+  }
+
+  const artistAgnosticMetadataMatch = uniqueNavidromeMatch(index.byArtistAgnosticMetadata.get(artistAgnosticMetadataKeyForTrack(track)));
+  if (artistAgnosticMetadataMatch) {
+    return { track: artistAgnosticMetadataMatch, method: "metadata-size-artist-agnostic" };
   }
 
   return null;
@@ -401,7 +409,11 @@ function scanLookupForMethod(
     return index.byTitleSuffixMetadata.get(titleSuffixMetadataKeyForTrack(track));
   }
 
-  return index.byTrackAgnosticMetadata.get(trackAgnosticMetadataKeyForTrack(track));
+  if (method === "metadata-size-track-agnostic") {
+    return index.byTrackAgnosticMetadata.get(trackAgnosticMetadataKeyForTrack(track));
+  }
+
+  return index.byArtistAgnosticMetadata.get(artistAgnosticMetadataKeyForTrack(track));
 }
 
 function compareCandidateMatches(left: UnindexedNavidromeCandidate, right: UnindexedNavidromeCandidate) {
@@ -474,6 +486,10 @@ function acceptedMatchMethod(
 
   if (sameNonEmptyKey(trackAgnosticMetadataKeyForTrack(track), trackAgnosticMetadataKeyForNavidrome(candidate))) {
     return "metadata-size-track-agnostic";
+  }
+
+  if (sameNonEmptyKey(artistAgnosticMetadataKeyForTrack(track), artistAgnosticMetadataKeyForNavidrome(candidate))) {
+    return "metadata-size-artist-agnostic";
   }
 
   return null;
@@ -571,6 +587,9 @@ function scoreNavidromeCandidate(
   if (sameNonEmptyKey(trackAgnosticMetadataKeyForTrack(track), trackAgnosticMetadataKeyForNavidrome(candidate))) {
     score += 84;
   }
+  if (sameNonEmptyKey(artistAgnosticMetadataKeyForTrack(track), artistAgnosticMetadataKeyForNavidrome(candidate))) {
+    score += 86;
+  }
   if (normalizeMetadataText(track.title) === normalizeMetadataText(candidate.title)) score += 30;
   if (normalizeMetadataText(track.album) === normalizeMetadataText(candidate.album)) score += 20;
   if (normalizeMetadataText(track.albumArtist || track.artist) === normalizeMetadataText(candidate.albumArtist || candidate.artist)) score += 20;
@@ -659,6 +678,16 @@ function trackAgnosticMetadataKeyForTrack(track: TrackFile) {
   });
 }
 
+function artistAgnosticMetadataKeyForTrack(track: TrackFile) {
+  return artistAgnosticMetadataKey({
+    album: track.album,
+    discNumber: track.discNumber,
+    size: track.size,
+    title: track.title,
+    trackNumber: track.trackNumber
+  });
+}
+
 function editionMetadataKeyForNavidrome(track: NavidromeLibraryTrack) {
   return editionMetadataKey({
     album: track.album,
@@ -676,6 +705,16 @@ function trackAgnosticMetadataKeyForNavidrome(track: NavidromeLibraryTrack) {
     albumArtist: track.albumArtist || track.artist,
     size: track.size,
     title: track.title
+  });
+}
+
+function artistAgnosticMetadataKeyForNavidrome(track: NavidromeLibraryTrack) {
+  return artistAgnosticMetadataKey({
+    album: track.album,
+    discNumber: track.discNumber,
+    size: track.size,
+    title: track.title,
+    trackNumber: track.trackNumber
   });
 }
 
@@ -774,6 +813,26 @@ function trackAgnosticMetadataKey(track: {
   ].join("|");
 }
 
+function artistAgnosticMetadataKey(track: {
+  album: string;
+  discNumber: number | null;
+  size: number | null;
+  title: string;
+  trackNumber: number | null;
+}) {
+  if (!track.album || !track.title || !track.trackNumber || !track.size) {
+    return "";
+  }
+
+  return [
+    normalizeForMatch(track.album),
+    normalizeMetadataText(track.title),
+    track.discNumber ?? 1,
+    track.trackNumber,
+    track.size
+  ].join("|");
+}
+
 function normalizeMetadataText(value: string) {
   return normalizeForMatch(value, { removeBracketedText: false });
 }
@@ -856,6 +915,10 @@ function matchMethodLabel(method: NavidromeMetadataMatchMethod) {
 
   if (method === "metadata-size-track-agnostic") {
     return "metadata+size without track number";
+  }
+
+  if (method === "metadata-size-artist-agnostic") {
+    return "release slot metadata+size without album artist";
   }
 
   return "metadata key";

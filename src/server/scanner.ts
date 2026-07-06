@@ -244,6 +244,7 @@ type NavidromeTrackIndex = {
   byEditionMetadata: Map<string, NavidromeLibraryTrack | null>;
   byTitleSuffixMetadata: Map<string, NavidromeLibraryTrack | null>;
   byTrackAgnosticMetadata: Map<string, NavidromeLibraryTrack | null>;
+  byArtistAgnosticMetadata: Map<string, NavidromeLibraryTrack | null>;
 };
 
 type NavidromeTrackMatch = {
@@ -260,7 +261,8 @@ function buildNavidromeTrackIndex(tracks: NavidromeLibraryTrack[]): NavidromeTra
     byMetadataRelaxedDuration: new Map(),
     byEditionMetadata: new Map(),
     byTitleSuffixMetadata: new Map(),
-    byTrackAgnosticMetadata: new Map()
+    byTrackAgnosticMetadata: new Map(),
+    byArtistAgnosticMetadata: new Map()
   };
 
   for (const track of tracks) {
@@ -278,6 +280,7 @@ function buildNavidromeTrackIndex(tracks: NavidromeLibraryTrack[]): NavidromeTra
     addUniqueNavidromeMatch(index.byEditionMetadata, navidromeEditionMetadataKey(track), track);
     addUniqueNavidromeMatch(index.byTitleSuffixMetadata, navidromeTitleSuffixMetadataKey(track), track);
     addUniqueNavidromeMatch(index.byTrackAgnosticMetadata, navidromeTrackAgnosticMetadataKey(track), track);
+    addUniqueNavidromeMatch(index.byArtistAgnosticMetadata, navidromeArtistAgnosticMetadataKey(track), track);
   }
 
   return index;
@@ -324,6 +327,11 @@ function findNavidromeTrackForFile(index: NavidromeTrackIndex, track: TrackFile)
   const trackAgnosticMetadataMatch = uniqueNavidromeMatch(index.byTrackAgnosticMetadata.get(trackTrackAgnosticMetadataKey(track)));
   if (trackAgnosticMetadataMatch) {
     return { track: trackAgnosticMetadataMatch, method: "metadata-size-track-agnostic" };
+  }
+
+  const artistAgnosticMetadataMatch = uniqueNavidromeMatch(index.byArtistAgnosticMetadata.get(trackArtistAgnosticMetadataKey(track)));
+  if (artistAgnosticMetadataMatch) {
+    return { track: artistAgnosticMetadataMatch, method: "metadata-size-artist-agnostic" };
   }
 
   return null;
@@ -381,6 +389,10 @@ function findNavidromeCandidateMatch(track: TrackFile, candidate: NavidromeLibra
 
   if (sameNonEmptyKey(navidromeTrackAgnosticMetadataKey(candidate), trackTrackAgnosticMetadataKey(track))) {
     return { track: candidate, method: "metadata-size-track-agnostic" };
+  }
+
+  if (sameNonEmptyKey(navidromeArtistAgnosticMetadataKey(candidate), trackArtistAgnosticMetadataKey(track))) {
+    return { track: candidate, method: "metadata-size-artist-agnostic" };
   }
 
   return null;
@@ -526,6 +538,10 @@ function navidromeMatchMethodLabel(method: NavidromeMetadataMatchMethod) {
     return "metadata and size without release track number";
   }
 
+  if (method === "metadata-size-artist-agnostic") {
+    return "release slot metadata and size without album artist";
+  }
+
   return "metadata key";
 }
 
@@ -646,6 +662,16 @@ function navidromeTrackAgnosticMetadataKey(track: NavidromeLibraryTrack) {
   });
 }
 
+function navidromeArtistAgnosticMetadataKey(track: NavidromeLibraryTrack) {
+  return artistAgnosticMetadataKey({
+    album: track.album,
+    discNumber: track.discNumber,
+    size: track.size,
+    title: track.title,
+    trackNumber: track.trackNumber
+  });
+}
+
 function trackEditionMetadataKey(track: TrackFile) {
   return editionMetadataKey({
     album: track.album,
@@ -721,6 +747,16 @@ function trackTrackAgnosticMetadataKey(track: TrackFile) {
   });
 }
 
+function trackArtistAgnosticMetadataKey(track: TrackFile) {
+  return artistAgnosticMetadataKey({
+    album: track.album,
+    discNumber: track.discNumber,
+    size: track.size,
+    title: track.title,
+    trackNumber: track.trackNumber
+  });
+}
+
 function titleSuffixMetadataKey(track: {
   album: string;
   albumArtist: string;
@@ -757,6 +793,26 @@ function trackAgnosticMetadataKey(track: {
     normalizeArtistMetadataText(track.albumArtist),
     normalizeForMatch(track.album),
     normalizeForMatch(track.title, { removeBracketedText: false }),
+    track.size
+  ].join("|");
+}
+
+function artistAgnosticMetadataKey(track: {
+  album: string;
+  discNumber: number | null;
+  size: number | null;
+  title: string;
+  trackNumber: number | null;
+}) {
+  if (!track.album || !track.title || !track.trackNumber || !track.size) {
+    return "";
+  }
+
+  return [
+    normalizeForMatch(track.album),
+    normalizeForMatch(track.title, { removeBracketedText: false }),
+    track.discNumber ?? 1,
+    track.trackNumber,
     track.size
   ].join("|");
 }
