@@ -1,4 +1,5 @@
 export type AuthInfo = {
+  advancedDiagnosticsEnabled: boolean;
   authEnabled: boolean;
   authenticated: boolean;
   username: string | null;

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { OrganizePlan, OrganizeTrashSelection, ScanStatus, SettingsUpdate, TrackFile, WorkflowState } from "../shared/types.js";
 import { clearSessionCookie, getAuthInfo, login, logout, requireAuth, setSessionCookie } from "./auth.js";
 import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
+import { advancedDiagnosticsEnabled } from "./diagnostics.js";
 import { buildDuplicateGroups, resolveDuplicates, resolveSelectedDuplicates } from "./duplicates.js";
 import {
   buildLibraryAlbums,
@@ -80,6 +81,7 @@ app.post("/api/auth/login", asyncHandler(async (req, res) => {
 
   setSessionCookie(req, res, token);
   res.json({
+    advancedDiagnosticsEnabled: advancedDiagnosticsEnabled(),
     authEnabled: true,
     authenticated: true,
     username: String(req.body.username || "")
@@ -323,6 +325,8 @@ app.delete("/api/library/empty-folders", asyncHandler(async (req, res) => {
 app.get("/api/library/non-music-files", asyncHandler(async (_req, res) => {
   res.json(await listNonMusicFiles(await loadSettingsForPlanning()));
 }));
+
+app.use("/api/library/unindexed", requireAdvancedDiagnostics);
 
 app.get("/api/library/unindexed", asyncHandler(async (_req, res) => {
   const catalog = await loadCatalog();
@@ -930,6 +934,15 @@ function asyncHandler(
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
     handler(req, res, next).catch(next);
   };
+}
+
+function requireAdvancedDiagnostics(_req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (advancedDiagnosticsEnabled()) {
+    next();
+    return;
+  }
+
+  res.status(404).json({ error: "Not found" });
 }
 
 async function buildWorkflowState(
