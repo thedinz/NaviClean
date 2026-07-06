@@ -4109,6 +4109,10 @@ function navidromeMatchMethodLabel(method: NonNullable<OrganizePreviewItem["navi
     return "metadata+size no track";
   }
 
+  if (method === "metadata-size-artist-agnostic") {
+    return "metadata+size no artist";
+  }
+
   return "metadata key";
 }
 

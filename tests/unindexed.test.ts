@@ -365,6 +365,72 @@ test("Navidrome match probe accepts release track-number drift but rejects meani
   }
 });
 
+test("Navidrome match probe accepts bad local album artist when release slot and size match", async () => {
+  const originalFetch = globalThis.fetch;
+  const testSettings = settings("/music");
+  testSettings.navidrome.baseUrl = "http://navidrome.local";
+  testSettings.navidrome.username = "admin";
+  testSettings.navidrome.password = "password";
+  const localTrack = track({
+    id: "unindexed",
+    album: "Live at Radio City",
+    albumArtist: "Leonard Cohen",
+    artist: "Leonard Cohen",
+    title: "Lie in Our Graves",
+    trackNumber: 7,
+    discNumber: 2,
+    duration: 395,
+    size: 37896518,
+    relativePath:
+      "Leonard Cohen/Leonard Cohen - Live at Radio City (2007)/Leonard Cohen - Live at Radio City (2007) - 02-07 - Lie in Our Graves.flac",
+    absolutePath:
+      "/music/Leonard Cohen/Leonard Cohen - Live at Radio City (2007)/Leonard Cohen - Live at Radio City (2007) - 02-07 - Lie in Our Graves.flac",
+    navidromeEnrichment: {
+      status: "unmatched",
+      code: "possible-stale-scan",
+      message: "Organized local file did not match a Navidrome API record."
+    }
+  });
+  const navidromeSong = {
+    id: "nav-live-radio-city",
+    title: "Lie in Our Graves",
+    artist: "Dave Matthews",
+    albumArtist: "Dave Matthews",
+    album: "Live at Radio City",
+    track: 7,
+    discNumber: 2,
+    year: 2007,
+    duration: 395,
+    size: 37896518,
+    path: "Dave Matthews • Leonard Cohen/Live at Radio City/02-07 - Lie in Our Graves.flac"
+  };
+
+  globalThis.fetch = navidromeFetchForSearchAndSongs([navidromeSong], [
+    {
+      album: {
+        id: "album-live-radio-city",
+        name: "Live at Radio City",
+        artist: "Dave Matthews",
+        year: 2007,
+        songCount: 1
+      },
+      song: navidromeSong
+    }
+  ]);
+
+  try {
+    const result = await findUnindexedNavidromeMatches(testSettings, [localTrack], "unindexed");
+    const candidate = result.candidates[0];
+
+    assert.match(result.message, /NaviClean scan/);
+    assert.equal(candidate?.acceptedBy, "metadata-size-artist-agnostic");
+    assert.equal(candidate?.checks.metadataKey, "different");
+    assert.ok(candidate?.rejectedReasons[0]?.includes("without album artist"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("Navidrome match probe accepts provider title suffix differences", async () => {
   const originalFetch = globalThis.fetch;
   const testSettings = settings("/music");
