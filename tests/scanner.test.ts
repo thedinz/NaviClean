@@ -737,6 +737,61 @@ test("scanner matches Navidrome metadata when title repeats in a parenthetical s
   }
 });
 
+test("scanner matches Navidrome metadata across album edition text and title version suffix", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-edition-title-suffix-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath =
+    "Daryl Hall & John Oates/Daryl Hall & John Oates - The Essential Collection (2001)/Daryl Hall & John Oates - The Essential Collection (2001) - 13 - Out of Touch.mp3";
+  const contents = "audio";
+
+  globalThis.fetch = navidromeFetchForSongs([
+    {
+      album: {
+        id: "album-hall-oates",
+        name: "The Essential Collection (RCA Records / BMG)",
+        artist: "Daryl Hall & John Oates",
+        year: 2001,
+        songCount: 1
+      },
+      song: {
+        id: "song-out-of-touch",
+        title: "Out of Touch (single version)",
+        artist: "Daryl Hall & John Oates",
+        albumArtist: "Daryl Hall & John Oates",
+        album: "The Essential Collection (RCA Records / BMG)",
+        track: 13,
+        discNumber: 1,
+        year: 2001,
+        duration: 250,
+        size: Buffer.byteLength(contents),
+        path: "Daryl Hall & John Oates/The Essential Collection (RCA Records _ BMG)/01-13 - Out of Touch (single version).mp3",
+        suffix: "mp3"
+      }
+    }
+  ]);
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+
+    const scanSettings = settings(root);
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, "navidrome");
+    assert.equal(track?.title, "Out of Touch");
+    assert.equal(track?.navidromeEnrichment?.matchMethod, "edition-title-suffix-metadata-size");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("scanner matches Navidrome metadata across leading artist articles and redundant album years", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-artist-article-"));
   const originalFetch = globalThis.fetch;

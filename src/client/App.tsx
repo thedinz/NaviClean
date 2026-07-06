@@ -4105,6 +4105,10 @@ function navidromeMatchMethodLabel(method: NonNullable<OrganizePreviewItem["navi
     return "metadata+size title suffix";
   }
 
+  if (method === "edition-title-suffix-metadata-size") {
+    return "edition+title suffix metadata+size";
+  }
+
   if (method === "metadata-size-track-agnostic") {
     return "metadata+size no track";
   }
