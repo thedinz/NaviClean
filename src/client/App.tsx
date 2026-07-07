@@ -43,6 +43,7 @@ import type {
   LibraryArtistSummary,
   LibraryStats,
   LibraryTrashResult,
+  NavidromeScanStatus,
   NonMusicFileClassification,
   NonMusicFileGroup,
   NonMusicFileGroupDetail,
@@ -203,15 +204,23 @@ function Shell({
 }) {
   const [page, setPage] = useState<Page>("dashboard");
   const [scan, setScan] = useState<ScanStatus | null>(null);
+  const [navidromeScan, setNavidromeScan] = useState<NavidromeScanStatus | null>(null);
   const [stats, setStats] = useState<LibraryStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
   const [scanBusy, setScanBusy] = useState(false);
+  const [navidromeScanBusy, setNavidromeScanBusy] = useState<"quick" | "full" | null>(null);
   const [signOutBusy, setSignOutBusy] = useState(false);
 
   const loadScanStatus = async () => {
     const nextScan = await api<ScanStatus>("/scan/status");
     setScan(nextScan);
+    return nextScan;
+  };
+
+  const loadNavidromeScanStatus = async () => {
+    const nextScan = await api<NavidromeScanStatus>("/navidrome/scan/status");
+    setNavidromeScan(nextScan);
     return nextScan;
   };
 
@@ -243,6 +252,9 @@ function Shell({
       setStatsLoading(false);
       setNotice((caught as Error).message);
     });
+    loadNavidromeScanStatus().catch((caught) => {
+      setNotice((caught as Error).message);
+    });
   }, []);
 
   useEffect(() => {
@@ -266,6 +278,19 @@ function Shell({
     return () => window.clearInterval(interval);
   }, [scan?.running]);
 
+  useEffect(() => {
+    if (!navidromeScan?.running) {
+      return undefined;
+    }
+
+    const interval = window.setInterval(() => {
+      loadNavidromeScanStatus().catch((caught) => {
+        setNotice((caught as Error).message);
+      });
+    }, 1500);
+    return () => window.clearInterval(interval);
+  }, [navidromeScan?.running]);
+
   const startScan = async () => {
     setNotice(null);
     setScanBusy(true);
@@ -281,6 +306,23 @@ function Shell({
       setNotice((caught as Error).message);
     } finally {
       setScanBusy(false);
+    }
+  };
+
+  const startNavidromeScanAction = async (fullScan: boolean) => {
+    setNotice(null);
+    setNavidromeScanBusy(fullScan ? "full" : "quick");
+
+    try {
+      const next = await api<NavidromeScanStatus>("/navidrome/scan/start", {
+        method: "POST",
+        body: JSON.stringify({ fullScan })
+      });
+      setNavidromeScan(next);
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setNavidromeScanBusy(null);
     }
   };
 
@@ -376,9 +418,9 @@ function Shell({
           </div>
           <div className="topbar-actions">
             {notice && <span className="notice">{notice}</span>}
-            <button className="primary-button" type="button" onClick={startScan} disabled={scanBusy || scan?.running} title="Scan library">
+            <button className="primary-button" type="button" onClick={startScan} disabled={scanBusy || scan?.running} title="Scan NaviClean catalog">
               {scanBusy || scan?.running ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
-              <span>{scanBusy || scan?.running ? "Scanning" : "Scan"}</span>
+              <span>{scanBusy || scan?.running ? "Scanning" : "NaviClean scan"}</span>
             </button>
           </div>
         </header>
@@ -395,7 +437,16 @@ function Shell({
         </div>
 
         {page === "dashboard" && (
-          <Dashboard stats={stats} statsLoading={statsLoading} scan={scan} scanBusy={scanBusy} onScan={startScan} />
+          <Dashboard
+            stats={stats}
+            statsLoading={statsLoading}
+            scan={scan}
+            scanBusy={scanBusy}
+            navidromeScan={navidromeScan}
+            navidromeScanBusy={navidromeScanBusy}
+            onScan={startScan}
+            onNavidromeScan={startNavidromeScanAction}
+          />
         )}
         {page === "library" && <LibraryPage onChanged={refreshStats} />}
         {page === "empty-folders" && <EmptyFoldersPage />}
@@ -479,13 +530,19 @@ function Dashboard({
   statsLoading,
   scan,
   scanBusy,
-  onScan
+  navidromeScan,
+  navidromeScanBusy,
+  onScan,
+  onNavidromeScan
 }: {
   stats: LibraryStats | null;
   statsLoading: boolean;
   scan: ScanStatus | null;
   scanBusy: boolean;
+  navidromeScan: NavidromeScanStatus | null;
+  navidromeScanBusy: "quick" | "full" | null;
   onScan: () => Promise<void>;
+  onNavidromeScan: (fullScan: boolean) => Promise<void>;
 }) {
   const metrics = [
     { label: "Tracks", value: stats?.totalTracks ?? null, tone: "teal" },
@@ -497,6 +554,17 @@ function Dashboard({
   const scanRequired = Boolean(stats && !stats.workflow.scanned && !scanRunning);
   const statsPending = !scanRunning && !scanRequired && (statsLoading || !stats);
   const metricMode = scanRunning && !stats ? "scanning" : statsPending ? "loading" : scanRequired ? "scan-needed" : "value";
+  const navidromeStatusLoading = !navidromeScan;
+  const navidromeConfigured = Boolean(navidromeScan?.configured);
+  const navidromeRunning = Boolean(navidromeScan?.running);
+  const navidromeControlsDisabled = navidromeStatusLoading || !navidromeConfigured || navidromeRunning || Boolean(navidromeScanBusy);
+  const navidromeStatusLabel = navidromeStatusLoading
+    ? "Loading"
+    : !navidromeConfigured
+    ? "Not configured"
+    : navidromeRunning
+    ? "Running"
+    : "Idle";
 
   return (
     <section className="content-grid">
@@ -562,6 +630,59 @@ function Dashboard({
             {scan.errors.slice(0, 5).map((item) => (
               <span key={item}>{item}</span>
             ))}
+          </div>
+        ) : null}
+      </article>
+
+      <article className="panel wide">
+        <div className="panel-title">
+          <Database size={18} />
+          <h2>Navidrome Scan</h2>
+        </div>
+        <div className="scan-control-row">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => onNavidromeScan(false)}
+            disabled={navidromeControlsDisabled}
+            title="Start a quick Navidrome scan"
+          >
+            {navidromeScanBusy === "quick" ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+            <span>{navidromeScanBusy === "quick" ? "Starting" : "Quick scan"}</span>
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => onNavidromeScan(true)}
+            disabled={navidromeControlsDisabled}
+            title="Start a full Navidrome scan"
+          >
+            {navidromeScanBusy === "full" ? <Loader2 className="spin" size={18} /> : <Search size={18} />}
+            <span>{navidromeScanBusy === "full" ? "Starting" : "Full scan"}</span>
+          </button>
+        </div>
+        <div className="status-row">
+          <StatusPill active={navidromeRunning} label={navidromeStatusLabel} />
+          <span>{navidromeScanTypeLabel(navidromeScan?.scanType)}</span>
+          <span>{(navidromeScan?.folderCount ?? 0).toLocaleString()} folders</span>
+          <span>{(navidromeScan?.count ?? 0).toLocaleString()} files</span>
+          <span>{navidromeScan?.lastScan ? formatScanDate(navidromeScan.lastScan) : "No completed scan"}</span>
+          {typeof navidromeScan?.elapsedSeconds === "number" && (
+            <span>{formatDuration(navidromeScan.elapsedSeconds)} elapsed</span>
+          )}
+        </div>
+        {navidromeRunning && (
+          <ActionProgress label={`${navidromeScanActionLabel(navidromeScan?.scanType)} running in Navidrome`} />
+        )}
+        {!navidromeStatusLoading && !navidromeConfigured && (
+          <div className="notice-bar safety">
+            <strong>Navidrome connection needed</strong>
+            <span>Add Navidrome URL, username, and password in Settings to trigger scans from NaviClean.</span>
+          </div>
+        )}
+        {navidromeScan?.error ? (
+          <div className="error-list">
+            <span>{navidromeScan.error}</span>
           </div>
         ) : null}
       </article>
@@ -4572,6 +4693,25 @@ function libraryMeta(values: string[]) {
   return values.filter(Boolean).join(" / ");
 }
 
+function navidromeScanTypeLabel(value?: string | null) {
+  switch (value) {
+    case "quick":
+      return "Quick scan";
+    case "full":
+      return "Full scan";
+    case "quick-selective":
+      return "Quick selective scan";
+    case "full-selective":
+      return "Full selective scan";
+    default:
+      return value ? value.replaceAll("-", " ") : "No scan type";
+  }
+}
+
+function navidromeScanActionLabel(value?: string | null) {
+  return value ? navidromeScanTypeLabel(value) : "Scan";
+}
+
 function issueLabel(count: number) {
   return count > 0 ? `${count} metadata ${count === 1 ? "issue" : "issues"}` : "";
 }
@@ -4651,6 +4791,10 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(value));
+}
+
+function formatScanDate(value: string) {
+  return Number.isFinite(Date.parse(value)) ? formatDate(value) : value;
 }
 
 function formatBytes(value: number) {
