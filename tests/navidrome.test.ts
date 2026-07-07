@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
-import { fetchNavidromeArtwork } from "../src/server/navidrome.js";
+import { fetchNavidromeArtwork, getNavidromeScanStatus, startNavidromeScan } from "../src/server/navidrome.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 
 test("album artwork resolves through Navidrome search3 and getCoverArt", async () => {
@@ -65,6 +65,116 @@ test("album artwork resolves through Navidrome search3 and getCoverArt", async (
     assert.equal(calls.length, 2);
     assert.ok(calls.every((url) => url.searchParams.has("t") && url.searchParams.has("s")));
     assert.ok(calls.every((url) => !url.searchParams.has("p")));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Navidrome scan status maps getScanStatus response", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (input) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    assert.equal(url.pathname, "/rest/getScanStatus.view");
+    assert.equal(url.searchParams.get("f"), "json");
+    assert.ok(url.searchParams.has("t"));
+    assert.ok(url.searchParams.has("s"));
+    assert.ok(!url.searchParams.has("p"));
+
+    return jsonResponse({
+      "subsonic-response": {
+        status: "ok",
+        scanStatus: {
+          scanning: true,
+          count: 42,
+          folderCount: 7,
+          lastScan: "2026-07-07T12:30:00Z",
+          scanType: "quick",
+          elapsedTime: 15
+        }
+      }
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await getNavidromeScanStatus(settings("/music"));
+
+    assert.deepEqual(result, {
+      configured: true,
+      running: true,
+      count: 42,
+      folderCount: 7,
+      lastScan: "2026-07-07T12:30:00Z",
+      error: null,
+      scanType: "quick",
+      elapsedSeconds: 15
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Navidrome full scan starts through startScan", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (input) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    assert.equal(url.pathname, "/rest/startScan.view");
+    assert.equal(url.searchParams.get("fullScan"), "true");
+    assert.equal(url.searchParams.get("f"), "json");
+
+    return jsonResponse({
+      "subsonic-response": {
+        status: "ok",
+        scanStatus: {
+          scanning: true,
+          count: "0",
+          folderCount: "0",
+          scanType: "full",
+          elapsedTime: "0"
+        }
+      }
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await startNavidromeScan(settings("/music"), { fullScan: true });
+
+    assert.equal(result.configured, true);
+    assert.equal(result.running, true);
+    assert.equal(result.scanType, "full");
+    assert.equal(result.elapsedSeconds, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Navidrome scan status skips the API when connection settings are missing", async () => {
+  const originalFetch = globalThis.fetch;
+  let called = false;
+
+  globalThis.fetch = (async () => {
+    called = true;
+    throw new Error("Unexpected fetch");
+  }) as typeof fetch;
+
+  try {
+    const scanSettings = settings("/music");
+    scanSettings.navidrome.baseUrl = "";
+
+    const result = await getNavidromeScanStatus(scanSettings);
+
+    assert.equal(called, false);
+    assert.deepEqual(result, {
+      configured: false,
+      running: false,
+      count: 0,
+      folderCount: 0,
+      lastScan: null,
+      error: null,
+      scanType: null,
+      elapsedSeconds: null
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }

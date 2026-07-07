@@ -390,6 +390,18 @@ legend {
   color: #53615d;
 }
 
+.scan-control-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: -4px 0 12px;
+}
+
+.scan-control-row .secondary-button {
+  min-width: 128px;
+}
+
 .status-pill,
 .quality-pill,
 .stage-pill {

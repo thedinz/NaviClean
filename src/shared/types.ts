@@ -349,6 +349,17 @@ export type ScanStatus = {
   warnings: string[];
 };
 
+export type NavidromeScanStatus = {
+  configured: boolean;
+  running: boolean;
+  count: number;
+  folderCount: number;
+  lastScan: string | null;
+  error: string | null;
+  scanType: string | null;
+  elapsedSeconds: number | null;
+};
+
 export type LibraryStats = {
   totalTracks: number;
   duplicateGroups: number;

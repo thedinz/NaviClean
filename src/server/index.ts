@@ -1,7 +1,15 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OrganizePlan, OrganizeTrashSelection, ScanStatus, SettingsUpdate, TrackFile, WorkflowState } from "../shared/types.js";
+import type {
+  NavidromeScanStatus,
+  OrganizePlan,
+  OrganizeTrashSelection,
+  ScanStatus,
+  SettingsUpdate,
+  TrackFile,
+  WorkflowState
+} from "../shared/types.js";
 import { clearSessionCookie, getAuthInfo, login, logout, requireAuth, setSessionCookie } from "./auth.js";
 import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
 import { advancedDiagnosticsEnabled } from "./diagnostics.js";
@@ -25,7 +33,7 @@ import {
 import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin, restoreRecycleBinItems } from "./recycle-bin.js";
 import { scanLibrary } from "./scanner.js";
 import { loadSettings, toSettingsView, updateSettings } from "./settings.js";
-import { fetchNavidromeArtwork, testNavidromeConnection } from "./navidrome.js";
+import { fetchNavidromeArtwork, getNavidromeScanStatus, startNavidromeScan, testNavidromeConnection } from "./navidrome.js";
 import { findUnindexedNavidromeMatches, listUnindexedFiles, trashUnindexedFiles } from "./unindexed.js";
 import {
   buildSpotifyDownloadPlan,
@@ -113,6 +121,22 @@ app.put("/api/settings", asyncHandler(async (req, res) => {
 app.post("/api/navidrome/test", asyncHandler(async (req, res) => {
   const settings = await loadSettings();
   res.json(await testNavidromeConnection(settings, req.body));
+}));
+
+app.get("/api/navidrome/scan/status", asyncHandler(async (_req, res) => {
+  const settings = await loadSettings();
+
+  try {
+    res.json(await getNavidromeScanStatus(settings));
+  } catch (error) {
+    res.json(navidromeScanErrorStatus(settings, (error as Error).message));
+  }
+}));
+
+app.post("/api/navidrome/scan/start", asyncHandler(async (req, res) => {
+  const settings = await loadSettings();
+  const fullScan = Boolean(req.body?.fullScan);
+  res.status(202).json(await startNavidromeScan(settings, { fullScan }));
 }));
 
 app.post("/api/spotify/test", asyncHandler(async (req, res) => {
@@ -779,6 +803,23 @@ function clampPositiveInteger(value: number, fallback: number, min: number, max:
   }
 
   return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function navidromeScanErrorStatus(settings: Awaited<ReturnType<typeof loadSettings>>, message: string): NavidromeScanStatus {
+  return {
+    configured: Boolean(
+      settings.navidrome.baseUrl.trim() &&
+        settings.navidrome.username.trim() &&
+        settings.navidrome.password.trim()
+    ),
+    running: false,
+    count: 0,
+    folderCount: 0,
+    lastScan: null,
+    error: message,
+    scanType: null,
+    elapsedSeconds: null
+  };
 }
 
 async function runScan() {

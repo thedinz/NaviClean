@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import type { NavidromeScanStatus } from "../shared/types.js";
 import type { PrivateSettings } from "./settings.js";
 import { isInsidePath, normalizeForMatch, toPosixRelative } from "./utils.js";
 
@@ -24,6 +25,18 @@ type SearchResult3 = {
 type AlbumList2 = {
   albumList2?: {
     album?: NavidromeAlbum[];
+  };
+};
+
+type ScanStatusResponse = {
+  scanStatus?: {
+    scanning?: boolean;
+    count?: number | string;
+    folderCount?: number | string;
+    lastScan?: string;
+    error?: string;
+    scanType?: string;
+    elapsedTime?: number | string;
   };
 };
 
@@ -157,6 +170,38 @@ export async function testNavidromeConnection(
     ok: false,
     message: subsonic?.error?.message || "Navidrome rejected the connection"
   };
+}
+
+export async function getNavidromeScanStatus(settings: PrivateSettings): Promise<NavidromeScanStatus> {
+  if (!hasNavidromeCredentials(settings)) {
+    return emptyNavidromeScanStatus(false);
+  }
+
+  const body = await subsonicJson<ScanStatusResponse>(settings, "rest/getScanStatus.view", {}, {
+    throwOnError: true
+  });
+
+  return navidromeScanStatusFromResponse(body, true);
+}
+
+export async function startNavidromeScan(
+  settings: PrivateSettings,
+  options: { fullScan: boolean }
+): Promise<NavidromeScanStatus> {
+  requireNavidromeCredentials(settings);
+
+  const body = await subsonicJson<ScanStatusResponse>(
+    settings,
+    "rest/startScan.view",
+    {
+      fullScan: options.fullScan ? "true" : "false"
+    },
+    {
+      throwOnError: true
+    }
+  );
+
+  return navidromeScanStatusFromResponse(body, true);
 }
 
 export async function fetchNavidromeArtwork(
@@ -535,6 +580,52 @@ function subsonicUrl(
   return url;
 }
 
+function hasNavidromeCredentials(settings: PrivateSettings) {
+  return Boolean(
+    settings.navidrome.baseUrl.trim() &&
+      settings.navidrome.username.trim() &&
+      settings.navidrome.password.trim()
+  );
+}
+
+function requireNavidromeCredentials(settings: PrivateSettings) {
+  if (!hasNavidromeCredentials(settings)) {
+    throw new Error("Navidrome URL, username, and password are required.");
+  }
+}
+
+function emptyNavidromeScanStatus(configured: boolean): NavidromeScanStatus {
+  return {
+    configured,
+    running: false,
+    count: 0,
+    folderCount: 0,
+    lastScan: null,
+    error: null,
+    scanType: null,
+    elapsedSeconds: null
+  };
+}
+
+function navidromeScanStatusFromResponse(
+  body: ScanStatusResponse | null,
+  configured: boolean
+): NavidromeScanStatus {
+  const status = body?.scanStatus;
+  const lastScan = stringValue(status?.lastScan);
+
+  return {
+    configured,
+    running: Boolean(status?.scanning),
+    count: nonnegativeInteger(status?.count),
+    folderCount: nonnegativeInteger(status?.folderCount),
+    lastScan: lastScan && !lastScan.startsWith("0001-") ? lastScan : null,
+    error: stringValue(status?.error) || null,
+    scanType: stringValue(status?.scanType) || null,
+    elapsedSeconds: nonnegativeIntegerOrNull(status?.elapsedTime)
+  };
+}
+
 function bestArtistMatch(artists: NavidromeArtist[], artistName: string) {
   const wantedArtist = normalized(artistName);
   return artists.find((artist) => normalized(artist.name) === wantedArtist) || artists[0] || null;
@@ -614,6 +705,20 @@ function positiveInteger(value: unknown) {
   const parsed = typeof value === "number" ? value : Number(value);
 
   if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return Math.floor(parsed);
+}
+
+function nonnegativeInteger(value: unknown) {
+  return nonnegativeIntegerOrNull(value) ?? 0;
+}
+
+function nonnegativeIntegerOrNull(value: unknown) {
+  const parsed = typeof value === "number" ? value : Number(value);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
     return null;
   }
 
