@@ -402,6 +402,69 @@ legend {
   min-width: 128px;
 }
 
+.instruction-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.instruction-card,
+.scenario-row {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.instruction-card {
+  padding: 14px;
+}
+
+.instruction-card h3 {
+  margin: 0 0 8px;
+  color: var(--text-soft);
+  font-size: 0.96rem;
+}
+
+.instruction-card p {
+  margin: 0;
+  color: var(--muted-strong);
+  line-height: 1.45;
+}
+
+.instruction-flow {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 24px;
+  color: var(--text-soft);
+}
+
+.instruction-flow li {
+  padding-left: 4px;
+  line-height: 1.45;
+}
+
+.scenario-list {
+  display: grid;
+  gap: 8px;
+}
+
+.scenario-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.42fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.scenario-row strong {
+  color: var(--text-soft);
+}
+
+.scenario-row span {
+  color: var(--muted-strong);
+}
+
 .status-pill,
 .quality-pill,
 .stage-pill {
@@ -1733,7 +1796,7 @@ select:disabled {
   }
 
   .nav-list {
-    grid-template-columns: repeat(9, minmax(0, 1fr));
+    grid-template-columns: repeat(10, minmax(0, 1fr));
   }
 
   .nav-list button,
@@ -1747,6 +1810,7 @@ select:disabled {
   }
 
   .metric-grid,
+  .instruction-card-grid,
   .settings-grid,
   .form-grid.two {
     grid-template-columns: 1fr;
@@ -1791,5 +1855,10 @@ select:disabled {
 
   .pagination-controls {
     justify-content: space-between;
+  }
+
+  .scenario-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 }

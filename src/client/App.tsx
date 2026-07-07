@@ -1,6 +1,7 @@
 import {
   Activity,
   Album as AlbumIcon,
+  BookOpen,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -76,7 +77,7 @@ import type {
 import { api } from "./api";
 import { appVersion } from "./version";
 
-type Page = "dashboard" | "library" | "empty-folders" | "non-music" | "unindexed" | "discover" | "duplicates" | "organize" | "trash" | "settings";
+type Page = "dashboard" | "instructions" | "library" | "empty-folders" | "non-music" | "unindexed" | "discover" | "duplicates" | "organize" | "trash" | "settings";
 type AppTheme = "light" | "dark";
 type UnindexedFilter = "all" | "possible-stale-scan" | "no-api-match";
 type OrganizePreviewFilter = "attention" | "ready" | "duplicate-target" | "conflict" | "missing" | "spotifybu" | "same" | "all";
@@ -127,6 +128,7 @@ type NavItem = { id: Page; label: string; icon: typeof Gauge; advancedDiagnostic
 
 const navItems: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
+  { id: "instructions", label: "Instructions", icon: BookOpen },
   { id: "library", label: "Library", icon: Database },
   { id: "empty-folders", label: "Empty Folders", icon: FolderX },
   { id: "non-music", label: "Non-Music Files", icon: FileQuestion },
@@ -448,6 +450,7 @@ function Shell({
             onNavidromeScan={startNavidromeScanAction}
           />
         )}
+        {page === "instructions" && <InstructionsPage />}
         {page === "library" && <LibraryPage onChanged={refreshStats} />}
         {page === "empty-folders" && <EmptyFoldersPage />}
         {page === "non-music" && <NonMusicFilesPage />}
@@ -698,6 +701,102 @@ function Dashboard({
           <StagePill label="3 Duplicates" active={stats?.workflow.stage === "duplicates"} complete={Boolean(stats?.workflow.duplicateScanReady)} />
         </div>
         <p className="stage-message">{stats?.workflow.message || "Scan the library to start cleanup."}</p>
+      </article>
+    </section>
+  );
+}
+
+function InstructionsPage() {
+  const scanTypes = [
+    {
+      title: "Navidrome Quick Scan",
+      body: "Refreshes Navidrome's index using its normal change-detection shortcuts. Use it for routine updates after adding, removing, or retagging a small set of files."
+    },
+    {
+      title: "Navidrome Full Scan",
+      body: "Forces Navidrome to walk the library more thoroughly and ignore timestamp shortcuts. Use it after large moves, renamed folders, volume/path changes, stale matches, or anything that makes Navidrome's index look out of sync."
+    },
+    {
+      title: "NaviClean Scan",
+      body: "Reads the mounted library into NaviClean's catalog and enriches matches from Navidrome. Run it after the Navidrome scan finishes so organize, diagnostics, and duplicate cleanup use the newest library state."
+    }
+  ];
+  const workflow = [
+    "Run Navidrome Quick Scan for normal changes, or Navidrome Full Scan for major moves and stale-index problems.",
+    "Wait for the Navidrome Scan panel to return to Idle.",
+    "Run NaviClean Scan to rebuild NaviClean's catalog from the current files and Navidrome metadata.",
+    "Review Organize, Duplicates, Diagnostics, and Trash actions.",
+    "After applying moves or deleting files, run Navidrome Full Scan, wait for Idle, then run NaviClean Scan again."
+  ];
+  const scenarios = [
+    {
+      title: "New music was added",
+      steps: "Navidrome Quick Scan, then NaviClean Scan."
+    },
+    {
+      title: "A few tags changed",
+      steps: "Navidrome Quick Scan, then NaviClean Scan."
+    },
+    {
+      title: "NaviClean organized or moved files",
+      steps: "Navidrome Full Scan, then NaviClean Scan."
+    },
+    {
+      title: "Many folders were renamed outside NaviClean",
+      steps: "Navidrome Full Scan, then NaviClean Scan."
+    },
+    {
+      title: "Diagnostics show stale or missing Navidrome matches",
+      steps: "Navidrome Full Scan first. If it settles cleanly, run NaviClean Scan."
+    },
+    {
+      title: "Only NaviClean totals look old",
+      steps: "Run NaviClean Scan. Use a Navidrome scan first only if Navidrome itself is stale."
+    }
+  ];
+
+  return (
+    <section className="content-grid instructions-page">
+      <article className="panel wide">
+        <div className="panel-title">
+          <BookOpen size={18} />
+          <h2>Scan Buttons</h2>
+        </div>
+        <div className="instruction-card-grid">
+          {scanTypes.map((item) => (
+            <div className="instruction-card" key={item.title}>
+              <h3>{item.title}</h3>
+              <p>{item.body}</p>
+            </div>
+          ))}
+        </div>
+      </article>
+
+      <article className="panel wide">
+        <div className="panel-title">
+          <ListChecks size={18} />
+          <h2>Run Order</h2>
+        </div>
+        <ol className="instruction-flow">
+          {workflow.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ol>
+      </article>
+
+      <article className="panel wide">
+        <div className="panel-title">
+          <Activity size={18} />
+          <h2>Common Scenarios</h2>
+        </div>
+        <div className="scenario-list">
+          {scenarios.map((item) => (
+            <div className="scenario-row" key={item.title}>
+              <strong>{item.title}</strong>
+              <span>{item.steps}</span>
+            </div>
+          ))}
+        </div>
       </article>
     </section>
   );
