@@ -379,7 +379,7 @@ async function runFfmpegConversion(
       }
     });
     child.on("error", (error) => {
-      reject(new Error(formatFfmpegError(error, stderr)));
+      reject(new Error(formatFfmpegError(error, stderr, { sourcePath, targetPath })));
     });
     child.on("close", (code) => {
       if (code === 0) {
@@ -388,7 +388,10 @@ async function runFfmpegConversion(
         return;
       }
 
-      const error = new Error(formatFfmpegError({ code, message: `ffmpeg exited with code ${code}` }, stderr));
+      const error = new Error(formatFfmpegError({ code, message: `ffmpeg exited with code ${code}` }, stderr, {
+        sourcePath,
+        targetPath
+      }));
       reject(error);
     });
   });
@@ -556,15 +559,68 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Conversion failed.";
 }
 
-function formatFfmpegError(error: unknown, stderr: string) {
+export function formatFfmpegError(
+  error: unknown,
+  stderr: string,
+  context: { sourcePath?: string; targetPath?: string } = {}
+) {
   const execError = error as ExecFileError;
-  const diagnostic = stderr
+  const diagnostic = compactFfmpegDiagnostic(stderr, context);
+  const summary = ffmpegFailureSummary(diagnostic);
+  const exitCode = typeof execError.code === "number" ? `ffmpeg exit code: ${execError.code}.` : "";
+  const spawnCode = typeof execError.code === "string" ? `ffmpeg error: ${execError.code}.` : "";
+  const detail = diagnostic ? `ffmpeg details: ${diagnostic}` : errorMessage(error);
+
+  return [summary, exitCode, spawnCode, detail].filter(Boolean).join(" ");
+}
+
+function compactFfmpegDiagnostic(stderr: string, context: { sourcePath?: string; targetPath?: string }) {
+  const hiddenPaths = [context.sourcePath, context.targetPath]
+    .filter((filePath): filePath is string => Boolean(filePath))
+    .map((filePath) => path.resolve(filePath));
+
+  return stderr
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter(Boolean)
+    .filter((line) => line && !hiddenPaths.some((filePath) => line.startsWith(filePath)))
+    .map((line) => {
+      let sanitized = line.replace(/\s*@\s*0x[0-9a-f]+/gi, "");
+
+      for (const filePath of hiddenPaths) {
+        sanitized = sanitized.replaceAll(filePath, path.basename(filePath));
+      }
+
+      return sanitized;
+    })
     .slice(-4)
     .join(" ");
-  const exitCode = execError.code ? `ffmpeg exit code: ${execError.code}.` : "";
+}
 
-  return ["ffmpeg conversion failed.", exitCode, diagnostic || errorMessage(error)].filter(Boolean).join(" ");
+function ffmpegFailureSummary(diagnostic: string) {
+  const normalized = diagnostic.toLowerCase();
+
+  if (
+    normalized.includes("invalid setup header") ||
+    normalized.includes("header processing failed") ||
+    normalized.includes("invalid data found when processing input") ||
+    normalized.includes("could not find codec parameters") ||
+    normalized.includes("end of file")
+  ) {
+    return "ffmpeg could not read this source audio stream, so the original file was left unchanged. The file is not necessarily empty; its audio header may be damaged, incomplete, or mislabeled. Replace or re-download it, then retry.";
+  }
+
+  if (
+    normalized.includes("unknown encoder") ||
+    normalized.includes("encoder not found") ||
+    normalized.includes("requested output format") ||
+    normalized.includes("not a suitable output format")
+  ) {
+    return "ffmpeg could not write the requested target format. Check the installed ffmpeg build and try another format.";
+  }
+
+  if (normalized.includes("permission denied")) {
+    return "ffmpeg could not access one of the conversion files. Check the library permissions and try again.";
+  }
+
+  return "ffmpeg conversion failed.";
 }
