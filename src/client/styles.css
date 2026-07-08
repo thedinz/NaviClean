@@ -1261,13 +1261,47 @@ td span {
   font-size: 0.9rem;
 }
 
+.convert-file-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.convert-file-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.convert-search {
+  flex: 1 1 260px;
+}
+
 .convert-job-panel {
   display: grid;
   gap: 12px;
 }
 
-.convert-table td:first-child,
+.convert-table .convert-select-cell {
+  width: 42px;
+  min-width: 42px;
+  text-align: center;
+}
+
+.convert-file-checkbox {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  padding: 0;
+}
+
+.convert-table td:first-child:not(.convert-select-cell),
 .convert-table td:nth-child(2) {
+  min-width: 240px;
+}
+
+.convert-table .convert-select-cell + td {
   min-width: 240px;
 }
 
