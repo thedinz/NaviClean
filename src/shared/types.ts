@@ -404,6 +404,71 @@ export type LibraryTrashResult = {
   errors: string[];
 };
 
+export type AudioConvertTargetFormat = "mp3" | "flac" | "m4a" | "opus" | "ogg" | "wav";
+
+export type AudioConvertQuality = "128k" | "192k" | "256k" | "320k" | "lossless";
+
+export type AudioConvertFile = {
+  id: string;
+  relativePath: string;
+  extension: string;
+  size: number;
+  artist: string;
+  album: string;
+  title: string;
+  duration: number | null;
+  bitrate: number | null;
+  lossless: boolean;
+};
+
+export type AudioConvertExtensionGroup = {
+  extension: string;
+  count: number;
+  totalSize: number;
+  files: AudioConvertFile[];
+};
+
+export type AudioConvertView = {
+  libraryPath: string;
+  totalFiles: number;
+  totalSize: number;
+  groups: AudioConvertExtensionGroup[];
+};
+
+export type AudioConvertJobStatus = "queued" | "running" | "completed" | "failed";
+
+export type AudioConvertJobItemStatus = "pending" | "converting" | "completed" | "failed";
+
+export type AudioConvertJobItem = {
+  trackId: string;
+  sourceRelativePath: string;
+  targetRelativePath: string;
+  sourceSize: number;
+  outputSize: number | null;
+  progress: number;
+  status: AudioConvertJobItemStatus;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+};
+
+export type AudioConvertJob = {
+  id: string;
+  sourceExtension: string;
+  targetFormat: AudioConvertTargetFormat;
+  quality: AudioConvertQuality;
+  status: AudioConvertJobStatus;
+  totalCount: number;
+  completedCount: number;
+  failedCount: number;
+  pendingCount: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  errors: string[];
+  items: AudioConvertJobItem[];
+};
+
 export type UnindexedFilesView = {
   libraryPath: string;
   total: number;
