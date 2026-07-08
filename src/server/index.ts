@@ -2,6 +2,8 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
+  AudioConvertQuality,
+  AudioConvertTargetFormat,
   NavidromeScanStatus,
   OrganizePlan,
   OrganizeTrashSelection,
@@ -12,6 +14,7 @@ import type {
 } from "../shared/types.js";
 import { clearSessionCookie, getAuthInfo, login, logout, requireAuth, setSessionCookie } from "./auth.js";
 import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
+import { getActiveAudioConvertJob, getAudioConvertJob, listAudioConvertView, startAudioConvertJob } from "./converter.js";
 import { advancedDiagnosticsEnabled } from "./diagnostics.js";
 import { buildDuplicateGroups, resolveDuplicates, resolveSelectedDuplicates } from "./duplicates.js";
 import {
@@ -266,6 +269,46 @@ app.post("/api/scan/start", asyncHandler(async (_req, res) => {
   }
 
   res.status(202).json(scanStatus);
+}));
+
+app.get("/api/convert", asyncHandler(async (_req, res) => {
+  res.json(await listAudioConvertView(await loadSettingsForPlanning()));
+}));
+
+app.get("/api/convert/jobs/active", asyncHandler(async (_req, res) => {
+  res.json({ job: getActiveAudioConvertJob() });
+}));
+
+app.post("/api/convert/jobs", asyncHandler(async (req, res) => {
+  if (getActiveAudioConvertJob()) {
+    res.status(409).json({ error: "A conversion job is already running. Wait for it to finish before starting another one." });
+    return;
+  }
+
+  try {
+    const job = await startAudioConvertJob({
+      quality: String(req.body.quality || "") as AudioConvertQuality,
+      settings: await loadSettingsForPlanning(),
+      sourceExtension: String(req.body.sourceExtension || ""),
+      targetFormat: String(req.body.targetFormat || "") as AudioConvertTargetFormat
+    });
+
+    invalidateOrganizeEvaluationCache();
+    res.status(202).json({ job });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message });
+  }
+}));
+
+app.get("/api/convert/jobs/:jobId", asyncHandler(async (req, res) => {
+  const job = getAudioConvertJob(String(req.params.jobId || ""));
+
+  if (!job) {
+    res.status(404).json({ error: "Conversion job not found." });
+    return;
+  }
+
+  res.json({ job });
 }));
 
 app.get("/api/tracks", asyncHandler(async (req, res) => {
