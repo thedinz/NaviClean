@@ -4,6 +4,7 @@ import { test } from "node:test";
 import type { TrackFile } from "../src/shared/types.js";
 import {
   buildAudioConvertView,
+  formatFfmpegError,
   parseFfmpegProgress,
   targetExtensionForAudioConvertFormat
 } from "../src/server/converter.js";
@@ -43,6 +44,26 @@ test("converter exposes common target extensions", () => {
   assert.equal(targetExtensionForAudioConvertFormat("mp3"), ".mp3");
   assert.equal(targetExtensionForAudioConvertFormat("m4a"), ".m4a");
   assert.equal(targetExtensionForAudioConvertFormat("flac"), ".flac");
+});
+
+test("converter explains unreadable ffmpeg source audio", () => {
+  const message = formatFfmpegError(
+    { code: 1, message: "ffmpeg exited with code 1" },
+    [
+      "[Vorbis parser @ 0x55c87529da80] Invalid Setup header",
+      "[ogg @ 0x55c87529acc0] Header processing failed: Unknown error occurred",
+      "/music/Doctor Flake/Track.ogg: Unknown error occurred"
+    ].join("\n"),
+    { sourcePath: "/music/Doctor Flake/Track.ogg" }
+  );
+
+  assert.match(message, /could not read this source audio stream/);
+  assert.match(message, /not necessarily empty/);
+  assert.match(message, /audio header may be damaged, incomplete, or mislabeled/);
+  assert.match(message, /ffmpeg exit code: 1/);
+  assert.match(message, /\[Vorbis parser\] Invalid Setup header/);
+  assert.doesNotMatch(message, /0x55c87529da80/);
+  assert.doesNotMatch(message, /\/music\/Doctor Flake/);
 });
 
 function track(partial: Partial<TrackFile>): TrackFile {
