@@ -6,6 +6,7 @@ import {
   buildAudioConvertView,
   formatFfmpegError,
   parseFfmpegProgress,
+  selectAudioConvertTracks,
   targetExtensionForAudioConvertFormat
 } from "../src/server/converter.js";
 import type { PrivateSettings } from "../src/server/settings.js";
@@ -44,6 +45,33 @@ test("converter exposes common target extensions", () => {
   assert.equal(targetExtensionForAudioConvertFormat("mp3"), ".mp3");
   assert.equal(targetExtensionForAudioConvertFormat("m4a"), ".m4a");
   assert.equal(targetExtensionForAudioConvertFormat("flac"), ".flac");
+});
+
+test("converter selects only requested files for the source format", () => {
+  const tracks = [
+    track({ extension: ".ogg", id: "one", relativePath: "Artist/Album/One.ogg" }),
+    track({ extension: ".ogg", id: "two", relativePath: "Artist/Album/Two.ogg" }),
+    track({ extension: ".mp3", id: "three", relativePath: "Artist/Album/Three.mp3" })
+  ];
+
+  assert.deepEqual(
+    selectAudioConvertTracks(tracks, ".ogg", ["two"]).map((item) => item.id),
+    ["two"]
+  );
+  assert.deepEqual(
+    selectAudioConvertTracks(tracks, ".ogg").map((item) => item.id),
+    ["one", "two"]
+  );
+});
+
+test("converter rejects selected files outside the source format", () => {
+  assert.throws(
+    () => selectAudioConvertTracks([
+      track({ extension: ".ogg", id: "one", relativePath: "Artist/Album/One.ogg" }),
+      track({ extension: ".mp3", id: "two", relativePath: "Artist/Album/Two.mp3" })
+    ], ".ogg", ["one", "two"]),
+    /Some selected files are no longer available/
+  );
 });
 
 test("converter explains unreadable ffmpeg source audio", () => {

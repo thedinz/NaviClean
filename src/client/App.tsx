@@ -2389,6 +2389,8 @@ function ConvertPage({ onChanged }: { onChanged: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [convertSearch, setConvertSearch] = useState("");
+  const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(new Set());
   const refreshedJobIds = useRef<Set<string>>(new Set());
 
   const groups = view?.groups || [];
@@ -2398,6 +2400,16 @@ function ConvertPage({ onChanged }: { onChanged: () => Promise<void> }) {
   const qualityOptions = audioConvertQualityOptionsForTarget(selectedTargetOption?.id || targetFormat);
   const activeJob = isAudioConvertJobActive(job);
   const targetQuality = selectedTargetOption?.lossless ? "lossless" : quality;
+  const selectedGroupFiles = selectedGroup?.files || [];
+  const filteredConvertFiles = useMemo(
+    () => filterAudioConvertFiles(selectedGroupFiles, convertSearch),
+    [selectedGroupFiles, convertSearch]
+  );
+  const selectedConvertFiles = selectedGroupFiles.filter((file) => selectedTrackIds.has(file.id));
+  const selectedConvertFileIds = selectedConvertFiles.map((file) => file.id);
+  const selectedConvertSize = selectedConvertFiles.reduce((total, file) => total + file.size, 0);
+  const filteredSelectedCount = filteredConvertFiles.filter((file) => selectedTrackIds.has(file.id)).length;
+  const allFilteredSelected = filteredConvertFiles.length > 0 && filteredSelectedCount === filteredConvertFiles.length;
 
   const load = async ({ clearNotice = true }: { clearNotice?: boolean } = {}) => {
     setLoading(true);
@@ -2431,6 +2443,17 @@ function ConvertPage({ onChanged }: { onChanged: () => Promise<void> }) {
       })
       .catch((caught) => setError((caught as Error).message));
   }, []);
+
+  useEffect(() => {
+    if (!selectedGroup) {
+      setConvertSearch("");
+      setSelectedTrackIds(new Set());
+      return;
+    }
+
+    setConvertSearch("");
+    setSelectedTrackIds(new Set(selectedGroup.files.map((file) => file.id)));
+  }, [selectedGroup?.extension, selectedGroup?.count]);
 
   useEffect(() => {
     if (!selectedGroup) {
@@ -2486,8 +2509,13 @@ function ConvertPage({ onChanged }: { onChanged: () => Promise<void> }) {
       return;
     }
 
+    if (selectedConvertFileIds.length === 0) {
+      setError("Choose at least one file to convert.");
+      return;
+    }
+
     const confirmed = window.confirm(
-      `Convert ${selectedGroup.count.toLocaleString()} ${selectedGroup.extension.toUpperCase()} ${pluralize("file", selectedGroup.count)} to ${selectedTargetOption.extension.toUpperCase()}? Originals are deleted after each successful conversion.`
+      `Convert ${selectedConvertFileIds.length.toLocaleString()} selected ${selectedGroup.extension.toUpperCase()} ${pluralize("file", selectedConvertFileIds.length)} to ${selectedTargetOption.extension.toUpperCase()}? Originals are deleted after each successful conversion.`
     );
 
     if (!confirmed) {
@@ -2504,16 +2532,47 @@ function ConvertPage({ onChanged }: { onChanged: () => Promise<void> }) {
         body: JSON.stringify({
           quality: targetQuality,
           sourceExtension: selectedGroup.extension,
-          targetFormat: selectedTargetOption.id
+          targetFormat: selectedTargetOption.id,
+          trackIds: selectedConvertFileIds
         })
       });
       setJob(body.job);
-      setNotice(`Conversion started for ${selectedGroup.count.toLocaleString()} ${pluralize("file", selectedGroup.count)}.`);
+      setNotice(`Conversion started for ${selectedConvertFileIds.length.toLocaleString()} ${pluralize("file", selectedConvertFileIds.length)}.`);
     } catch (caught) {
       setError((caught as Error).message);
     } finally {
       setBusy(false);
     }
+  };
+
+  const toggleConvertFile = (fileId: string, checked: boolean) => {
+    setSelectedTrackIds((current) => {
+      const next = new Set(current);
+
+      if (checked) {
+        next.add(fileId);
+      } else {
+        next.delete(fileId);
+      }
+
+      return next;
+    });
+  };
+
+  const toggleFilteredConvertFiles = (checked: boolean) => {
+    setSelectedTrackIds((current) => {
+      const next = new Set(current);
+
+      for (const file of filteredConvertFiles) {
+        if (checked) {
+          next.add(file.id);
+        } else {
+          next.delete(file.id);
+        }
+      }
+
+      return next;
+    });
   };
 
   return (
@@ -2546,7 +2605,7 @@ function ConvertPage({ onChanged }: { onChanged: () => Promise<void> }) {
               className="primary-button"
               type="button"
               onClick={startConversion}
-              disabled={loading || busy || activeJob || !selectedGroup || !selectedTargetOption}
+              disabled={loading || busy || activeJob || !selectedGroup || !selectedTargetOption || selectedConvertFileIds.length === 0}
             >
               {busy || activeJob ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
               <span>{activeJob ? "Converting" : "Convert"}</span>
@@ -2625,13 +2684,27 @@ function ConvertPage({ onChanged }: { onChanged: () => Promise<void> }) {
                   {selectedGroup.extension.toUpperCase()} to {selectedTargetOption.extension.toUpperCase()}
                 </strong>
                 <span>
-                  {selectedGroup.count.toLocaleString()} {pluralize("file", selectedGroup.count)} / {formatBytes(selectedGroup.totalSize)} / {audioConvertQualityLabel(targetQuality)}
+                  {selectedConvertFileIds.length.toLocaleString()} selected / {selectedGroup.count.toLocaleString()} total / {formatBytes(selectedConvertSize)} / {audioConvertQualityLabel(targetQuality)}
                 </span>
                 <span>{selectedTargetOption.description}</span>
               </div>
             )}
 
-            {selectedGroup && <ConvertFileTable group={selectedGroup} />}
+            {selectedGroup && (
+              <ConvertFileTable
+                activeJob={activeJob}
+                allFilteredSelected={allFilteredSelected}
+                files={filteredConvertFiles}
+                filteredSelectedCount={filteredSelectedCount}
+                group={selectedGroup}
+                onSearchChange={setConvertSearch}
+                onToggleFile={toggleConvertFile}
+                onToggleFiltered={toggleFilteredConvertFiles}
+                search={convertSearch}
+                selectedCount={selectedConvertFileIds.length}
+                selectedTrackIds={selectedTrackIds}
+              />
+            )}
           </div>
         )}
       </section>
@@ -2699,35 +2772,123 @@ function ConvertPage({ onChanged }: { onChanged: () => Promise<void> }) {
   );
 }
 
-function ConvertFileTable({ group }: { group: AudioConvertExtensionGroup }) {
+function ConvertFileTable({
+  activeJob,
+  allFilteredSelected,
+  files,
+  filteredSelectedCount,
+  group,
+  onSearchChange,
+  onToggleFile,
+  onToggleFiltered,
+  search,
+  selectedCount,
+  selectedTrackIds
+}: {
+  activeJob: boolean;
+  allFilteredSelected: boolean;
+  files: AudioConvertFile[];
+  filteredSelectedCount: number;
+  group: AudioConvertExtensionGroup;
+  onSearchChange: (value: string) => void;
+  onToggleFile: (fileId: string, checked: boolean) => void;
+  onToggleFiltered: (checked: boolean) => void;
+  search: string;
+  selectedCount: number;
+  selectedTrackIds: Set<string>;
+}) {
   return (
-    <div className="table-wrap">
-      <table className="convert-table">
-        <thead>
-          <tr>
-            <th>File</th>
-            <th>Track</th>
-            <th>Quality</th>
-            <th>Size</th>
-          </tr>
-        </thead>
-        <tbody>
-          {group.files.map((file) => (
-            <tr key={file.id}>
-              <td>
-                <strong>{pathFilename(file.relativePath)}</strong>
-                <span>{file.relativePath}</span>
-              </td>
-              <td>
-                <strong>{file.title}</strong>
-                <span>{libraryMeta([file.artist, file.album, file.duration ? formatDuration(file.duration) : ""])}</span>
-              </td>
-              <td>{audioConvertFileSummary(file)}</td>
-              <td>{formatBytes(file.size)}</td>
+    <div className="convert-file-panel">
+      <div className="convert-file-toolbar">
+        <div className="search-box convert-search">
+          <Search size={17} />
+          <input
+            disabled={activeJob}
+            onChange={(event) => onSearchChange(event.target.value)}
+            placeholder="Search files"
+            value={search}
+          />
+        </div>
+        <div className="summary-chips">
+          <span>{selectedCount.toLocaleString()} selected</span>
+          <span>{files.length.toLocaleString()} shown</span>
+          <span>{filteredSelectedCount.toLocaleString()} shown selected</span>
+        </div>
+        <div className="button-row">
+          <button
+            className="secondary-button"
+            disabled={activeJob || files.length === 0}
+            onClick={() => onToggleFiltered(true)}
+            type="button"
+          >
+            <Check size={17} />
+            <span>Select matching</span>
+          </button>
+          <button
+            className="secondary-button"
+            disabled={activeJob || files.length === 0}
+            onClick={() => onToggleFiltered(false)}
+            type="button"
+          >
+            <CopyX size={17} />
+            <span>Clear matching</span>
+          </button>
+        </div>
+      </div>
+      <div className="table-wrap">
+        <table className="convert-table">
+          <thead>
+            <tr>
+              <th className="convert-select-cell">
+                <input
+                  aria-label="Toggle matching files"
+                  checked={allFilteredSelected}
+                  className="convert-file-checkbox"
+                  disabled={activeJob || files.length === 0}
+                  onChange={(event) => onToggleFiltered(event.target.checked)}
+                  type="checkbox"
+                />
+              </th>
+              <th>File</th>
+              <th>Track</th>
+              <th>Quality</th>
+              <th>Size</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {files.length === 0 ? (
+              <tr>
+                <td colSpan={5}>No matching {group.extension.toUpperCase()} files</td>
+              </tr>
+            ) : (
+              files.map((file) => (
+                <tr key={file.id}>
+                  <td className="convert-select-cell">
+                    <input
+                      aria-label={`Select ${pathFilename(file.relativePath)}`}
+                      checked={selectedTrackIds.has(file.id)}
+                      className="convert-file-checkbox"
+                      disabled={activeJob}
+                      onChange={(event) => onToggleFile(file.id, event.target.checked)}
+                      type="checkbox"
+                    />
+                  </td>
+                  <td>
+                    <strong>{pathFilename(file.relativePath)}</strong>
+                    <span>{file.relativePath}</span>
+                  </td>
+                  <td>
+                    <strong>{file.title}</strong>
+                    <span>{libraryMeta([file.artist, file.album, file.duration ? formatDuration(file.duration) : ""])}</span>
+                  </td>
+                  <td>{audioConvertFileSummary(file)}</td>
+                  <td>{formatBytes(file.size)}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -5139,6 +5300,21 @@ function filterTrashItems(items: RecycleBinItem[], filter: string, typeFilter: s
         .join(" ")
         .toLowerCase()
         .includes(query))
+  );
+}
+
+function filterAudioConvertFiles(files: AudioConvertFile[], search: string) {
+  const query = search.trim().toLowerCase();
+
+  if (!query) {
+    return files;
+  }
+
+  return files.filter((file) =>
+    [file.relativePath, file.title, file.artist, file.album, file.extension]
+      .join(" ")
+      .toLowerCase()
+      .includes(query)
   );
 }
 

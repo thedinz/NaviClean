@@ -290,7 +290,8 @@ app.post("/api/convert/jobs", asyncHandler(async (req, res) => {
       quality: String(req.body.quality || "") as AudioConvertQuality,
       settings: await loadSettingsForPlanning(),
       sourceExtension: String(req.body.sourceExtension || ""),
-      targetFormat: String(req.body.targetFormat || "") as AudioConvertTargetFormat
+      targetFormat: String(req.body.targetFormat || "") as AudioConvertTargetFormat,
+      trackIds: Array.isArray(req.body.trackIds) ? req.body.trackIds.map(String) : undefined
     });
 
     invalidateOrganizeEvaluationCache();

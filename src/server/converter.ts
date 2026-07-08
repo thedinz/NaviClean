@@ -100,12 +100,14 @@ export async function startAudioConvertJob({
   quality,
   settings,
   sourceExtension,
-  targetFormat
+  targetFormat,
+  trackIds
 }: {
   quality: AudioConvertQuality;
   settings: PrivateSettings;
   sourceExtension: string;
   targetFormat: AudioConvertTargetFormat;
+  trackIds?: string[];
 }) {
   if (getActiveAudioConvertJob()) {
     throw new Error("A conversion job is already running. Wait for it to finish before starting another one.");
@@ -125,10 +127,14 @@ export async function startAudioConvertJob({
   }
 
   const catalog = await loadCatalog();
-  const selectedTracks = catalog.tracks.filter((track) => normalizeExtension(track.extension) === normalizedSourceExtension);
+  const selectedTracks = selectAudioConvertTracks(catalog.tracks, normalizedSourceExtension, trackIds);
 
   if (selectedTracks.length === 0) {
-    throw new Error(`No ${normalizedSourceExtension.toUpperCase()} files are in the current catalog. Run a scan and try again.`);
+    throw new Error(
+      trackIds
+        ? "Choose at least one matching file to convert."
+        : `No ${normalizedSourceExtension.toUpperCase()} files are in the current catalog. Run a scan and try again.`
+    );
   }
 
   const libraryPath = path.resolve(settings.naming.libraryPath);
@@ -156,6 +162,33 @@ export async function startAudioConvertJob({
   }, 0);
 
   return snapshotJob(job);
+}
+
+export function selectAudioConvertTracks(
+  tracks: TrackFile[],
+  sourceExtension: string,
+  trackIds?: string[]
+) {
+  const normalizedSourceExtension = normalizeExtension(sourceExtension);
+  const sourceTracks = tracks.filter((track) => normalizeExtension(track.extension) === normalizedSourceExtension);
+
+  if (!trackIds) {
+    return sourceTracks;
+  }
+
+  const selectedTrackIds = new Set(trackIds.map((trackId) => trackId.trim()).filter(Boolean));
+
+  if (selectedTrackIds.size === 0) {
+    return [];
+  }
+
+  const selectedTracks = sourceTracks.filter((track) => selectedTrackIds.has(track.id));
+
+  if (selectedTracks.length !== selectedTrackIds.size) {
+    throw new Error("Some selected files are no longer available for this source format. Refresh and try again.");
+  }
+
+  return selectedTracks;
 }
 
 export function getAudioConvertJob(jobId: string) {
