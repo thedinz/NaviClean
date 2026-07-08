@@ -118,6 +118,13 @@ const confidentYoutubeCandidateScore = 94;
 const stagingRootSegments = [".naviclean", "tmp", "provider-downloads"];
 const provenanceLogSegments = [".naviclean", "provider-downloads.json"];
 const defaultYtDlpJsRuntime = "node";
+const providerDownloadAudioFormat = "m4a";
+const providerDownloadAudioQuality = "256K";
+const providerDownloadExtension = ".m4a";
+const providerDownloadBitrate = 256_000;
+const providerDownloadCodec = "AAC";
+const providerDownloadContainer = "M4A";
+const providerDownloadQualityScore = 936;
 const jobs = new Map<string, SpotifyCatalogDownloadJob>();
 
 export async function previewSpotifyCatalogDownloads(
@@ -627,9 +634,9 @@ async function runYtDlp({
         "--restrict-filenames",
         "--extract-audio",
         "--audio-format",
-        "mp3",
+        providerDownloadAudioFormat,
         "--audio-quality",
-        "320K",
+        providerDownloadAudioQuality,
         "--format",
         "bestaudio[abr<=320]/bestaudio/best",
         ...ytDlpJsRuntimeArgs(),
@@ -858,14 +865,14 @@ function providerTrackToTrackFile(settings: PrivateSettings, track: CatalogProvi
   const duration = Math.round(track.durationMs / 1000);
 
   return {
-    absolutePath: path.join(root, ".naviclean", "planned", `${track.id}.mp3`),
+    absolutePath: path.join(root, ".naviclean", "planned", `${track.id}${providerDownloadExtension}`),
     album: track.album,
     albumArtist: track.albumArtist,
     albumType: track.albumType,
-    bitrate: 320_000,
+    bitrate: providerDownloadBitrate,
     bitsPerSample: null,
-    codec: "MP3",
-    container: "MPEG",
+    codec: providerDownloadCodec,
+    container: providerDownloadContainer,
     discNumber: track.discNumber,
     discTotal: null,
     duplicateKey: buildDuplicateKey({
@@ -879,13 +886,13 @@ function providerTrackToTrackFile(settings: PrivateSettings, track: CatalogProvi
       year: track.albumReleaseYear
     }),
     duration,
-    extension: ".mp3",
+    extension: providerDownloadExtension,
     id: sha1(`spotify:${track.id}`),
     issues: [],
     lossless: false,
     mtimeMs: 0,
-    qualityScore: 870,
-    relativePath: `.naviclean/planned/${track.id}.mp3`,
+    qualityScore: providerDownloadQualityScore,
+    relativePath: `.naviclean/planned/${track.id}${providerDownloadExtension}`,
     sampleRate: null,
     size: 0,
     targetPath: "",
@@ -1208,7 +1215,7 @@ async function findDownloadedPath({
     }
   }
 
-  const expectedOutputPath = path.resolve(outputTemplate.replace("%(ext)s", "mp3"));
+  const expectedOutputPath = path.resolve(outputTemplate.replace("%(ext)s", providerDownloadAudioFormat));
 
   if (!beforePaths.has(expectedOutputPath) && (await canAccess(expectedOutputPath, constants.F_OK))) {
     return expectedOutputPath;
