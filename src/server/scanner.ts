@@ -1173,32 +1173,37 @@ function inferMetadataFromPath(relativePath: string): InferredMetadata {
   const parentArtistFolderName = folderSegments.at(-2);
   const structuredFolder = parseStructuredAlbumDirectory(parsedPath.dir);
   const artistAlbumFolder = folderName?.match(/^(?<artist>.+?)\s+-\s+(?<album>.+)$/);
-  const hasFolderIdentity = Boolean(structuredFolder || artistAlbumFolder || (folderName && parentArtistFolderName));
-  const albumArtist =
+  const rawAlbumArtist =
     structuredFolder?.artist ??
     artistAlbumFolder?.groups?.artist?.trim() ??
     (folderName && parentArtistFolderName ? parentArtistFolderName : undefined);
-  const album =
+  const rawAlbum =
     structuredFolder?.album ??
     artistAlbumFolder?.groups?.album?.trim() ??
     (folderName && parentArtistFolderName ? folderName : undefined);
+  const albumArtist = knownMetadataValue(rawAlbumArtist);
+  const album = knownMetadataValue(rawAlbum);
+  const hasFolderIdentity = Boolean((structuredFolder || artistAlbumFolder || (folderName && parentArtistFolderName)) && (albumArtist || album));
   const filename = inferMetadataFromFilename(parsedPath.name, !hasFolderIdentity);
   const structuredFilename = inferStructuredTrackFilename(
     parsedPath.name,
-    albumArtist,
-    album,
+    rawAlbumArtist,
+    rawAlbum,
     structuredFolder?.year
   );
+  const structuredArtist = knownMetadataValue(structuredFilename.artist);
+  const structuredAlbumArtist = knownMetadataValue(structuredFilename.albumArtist || structuredFilename.artist);
+  const structuredAlbum = knownMetadataValue(structuredFilename.album);
 
   return {
-    album: album ?? filename.album,
-    albumArtist: albumArtist ?? filename.artist,
+    album: album ?? structuredAlbum ?? knownMetadataValue(filename.album),
+    albumArtist: albumArtist ?? structuredAlbumArtist ?? knownMetadataValue(filename.artist),
     albumType: structuredFolder?.albumType,
-    artist: filename.artist ?? albumArtist,
+    artist: structuredArtist ?? knownMetadataValue(filename.artist) ?? albumArtist ?? structuredAlbumArtist,
     discNumber: structuredFilename.discNumber ?? filename.discNumber,
     title: structuredFilename.title ?? filename.title,
     trackNumber: structuredFilename.trackNumber ?? filename.trackNumber,
-    year: structuredFolder?.year ?? undefined
+    year: structuredFolder?.year ?? structuredFilename.year ?? undefined
   };
 }
 
@@ -1208,27 +1213,48 @@ function inferStructuredTrackFilename(
   album?: string,
   year?: number | null
 ): InferredMetadata {
-  const standardMatch = value.match(
-    /^(?<artist>.+?)\s+-\s+(?<album>.+?)\s+\((?<year>\d{4}|Unknown Year)\)\s+-\s+(?:(?<medium>\d{1,2})[-_.](?<mediumTrack>\d{1,3})|(?<track>\d{1,3}))\s+-\s+(?<title>.+)$/
-  );
+  const parsed = parseStandardTrackFilename(value);
 
-  if (standardMatch?.groups) {
+  if (parsed?.artist && parsed.album) {
     const expectedYear = typeof year === "number" ? String(year) : undefined;
-    const filenameYear = standardMatch.groups.year;
-    const artistMatches = !albumArtist || samePathToken(standardMatch.groups.artist, albumArtist);
-    const albumMatches = !album || samePathToken(standardMatch.groups.album, album);
-    const yearMatches = !expectedYear || filenameYear === expectedYear;
+    const artistMatches = !albumArtist || samePathToken(parsed.artist, albumArtist);
+    const albumMatches = !album || samePathToken(parsed.album, album);
+    const yearMatches = !expectedYear || parsed.year === year;
 
     if (artistMatches && albumMatches && yearMatches) {
-      return {
-        discNumber: parsePositiveInteger(standardMatch.groups.medium),
-        title: standardMatch.groups.title.trim(),
-        trackNumber: parsePositiveInteger(standardMatch.groups.mediumTrack || standardMatch.groups.track)
-      };
+      const nested = parseStandardTrackFilename(parsed.title ?? "");
+
+      if (nested && isUnknownMetadataValue(parsed.artist) && isUnknownMetadataValue(parsed.album)) {
+        return nested;
+      }
+
+      return parsed;
     }
   }
 
   return {};
+}
+
+function parseStandardTrackFilename(value: string): InferredMetadata | null {
+  const standardMatch = value.match(
+    /^(?<artist>.+?)\s+-\s+(?<album>.+?)\s+\((?<year>\d{4}|Unknown Year)\)\s+-\s+(?:(?<medium>\d{1,2})[-_.](?<mediumTrack>\d{1,3})|(?<track>\d{1,3}))\s+-\s+(?<title>.+)$/
+  );
+
+  if (!standardMatch?.groups) {
+    return null;
+  }
+
+  const artist = standardMatch.groups.artist.trim();
+
+  return {
+    album: standardMatch.groups.album.trim(),
+    albumArtist: artist,
+    artist,
+    discNumber: parsePositiveInteger(standardMatch.groups.medium),
+    title: standardMatch.groups.title.trim(),
+    trackNumber: parsePositiveInteger(standardMatch.groups.mediumTrack || standardMatch.groups.track),
+    year: parseYear(standardMatch.groups.year) ?? undefined
+  };
 }
 
 function inferMetadataFromFilename(value: string, allowIdentityFromName: boolean): InferredMetadata {
@@ -1447,6 +1473,18 @@ function normalizeAlbumType(value?: string, trackTotal?: number | null) {
   }
 
   return albumType ? titleCaseAlbumType(albumType) : "";
+}
+
+function knownMetadataValue(value?: string) {
+  return value && !isUnknownMetadataValue(value) ? value.trim() : undefined;
+}
+
+function isUnknownMetadataValue(value?: string) {
+  const normalized = normalizeForMatch(value ?? "", { removeBracketedText: false })
+    .replace(/\b(?:\d{4}|unknown year)\b/g, "")
+    .trim();
+
+  return !normalized || normalized === "unknown artist" || normalized === "unknown album" || normalized === "unknown track";
 }
 
 function titleCaseAlbumType(value: string) {

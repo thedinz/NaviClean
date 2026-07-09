@@ -145,6 +145,38 @@ test("scanner repairs UTF-16 mojibake text in inferred titles", async () => {
   }
 });
 
+test("scanner unwraps unknown folders around a nested standard filename", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-unknown-wrapper-"));
+  const sourceRelativePath =
+    "Unknown Artist]/[Unknown Artist] - [Unknown Album] (2019)/[Unknown Artist] - [Unknown Album] (2019) - 01 - Russ - BEST ON EARTH (feat. BIA) [Bonus] (2019) - 01 - BEST ON EARTH (feat. BIA) - Bonus.m4a";
+  const targetRelativePath =
+    "Russ/Russ - BEST ON EARTH (feat. BIA) [Bonus] (2019)/Russ - BEST ON EARTH (feat. BIA) [Bonus] (2019) - 01 - BEST ON EARTH (feat. BIA) - Bonus.m4a";
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "not real audio");
+
+    const scanSettings = settings(root);
+    scanSettings.scan.extensions.push(".m4a");
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.artist, "Russ");
+    assert.equal(track?.albumArtist, "Russ");
+    assert.equal(track?.album, "BEST ON EARTH (feat. BIA) [Bonus]");
+    assert.equal(track?.title, "BEST ON EARTH (feat. BIA) - Bonus");
+    assert.equal(track?.trackNumber, 1);
+    assert.equal(track?.year, 2019);
+    assert.equal(track?.issues.includes("Missing artist"), false);
+    assert.equal(track?.issues.includes("Missing album"), false);
+    assert.equal(track?.targetRelativePath, targetRelativePath);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("scanner does not repair legitimate non-Latin titles as mojibake", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-unicode-title-"));
   const sourceRelativePath =
