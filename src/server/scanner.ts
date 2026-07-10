@@ -22,6 +22,7 @@ export { hasSpotifyBuIdentityTags };
 
 type ProgressHandler = (status: Partial<ScanStatus>) => void;
 type ParsedAudioMetadata = Awaited<ReturnType<typeof parseFile>>;
+type StructuredPathIdentityReason = "missing-tags" | "placeholder-tags" | "conflicting-tags";
 
 const extensionQuality: Record<string, number> = {
   ".flac": 1000,
@@ -1038,21 +1039,64 @@ async function readTrack(filePath: string, root: string, settings: PrivateSettin
   const common = metadata?.common;
   const commonRecord = common as Record<string, unknown> | undefined;
   const format = metadata?.format;
-  const artist = cleanDisplayText(common?.artist || common?.artists?.[0] || inferred.artist, "Unknown Artist", "artist", issues);
+  const commonArtist = knownMetadataValue(common?.artist) || knownMetadataValue(common?.artists?.[0]);
+  const commonAlbumArtist = knownMetadataValue(common?.albumartist);
+  const commonAlbum = knownMetadataValue(common?.album);
+  const commonTitle = knownMetadataValue(common?.title);
+  const commonTrackNumber = common?.track?.no || null;
+  const metadataYear = typeof common?.year === "number" && Number.isFinite(common.year) ? common.year : null;
+  const commonYear = metadataYear ?? parseYear(firstCommonString(commonRecord, ["date", "originaldate", "releasedate"]));
+  const hasPlaceholderIdentityTag = [common?.artist, common?.artists?.[0], common?.albumartist, common?.album].some(
+    isUnknownMetadataValue
+  );
+  const structuredPathIdentityReason = structuredPathIdentityReasonForTags(inferred, {
+    album: commonAlbum,
+    albumArtist: commonAlbumArtist || commonArtist,
+    artist: commonArtist,
+    hasPlaceholderIdentityTag,
+    title: commonTitle,
+    trackNumber: commonTrackNumber,
+    year: commonYear
+  });
+
+  if (structuredPathIdentityReason === "placeholder-tags") {
+    issues.push("Embedded metadata used unknown placeholders; used structured path metadata");
+  } else if (structuredPathIdentityReason === "conflicting-tags") {
+    issues.push("Embedded metadata conflicted with structured path; used structured path metadata");
+  }
+
+  const useStructuredPathIdentity = Boolean(structuredPathIdentityReason);
+  const artist = cleanDisplayText(
+    (useStructuredPathIdentity ? inferred.artist : commonArtist || inferred.artist),
+    "Unknown Artist",
+    "artist",
+    issues
+  );
   const albumArtist = cleanDisplayText(
-    common?.albumartist || common?.artist || common?.artists?.[0] || inferred.albumArtist || inferred.artist,
+    (useStructuredPathIdentity
+      ? inferred.albumArtist || inferred.artist
+      : commonAlbumArtist || commonArtist || inferred.albumArtist || inferred.artist),
     artist,
     "album artist",
     issues
   );
-  const album = cleanDisplayText(common?.album || inferred.album, "Unknown Album", "album", issues);
-  const title = cleanDisplayText(common?.title || inferred.title, titleFromFilename(filePath), "title", issues);
-  const trackNumber = common?.track?.no || inferred.trackNumber || null;
+  const album = cleanDisplayText(
+    (useStructuredPathIdentity ? inferred.album : commonAlbum || inferred.album),
+    "Unknown Album",
+    "album",
+    issues
+  );
+  const title = cleanDisplayText(
+    (useStructuredPathIdentity ? inferred.title : commonTitle || inferred.title),
+    titleFromFilename(filePath),
+    "title",
+    issues
+  );
+  const trackNumber = (useStructuredPathIdentity ? inferred.trackNumber : commonTrackNumber || inferred.trackNumber) || null;
   const trackTotal = common?.track?.of || null;
   const discNumber = common?.disk?.no || inferred.discNumber || null;
   const discTotal = common?.disk?.of || null;
-  const metadataYear = typeof common?.year === "number" && Number.isFinite(common.year) ? common.year : null;
-  const year = metadataYear ?? parseYear(firstCommonString(commonRecord, ["date", "originaldate", "releasedate"])) ?? inferred.year ?? null;
+  const year = (useStructuredPathIdentity ? inferred.year : commonYear ?? inferred.year) ?? null;
   const albumType = normalizeAlbumType(firstCommonString(commonRecord, ["albumtype", "releasetype", "release_type"]) || inferred.albumType, trackTotal);
   const duration = typeof format?.duration === "number" ? format.duration : null;
   const isrc = common?.isrc?.[0] || null;
@@ -1161,6 +1205,7 @@ type InferredMetadata = {
   albumType?: string;
   artist?: string;
   discNumber?: number;
+  structuredPath?: boolean;
   title?: string;
   trackNumber?: number;
   year?: number;
@@ -1194,6 +1239,7 @@ function inferMetadataFromPath(relativePath: string): InferredMetadata {
   const structuredArtist = knownMetadataValue(structuredFilename.artist);
   const structuredAlbumArtist = knownMetadataValue(structuredFilename.albumArtist || structuredFilename.artist);
   const structuredAlbum = knownMetadataValue(structuredFilename.album);
+  const structuredPath = hasCompleteStructuredPathIdentity(structuredFilename);
 
   return {
     album: album ?? structuredAlbum ?? knownMetadataValue(filename.album),
@@ -1201,10 +1247,51 @@ function inferMetadataFromPath(relativePath: string): InferredMetadata {
     albumType: structuredFolder?.albumType,
     artist: structuredArtist ?? knownMetadataValue(filename.artist) ?? albumArtist ?? structuredAlbumArtist,
     discNumber: structuredFilename.discNumber ?? filename.discNumber,
+    structuredPath,
     title: structuredFilename.title ?? filename.title,
     trackNumber: structuredFilename.trackNumber ?? filename.trackNumber,
     year: structuredFolder?.year ?? structuredFilename.year ?? undefined
   };
+}
+
+function hasCompleteStructuredPathIdentity(value: InferredMetadata) {
+  return Boolean(value.artist && value.album && value.title && value.trackNumber);
+}
+
+function structuredPathIdentityReasonForTags(
+  inferred: InferredMetadata,
+  tags: {
+    album?: string;
+    albumArtist?: string;
+    artist?: string;
+    hasPlaceholderIdentityTag: boolean;
+    title?: string;
+    trackNumber: number | null;
+    year: number | null;
+  }
+): StructuredPathIdentityReason | null {
+  if (!inferred.structuredPath || !hasCompleteStructuredPathIdentity(inferred)) {
+    return null;
+  }
+
+  if (!tags.artist || !tags.album) {
+    return tags.hasPlaceholderIdentityTag ? "placeholder-tags" : "missing-tags";
+  }
+
+  const albumArtist = tags.albumArtist || tags.artist;
+  const conflicts = [
+    metadataTextDiffers(inferred.albumArtist || inferred.artist || "", albumArtist),
+    metadataTextDiffers(inferred.album || "", tags.album),
+    Boolean(tags.title && metadataTextDiffers(inferred.title || "", tags.title)),
+    Boolean(tags.trackNumber && inferred.trackNumber && tags.trackNumber !== inferred.trackNumber),
+    Boolean(tags.year && inferred.year && tags.year !== inferred.year)
+  ].filter(Boolean).length;
+
+  if (tags.title && hasMeaningfulPathTitleVersion(inferred.title || "", tags.title, inferred.albumArtist || inferred.artist || albumArtist)) {
+    return "conflicting-tags";
+  }
+
+  return conflicts >= 3 ? "conflicting-tags" : null;
 }
 
 function inferStructuredTrackFilename(
@@ -1475,16 +1562,38 @@ function normalizeAlbumType(value?: string, trackTotal?: number | null) {
   return albumType ? titleCaseAlbumType(albumType) : "";
 }
 
-function knownMetadataValue(value?: string) {
-  return value && !isUnknownMetadataValue(value) ? value.trim() : undefined;
+function knownMetadataValue(value: unknown) {
+  return typeof value === "string" && value.trim() && !isUnknownMetadataValue(value) ? value.trim() : undefined;
 }
 
-function isUnknownMetadataValue(value?: string) {
-  const normalized = normalizeForMatch(value ?? "", { removeBracketedText: false })
+function isUnknownMetadataValue(value: unknown) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const normalized = normalizeForMatch(value, { removeBracketedText: false })
     .replace(/\b(?:\d{4}|unknown year)\b/g, "")
     .trim();
 
   return !normalized || normalized === "unknown artist" || normalized === "unknown album" || normalized === "unknown track";
+}
+
+function metadataTextDiffers(left: string, right: string) {
+  return normalizeForMatch(left, { removeBracketedText: false }) !== normalizeForMatch(right, { removeBracketedText: false });
+}
+
+function hasMeaningfulPathTitleVersion(pathTitle: string, tagTitle: string, albumArtist: string) {
+  const match = pathTitle.match(/^(?<base>.+?)\s+\((?<suffix>[^)]*)\)\s*$/);
+
+  if (!match?.groups) {
+    return false;
+  }
+
+  return (
+    normalizeForMatch(match.groups.base, { removeBracketedText: false }) ===
+      normalizeForMatch(tagTitle, { removeBracketedText: false }) &&
+    !titleSuffixIsNoise(match.groups.base, match.groups.suffix, albumArtist)
+  );
 }
 
 function titleCaseAlbumType(value: string) {

@@ -9,6 +9,7 @@ import {
   CircleAlert,
   CopyX,
   Database,
+  ExternalLink,
   FileQuestion,
   FolderInput,
   FolderX,
@@ -93,6 +94,7 @@ const libraryArtistPageSize = 25;
 const unindexedPageSize = 150;
 const organizePreviewPageSize = 150;
 const themeStorageKey = "naviclean-theme";
+const navicleanIssuesUrl = "https://github.com/thedinz/NaviClean/issues/new";
 const trashAudioExtensions = new Set([
   ".aac",
   ".aif",
@@ -1542,6 +1544,16 @@ function UnindexedPage({
             <span>{busy === "trash" ? "Moving" : "Move selected to trash"}</span>
           </button>
         </div>
+      </div>
+      <div className="notice-bar diagnostics-feedback" role="note">
+        <CircleAlert size={18} aria-hidden="true" />
+        <span>
+          Match issue? Please report it on GitHub with the file path, reason, and Navidrome search details so NaviClean can fix the matcher.
+        </span>
+        <a href={navicleanIssuesUrl} target="_blank" rel="noreferrer">
+          <span>Open issue</span>
+          <ExternalLink size={15} aria-hidden="true" />
+        </a>
       </div>
       <div className="organize-preview-tools">
         <div className="segmented-control organize-filter" role="radiogroup" aria-label="Unindexed reason">
