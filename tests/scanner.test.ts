@@ -177,6 +177,118 @@ test("scanner unwraps unknown folders around a nested standard filename", async 
   }
 });
 
+test("scanner ignores unknown placeholder tags when a structured path exposes real metadata", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-unknown-tags-"));
+  const sourceRelativePath =
+    "[Unknown Artist]/[Unknown Artist] - [Unknown Album] (2018)/[Unknown Artist] - [Unknown Album] (2018) - 01 - Russ - ZOO (2018) - 01 - The Flute Song.mp3";
+  const targetRelativePath =
+    "Russ/Russ - ZOO (2018)/Russ - ZOO (2018) - 01 - The Flute Song.mp3";
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      id3TaggedMp3({
+        album: "[Unknown Album]",
+        albumArtist: "[Unknown Artist]",
+        artist: "[Unknown Artist]",
+        title: "[Unknown Artist] - [Unknown Album] (2018) - 01 - Russ - ZOO (2018) - 01 - The Flute Song",
+        track: "1",
+        year: "2018"
+      })
+    );
+
+    const result = await scanLibrary(settings(root));
+    const track = result.tracks[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.artist, "Russ");
+    assert.equal(track?.albumArtist, "Russ");
+    assert.equal(track?.album, "ZOO");
+    assert.equal(track?.title, "The Flute Song");
+    assert.equal(track?.trackNumber, 1);
+    assert.equal(track?.year, 2018);
+    assert.equal(track?.issues.includes("Missing artist"), false);
+    assert.equal(track?.issues.includes("Missing album"), false);
+    assert.ok(track?.issues.includes("Embedded metadata used unknown placeholders; used structured path metadata"));
+    assert.equal(track?.targetRelativePath, targetRelativePath);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("scanner keeps structured path metadata when embedded tags point at a different release version", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-path-conflict-"));
+  const originalFetch = globalThis.fetch;
+  const sourceRelativePath =
+    "for KING & COUNTRY/for KING & COUNTRY - Burn The Ships (Deluxe Edition - Remixes & Collaborations) (2021)/for KING & COUNTRY - Burn The Ships (Deluxe Edition - Remixes & Collaborations) (2021) - 17 - God Only Knows (Timbaland Remix).mp3";
+  const contents = id3TaggedMp3({
+    album: "Burn the Ships",
+    albumArtist: "for KING & COUNTRY",
+    artist: "for KING & COUNTRY",
+    title: "God Only Knows",
+    track: "3",
+    year: "2018"
+  });
+
+  globalThis.fetch = navidromeFetchForSongs([
+    {
+      album: {
+        id: "album-burn-the-ships",
+        name: "Burn the Ships",
+        artist: "for KING & COUNTRY",
+        year: 2018,
+        songCount: 1
+      },
+      song: {
+        id: "song-god-only-knows",
+        title: "God Only Knows",
+        artist: "for KING & COUNTRY",
+        albumArtist: "for KING & COUNTRY",
+        album: "Burn the Ships",
+        track: 3,
+        discNumber: 1,
+        year: 2018,
+        size: contents.length,
+        path: "for KING & COUNTRY/for KING & COUNTRY - Burn the Ships (2018)/for KING & COUNTRY - Burn the Ships (2018) - 03 - God Only Knows.mp3",
+        suffix: "mp3"
+      }
+    }
+  ]);
+
+  try {
+    const filePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+
+    const scanSettings = settings(root);
+    scanSettings.navidrome.baseUrl = "http://navidrome.local";
+    scanSettings.navidrome.username = "admin";
+    scanSettings.navidrome.password = "password";
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+    const plan = await buildOrganizePlan(result.tracks, scanSettings);
+    const item = plan.items[0];
+
+    assert.equal(result.tracks.length, 1);
+    assert.equal(track?.targetSource, undefined);
+    assert.equal(track?.artist, "for KING & COUNTRY");
+    assert.equal(track?.album, "Burn The Ships (Deluxe Edition - Remixes & Collaborations)");
+    assert.equal(track?.title, "God Only Knows (Timbaland Remix)");
+    assert.equal(track?.trackNumber, 17);
+    assert.equal(track?.year, 2021);
+    assert.equal(track?.navidromeEnrichment?.code, "possible-stale-scan");
+    assert.ok(track?.issues.includes("Embedded metadata conflicted with structured path; used structured path metadata"));
+    assert.equal(item?.status, "same");
+    assert.equal(item?.targetSource, "naviclean");
+    assert.equal(item?.targetRelativePath, sourceRelativePath);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("scanner does not repair legitimate non-Latin titles as mojibake", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-unicode-title-"));
   const sourceRelativePath =
@@ -1294,6 +1406,51 @@ function wavSilence(durationSeconds: number) {
   buffer.writeUInt32LE(dataSize, 40);
 
   return buffer;
+}
+
+function id3TaggedMp3(tags: {
+  album: string;
+  albumArtist: string;
+  artist: string;
+  title: string;
+  track: string;
+  year: string;
+}) {
+  const frames = [
+    id3TextFrame("TIT2", tags.title),
+    id3TextFrame("TPE1", tags.artist),
+    id3TextFrame("TPE2", tags.albumArtist),
+    id3TextFrame("TALB", tags.album),
+    id3TextFrame("TRCK", tags.track),
+    id3TextFrame("TYER", tags.year)
+  ];
+  const body = Buffer.concat(frames);
+
+  return Buffer.concat([
+    Buffer.from("ID3", "ascii"),
+    Buffer.from([3, 0, 0]),
+    id3SynchsafeSize(body.length),
+    body,
+    Buffer.from("audio", "ascii")
+  ]);
+}
+
+function id3TextFrame(id: string, value: string) {
+  const content = Buffer.concat([Buffer.from([0]), Buffer.from(value, "latin1")]);
+  const header = Buffer.alloc(10);
+
+  header.write(id, 0, 4, "ascii");
+  header.writeUInt32BE(content.length, 4);
+  return Buffer.concat([header, content]);
+}
+
+function id3SynchsafeSize(size: number) {
+  return Buffer.from([
+    (size >> 21) & 0x7f,
+    (size >> 14) & 0x7f,
+    (size >> 7) & 0x7f,
+    size & 0x7f
+  ]);
 }
 
 function settings(libraryPath: string): PrivateSettings {
