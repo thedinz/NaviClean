@@ -76,6 +76,10 @@ NaviClean provider downloads use the same standard target-path renderer as the o
 
 When Navidrome connection settings are saved, NaviClean uses the local Navidrome Subsonic API to resolve artist and album artwork for Library cards. Artwork is proxied through NaviClean so browser image requests use the existing NaviClean session instead of exposing Navidrome tokens. Cards fall back to generated identity tiles when Navidrome is not configured or does not return artwork.
 
+## Audio conversion
+
+The Convert page groups the latest scan catalog by source extension and lets you convert selected tracks to MP3, FLAC, M4A, Opus, Ogg, or WAV with `ffmpeg`. Conversions stay inside the configured music library, write to a temporary output first, delete the original only after a successful conversion, and trigger a fresh NaviClean scan when the job completes.
+
 ## Local development
 
 ```bash
