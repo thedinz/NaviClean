@@ -76,6 +76,7 @@ import type {
   SpotifyArtistSummary,
   SpotifyCatalogDownloadJob,
   SpotifyCatalogDownloadPreviewResult,
+  SpotifyTrackSummary,
   TrackFile,
   UnindexedFilesView,
   UnindexedNavidromeCandidate,
@@ -3883,6 +3884,11 @@ function DiscoverPage() {
   const selectedMissingTrackIds = album?.tracks
     .filter((track) => selectedTrackIds[track.id] && !track.present)
     .map((track) => track.id) ?? [];
+  const selectableTrackIds = album?.tracks.filter((track) => !track.present).map((track) => track.id) ?? [];
+  const allSelectableTracksSelected =
+    selectableTrackIds.length > 0 && selectedMissingTrackIds.length === selectableTrackIds.length;
+  const someSelectableTracksSelected = selectedMissingTrackIds.length > 0;
+  const trackSelectionDisabled = busy === "download-preview" || isCatalogDownloadJobActive(downloadJob);
   const canStartDownload = Boolean(
     album &&
       downloadPreview?.downloadableCount &&
@@ -3964,6 +3970,16 @@ function DiscoverPage() {
     } finally {
       setBusy(null);
     }
+  };
+
+  const setAllMissingTracksSelected = (selected: boolean) => {
+    setSelectedTrackIds(selected ? missingTrackSelection(album?.tracks ?? []) : {});
+    clearDownloadState();
+    setNotice(
+      selected
+        ? `Selected all ${selectableTrackIds.length} missing tracks.`
+        : "Cleared the track selection."
+    );
   };
 
   const prepareDownloadPreview = async () => {
@@ -4152,25 +4168,61 @@ function DiscoverPage() {
             <div>
               <span className="eyebrow">{album.artist.name}</span>
               <h2>{album.name}</h2>
-            </div>
-            <button
-              className="primary-button"
-              type="button"
-              onClick={prepareDownloadPreview}
-              disabled={busy === "download-preview" || selectedMissingTrackIds.length === 0}
-            >
-              {busy === "download-preview" ? <Loader2 className="spin" size={18} /> : <Search size={18} />}
-              <span>
-                {busy === "download-preview"
-                  ? `Finding ${downloadPreview?.items.length ?? 0}/${selectedMissingTrackIds.length}`
-                  : "Find sources"}
+              <span className="muted">
+                {selectedMissingTrackIds.length} of {selectableTrackIds.length} missing tracks selected
               </span>
-            </button>
+            </div>
+            <div className="button-row">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setAllMissingTracksSelected(true)}
+                disabled={trackSelectionDisabled || allSelectableTracksSelected || selectableTrackIds.length === 0}
+              >
+                <Check size={18} />
+                <span>Select all</span>
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setAllMissingTracksSelected(false)}
+                disabled={trackSelectionDisabled || !someSelectableTracksSelected}
+              >
+                <Undo2 size={18} />
+                <span>Clear</span>
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={prepareDownloadPreview}
+                disabled={busy === "download-preview" || selectedMissingTrackIds.length === 0}
+              >
+                {busy === "download-preview" ? <Loader2 className="spin" size={18} /> : <Search size={18} />}
+                <span>
+                  {busy === "download-preview"
+                    ? `Finding ${downloadPreview?.items.length ?? 0}/${selectedMissingTrackIds.length}`
+                    : "Find sources"}
+                </span>
+              </button>
+            </div>
           </div>
           <table>
             <thead>
               <tr>
-                <th></th>
+                <th>
+                  <input
+                    aria-label="Select all missing tracks"
+                    type="checkbox"
+                    checked={allSelectableTracksSelected}
+                    disabled={trackSelectionDisabled || selectableTrackIds.length === 0}
+                    ref={(input) => {
+                      if (input) {
+                        input.indeterminate = someSelectableTracksSelected && !allSelectableTracksSelected;
+                      }
+                    }}
+                    onChange={(event) => setAllMissingTracksSelected(event.target.checked)}
+                  />
+                </th>
                 <th>#</th>
                 <th>Track</th>
                 <th>Status</th>
@@ -4184,13 +4236,15 @@ function DiscoverPage() {
                     <input
                       type="checkbox"
                       checked={Boolean(selectedTrackIds[track.id])}
-                      disabled={track.present}
-                      onChange={(event) =>
+                      disabled={track.present || trackSelectionDisabled}
+                      onChange={(event) => {
                         setSelectedTrackIds((current) => ({
                           ...current,
                           [track.id]: event.target.checked
-                        }))
-                      }
+                        }));
+                        clearDownloadState();
+                        setNotice(null);
+                      }}
                     />
                   </td>
                   <td>{track.discNumber}-{track.trackNumber}</td>
@@ -5616,6 +5670,10 @@ export function chunkItems<T>(items: T[], size: number) {
     chunks.push(items.slice(index, index + size));
   }
   return chunks;
+}
+
+export function missingTrackSelection(tracks: SpotifyTrackSummary[]) {
+  return Object.fromEntries(tracks.filter((track) => !track.present).map((track) => [track.id, true]));
 }
 
 export function mergeProviderPreviews(
