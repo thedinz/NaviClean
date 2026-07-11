@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chunkItems, mergeProviderPreviews } from "../src/client/App.js";
-import type { SpotifyCatalogDownloadPreviewResult } from "../src/shared/types.js";
+import { chunkItems, mergeProviderPreviews, missingTrackSelection } from "../src/client/App.js";
+import type { SpotifyCatalogDownloadPreviewResult, SpotifyTrackSummary } from "../src/shared/types.js";
 
 test("provider preview batches keep every selected album track", () => {
   const trackIds = Array.from({ length: 85 }, (_, index) => `track-${index + 1}`);
@@ -21,6 +21,19 @@ test("provider preview batches merge counts, items, and unique warnings", () => 
   assert.equal(merged.failedCount, 5);
   assert.equal(merged.items.length, 12);
   assert.deepEqual(merged.warnings, ["Rate limit"]);
+});
+
+test("album select all includes missing tracks and excludes local tracks", () => {
+  const tracks = [
+    { id: "missing-one", present: false },
+    { id: "local", present: true },
+    { id: "missing-two", present: false }
+  ] as SpotifyTrackSummary[];
+
+  assert.deepEqual(missingTrackSelection(tracks), {
+    "missing-one": true,
+    "missing-two": true
+  });
 });
 
 function preview({
