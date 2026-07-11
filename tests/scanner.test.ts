@@ -1472,7 +1472,7 @@ function settings(libraryPath: string): PrivateSettings {
         market: "US"
       },
       providers: {
-        maxConcurrentDownloads: 1
+        maxConcurrentDownloads: 1, opusQuality: 192, mp3FallbackEnabled: true, mp3FallbackQuality: 320
       },
       discovery: {
         requestsPerMinute: 40

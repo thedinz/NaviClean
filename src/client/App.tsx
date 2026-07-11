@@ -9,6 +9,7 @@ import {
   CircleAlert,
   CopyX,
   Database,
+  Download,
   ExternalLink,
   FileQuestion,
   FolderInput,
@@ -4592,6 +4593,66 @@ function SettingsPage({
           {spotifyBusy ? <Loader2 className="spin" size={18} /> : <Activity size={18} />}
           <span>{spotifyBusy ? "Testing" : "Test"}</span>
         </button>
+      </fieldset>
+
+      <fieldset className="panel">
+        <legend>
+          <Download size={18} />
+          Provider downloads
+        </legend>
+        <label>
+          Opus quality cap
+          <select
+            value={settings.catalog.providers.opusQuality}
+            onChange={(event) => setSettings({
+              ...settings,
+              catalog: {
+                ...settings.catalog,
+                providers: {
+                  ...settings.catalog.providers,
+                  opusQuality: Number(event.target.value) as 160 | 192 | 256
+                }
+              }
+            })}
+          >
+            <option value={160}>160 kbps</option>
+            <option value={192}>192 kbps (default)</option>
+            <option value={256}>256 kbps</option>
+          </select>
+        </label>
+        <label>
+          MP3 fallback quality
+          <select
+            value={settings.catalog.providers.mp3FallbackEnabled
+              ? settings.catalog.providers.mp3FallbackQuality
+              : "off"}
+            onChange={(event) => {
+              const enabled = event.target.value !== "off";
+              setSettings({
+                ...settings,
+                catalog: {
+                  ...settings.catalog,
+                  providers: {
+                    ...settings.catalog.providers,
+                    mp3FallbackEnabled: enabled,
+                    mp3FallbackQuality: enabled
+                      ? Number(event.target.value) as 192 | 256 | 320
+                      : settings.catalog.providers.mp3FallbackQuality
+                  }
+                }
+              });
+            }}
+          >
+            <option value="off">Off</option>
+            <option value={192}>192 kbps</option>
+            <option value={256}>256 kbps</option>
+            <option value={320}>320 kbps (default)</option>
+          </select>
+        </label>
+        <div className="notice-bar safety">
+          <strong>Quality values are maximums</strong>
+          <span>Provider audio below the selected cap stays at its source bitrate and is not upconverted.</span>
+        </div>
       </fieldset>
 
       <fieldset className="panel wide-settings">

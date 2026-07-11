@@ -19,6 +19,9 @@ export type SpotifySettingsView = {
 
 export type ProviderSettingsView = {
   maxConcurrentDownloads: number;
+  opusQuality: 160 | 192 | 256;
+  mp3FallbackEnabled: boolean;
+  mp3FallbackQuality: 192 | 256 | 320;
 };
 
 export type DiscoverySettingsView = {
