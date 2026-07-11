@@ -23,7 +23,7 @@ import { spotifyBuMetadataTagsForSpotifyTrack } from "./spotifybu.js";
 import { normalizeForMatch, sha1, toPosixRelative } from "./utils.js";
 import { buildSpotifyDownloadPlan } from "./spotify.js";
 
-type CatalogProviderTrack = {
+export type CatalogProviderTrack = {
   album: string;
   albumId: string;
   albumArtist: string;
@@ -86,7 +86,22 @@ type ExecFileError = Error & {
 type ProviderDownloadResult = {
   bytesWritten: number;
   destinationPath: string;
+  format: ProviderDownloadFormat;
+  quality: ProviderDownloadQuality;
   relativePath: string;
+};
+
+export type ProviderDownloadFormat = "opus" | "mp3";
+export type ProviderDownloadQuality = 160 | 192 | 256 | 320;
+
+type ProviderDownloadProfile = {
+  bitrate: number;
+  codec: string;
+  container: string;
+  extension: ".opus" | ".mp3";
+  format: ProviderDownloadFormat;
+  quality: ProviderDownloadQuality;
+  qualityScore: number;
 };
 
 type ProviderDownloadLog = {
@@ -96,7 +111,9 @@ type ProviderDownloadLog = {
     bytesWritten: number;
     confirmedAt: string;
     destinationPath: string;
+    format: ProviderDownloadFormat;
     providerId: CatalogProviderId;
+    quality: ProviderDownloadQuality;
     relativePath: string;
     sourceUrl: string;
     trackId: string;
@@ -118,13 +135,23 @@ const confidentYoutubeCandidateScore = 94;
 const stagingRootSegments = [".naviclean", "tmp", "provider-downloads"];
 const provenanceLogSegments = [".naviclean", "provider-downloads.json"];
 const defaultYtDlpJsRuntime = "node";
-const providerDownloadAudioFormat = "m4a";
-const providerDownloadAudioQuality = "256K";
-const providerDownloadExtension = ".m4a";
-const providerDownloadBitrate = 256_000;
-const providerDownloadCodec = "AAC";
-const providerDownloadContainer = "M4A";
-const providerDownloadQualityScore = 936;
+export function providerDownloadProfile(
+  settings: PrivateSettings,
+  format: ProviderDownloadFormat = "opus"
+): ProviderDownloadProfile {
+  const quality = format === "opus"
+    ? settings.catalog.providers.opusQuality
+    : settings.catalog.providers.mp3FallbackQuality;
+  return {
+    bitrate: quality * 1000,
+    codec: format === "opus" ? "Opus" : "MP3",
+    container: format === "opus" ? "Ogg Opus" : "MPEG",
+    extension: format === "opus" ? ".opus" : ".mp3",
+    format,
+    quality,
+    qualityScore: format === "opus" ? 900 + quality / 10 : 700 + quality / 10
+  };
+}
 const jobs = new Map<string, SpotifyCatalogDownloadJob>();
 
 export async function previewSpotifyCatalogDownloads(
@@ -559,10 +586,42 @@ async function downloadProviderTrack(
   candidate: CatalogProviderCandidate,
   targetRelativePath: string
 ): Promise<ProviderDownloadResult> {
+  return withProviderFormatFallback(settings, (format) =>
+    downloadProviderTrackAsFormat(settings, track, candidate, targetRelativePath, format)
+  );
+}
+
+export async function withProviderFormatFallback<T>(
+  settings: PrivateSettings,
+  attempt: (format: ProviderDownloadFormat) => Promise<T>
+) {
+  try {
+    return await attempt("opus");
+  } catch (opusError) {
+    if (!settings.catalog.providers.mp3FallbackEnabled || !isProviderFormatFailure(opusError)) {
+      throw opusError;
+    }
+    try {
+      return await attempt("mp3");
+    } catch (mp3Error) {
+      throw new Error(`Provider download failed as Opus and MP3 fallback. Opus: ${errorMessage(opusError)} MP3: ${errorMessage(mp3Error)}`);
+    }
+  }
+}
+
+async function downloadProviderTrackAsFormat(
+  settings: PrivateSettings,
+  track: CatalogProviderTrack,
+  candidate: CatalogProviderCandidate,
+  targetRelativePath: string,
+  format: ProviderDownloadFormat
+): Promise<ProviderDownloadResult> {
   const providerId = assertProvider(candidate.providerId);
   const source = resolveProviderSource(providerId, candidate.url);
   const libraryPath = path.resolve(settings.naming.libraryPath);
-  const targetPath = await nextAvailableFilePath(path.resolve(libraryPath, ...targetRelativePath.split("/")));
+  const profile = providerDownloadProfile(settings, format);
+  const requestedRelativePath = replacePathExtension(targetRelativePath, profile.extension);
+  const targetPath = await nextAvailableFilePath(path.resolve(libraryPath, ...requestedRelativePath.split("/")));
   const targetDirectory = path.dirname(targetPath);
   const fileBase = path.parse(targetPath).name;
   const stagingDirectory = await createDownloadStagingDirectory(libraryPath);
@@ -574,17 +633,22 @@ async function downloadProviderTrack(
   try {
     const stdout = await runYtDlp({
       downloadUrl: source.sourceUrl,
-      outputTemplate
+      format,
+      outputTemplate,
+      quality: profile.quality
     });
-    const stagedPath = await findDownloadedPath({
+    let stagedPath = await findDownloadedPath({
       beforePaths,
+      format,
       outputTemplate,
       stdout,
       targetDirectory: stagingDirectory
     });
 
+    stagedPath = await normalizeStagedAudioFile({ format, quality: profile.quality, stagedPath });
+
+    await tagDownloadedFile(stagedPath, track);
     await fs.rename(stagedPath, targetPath);
-    await tagDownloadedFile(targetPath, track);
 
     const fileStats = await fs.stat(targetPath);
     const relativePath = toPosixRelative(libraryPath, targetPath);
@@ -595,7 +659,9 @@ async function downloadProviderTrack(
       bytesWritten: fileStats.size,
       confirmedAt: new Date().toISOString(),
       destinationPath: targetPath,
+      format,
       providerId,
+      quality: profile.quality,
       relativePath,
       sourceUrl: source.sourceUrl,
       trackId: track.id,
@@ -605,6 +671,8 @@ async function downloadProviderTrack(
     return {
       bytesWritten: fileStats.size,
       destinationPath: targetPath,
+      format,
+      quality: profile.quality,
       relativePath
     };
   } finally {
@@ -617,10 +685,14 @@ async function downloadProviderTrack(
 
 async function runYtDlp({
   downloadUrl,
-  outputTemplate
+  format,
+  outputTemplate,
+  quality
 }: {
   downloadUrl: string;
+  format: ProviderDownloadFormat;
   outputTemplate: string;
+  quality: ProviderDownloadQuality;
 }) {
   const timeoutMs = Number(process.env.NAVICLEAN_PROVIDER_DOWNLOAD_TIMEOUT_MS);
   let stdout: Buffer | string;
@@ -628,30 +700,7 @@ async function runYtDlp({
   try {
     ({ stdout } = await execFileAsync(
       "yt-dlp",
-      [
-        "--no-playlist",
-        "--no-overwrites",
-        "--restrict-filenames",
-        "--extract-audio",
-        "--audio-format",
-        providerDownloadAudioFormat,
-        "--audio-quality",
-        providerDownloadAudioQuality,
-        "--format",
-        "bestaudio[abr<=320]/bestaudio/best",
-        ...ytDlpJsRuntimeArgs(),
-        "--sleep-requests",
-        "2",
-        "--sleep-interval",
-        "5",
-        "--max-sleep-interval",
-        "10",
-        "--print",
-        "after_move:filepath",
-        "--output",
-        outputTemplate,
-        downloadUrl
-      ],
+      providerYtDlpArgs({ downloadUrl, format, outputTemplate, quality }),
       {
         maxBuffer: 1024 * 1024 * 2,
         timeout: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : defaultProviderDownloadTimeoutMs
@@ -664,6 +713,114 @@ async function runYtDlp({
   return stdout.toString();
 }
 
+export function providerYtDlpArgs({
+  downloadUrl,
+  format,
+  outputTemplate,
+  quality
+}: {
+  downloadUrl: string;
+  format: ProviderDownloadFormat;
+  outputTemplate: string;
+  quality: ProviderDownloadQuality;
+}) {
+  return [
+    "--no-playlist", "--no-overwrites", "--restrict-filenames", "--extract-audio",
+    "--audio-format", format, "--audio-quality", `${quality}K`,
+    "--format", `bestaudio[abr<=${quality}]/bestaudio/best`,
+    ...ytDlpJsRuntimeArgs(),
+    "--sleep-requests", "2", "--sleep-interval", "5", "--max-sleep-interval", "10",
+    "--print", "after_move:filepath", "--output", outputTemplate, downloadUrl
+  ];
+}
+
+export async function normalizeStagedAudioFile({
+  format,
+  quality,
+  stagedPath
+}: {
+  format: ProviderDownloadFormat;
+  quality: ProviderDownloadQuality;
+  stagedPath: string;
+}) {
+  if (!(await shouldNormalizeStagedAudioFile({ format, quality, stagedPath }))) {
+    return stagedPath;
+  }
+
+  const parsed = path.parse(stagedPath);
+  const targetPath = path.join(parsed.dir, `${parsed.name}.naviclean-normalized.${format}`);
+  try {
+    await execFileAsync(
+      "ffmpeg",
+      [
+        "-y", "-i", stagedPath, "-map", "0:a:0", "-vn", "-map_metadata", "-1",
+        "-codec:a", format === "opus" ? "libopus" : "libmp3lame",
+        "-b:a", `${quality}k`,
+        ...(format === "mp3" ? ["-id3v2_version", "3"] : []),
+        targetPath
+      ],
+      { maxBuffer: 1024 * 1024 * 2, timeout: 60_000 }
+    );
+  } catch (error) {
+    throw new Error(`Provider audio normalization failed: ${formatFfmpegError(error)}`);
+  }
+
+  await fs.rm(stagedPath, { force: true }).catch(() => undefined);
+  return targetPath;
+}
+
+export async function shouldNormalizeStagedAudioFile({
+  format,
+  quality,
+  stagedPath
+}: {
+  format: ProviderDownloadFormat;
+  quality: ProviderDownloadQuality;
+  stagedPath: string;
+}) {
+  if (path.extname(stagedPath).toLowerCase() !== `.${format}`) {
+    return true;
+  }
+
+  const encoding = await probeStagedAudioEncoding(stagedPath).catch(() => null);
+  if (!encoding || encoding.codecName !== format) {
+    return true;
+  }
+  return encoding.bitRate ? encoding.bitRate > quality * 1000 * 1.25 : false;
+}
+
+async function probeStagedAudioEncoding(filePath: string) {
+  const { stdout } = await execFileAsync(
+    "ffprobe",
+    ["-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", filePath],
+    { maxBuffer: 1024 * 1024, timeout: 30_000 }
+  );
+  const probe = JSON.parse(stdout.toString()) as {
+    format?: { bit_rate?: string };
+    streams?: Array<{ bit_rate?: string; codec_name?: string; codec_type?: string }>;
+  };
+  const audio = probe.streams?.find((stream) => stream.codec_type === "audio");
+  const bitrate = Number(audio?.bit_rate ?? probe.format?.bit_rate);
+  return {
+    bitRate: Number.isFinite(bitrate) && bitrate > 0 ? bitrate : null,
+    codecName: audio?.codec_name?.toLowerCase() ?? ""
+  };
+}
+
+function isProviderFormatFailure(error: unknown) {
+  const message = errorMessage(error).toLowerCase();
+  return [
+    "audio conversion failed", "could not write header", "encoder", "ffmpeg",
+    "invalid audio format", "libopus", "postprocessing", "requested audio format",
+    "unsupported codec", "provider audio normalization failed"
+  ].some((needle) => message.includes(needle));
+}
+
+function replacePathExtension(filePath: string, extension: string) {
+  const parsed = path.posix.parse(filePath.replace(/\\/g, "/"));
+  return path.posix.join(parsed.dir, `${parsed.name}${extension}`);
+}
+
 async function tagDownloadedFile(filePath: string, track: CatalogProviderTrack) {
   const parsedPath = path.parse(filePath);
   const tempPath = path.join(parsedPath.dir, `${parsedPath.name}.naviclean-tagging${parsedPath.ext}`);
@@ -674,17 +831,9 @@ async function tagDownloadedFile(filePath: string, track: CatalogProviderTrack) 
     coverPath = await downloadSpotifyAlbumCover(parsedPath.dir, parsedPath.name, track.albumImageUrl);
     await writeTaggedAudioFile(filePath, tempPath, metadataArgs, coverPath);
     await fs.rename(tempPath, filePath);
-  } catch {
+  } catch (error) {
     await fs.rm(tempPath, { force: true }).catch(() => undefined);
-
-    if (coverPath) {
-      try {
-        await writeTaggedAudioFile(filePath, tempPath, metadataArgs, null);
-        await fs.rename(tempPath, filePath);
-      } catch {
-        await fs.rm(tempPath, { force: true }).catch(() => undefined);
-      }
-    }
+    throw new Error(`Could not tag provider audio: ${formatFfmpegError(error)}`);
   } finally {
     if (coverPath) {
       await fs.rm(coverPath, { force: true }).catch(() => undefined);
@@ -737,27 +886,36 @@ export function providerMetadataArgsForSpotifyTrack(track: CatalogProviderTrack)
   return metadataArgs;
 }
 
-async function writeTaggedAudioFile(
+export async function writeTaggedAudioFile(
   filePath: string,
   tempPath: string,
   metadataArgs: string[],
   coverPath: string | null
 ) {
-  await execFileAsync(
-    "ffmpeg",
-    [
-      "-y",
-      "-i",
-      filePath,
-      ...(coverPath ? ["-i", coverPath] : []),
+  const isOpus = path.extname(tempPath).toLowerCase() === ".opus";
+  const pictureMetadataPath = coverPath && isOpus
+    ? await writeOggOpusPictureMetadataFile(tempPath, coverPath)
+    : null;
+
+  try {
+    await execFileAsync(
+      "ffmpeg",
+      [
+        "-y",
+        "-i",
+        filePath,
+        ...(pictureMetadataPath ? ["-f", "ffmetadata", "-i", pictureMetadataPath] : []),
+        ...(coverPath && !isOpus ? ["-i", coverPath] : []),
       "-map",
       "0:a:0",
-      ...(coverPath ? ["-map", "1:v:0"] : []),
+      ...(coverPath && !isOpus ? ["-map", "1:v:0"] : []),
       "-map_metadata",
+      pictureMetadataPath ? "1" : "-1",
+      "-map_metadata:s:a:0",
       "-1",
       "-c:a",
       "copy",
-      ...(coverPath
+      ...(coverPath && !isOpus
         ? [
             "-c:v",
             "mjpeg",
@@ -769,16 +927,59 @@ async function writeTaggedAudioFile(
             "comment=Cover (front)"
           ]
         : []),
-      "-id3v2_version",
-      "3",
+      ...(path.extname(tempPath).toLowerCase() === ".mp3" ? ["-id3v2_version", "3"] : []),
       ...metadataArgs,
       tempPath
-    ],
-    {
-      maxBuffer: 1024 * 1024 * 2,
-      timeout: 60_000
+      ],
+      {
+        maxBuffer: 1024 * 1024 * 2,
+        timeout: 60_000
+      }
+    );
+  } finally {
+    if (pictureMetadataPath) {
+      await fs.rm(pictureMetadataPath, { force: true }).catch(() => undefined);
     }
+  }
+}
+
+export async function writeOggOpusPictureMetadataFile(audioTempPath: string, coverPath: string) {
+  const parsedPath = path.parse(audioTempPath);
+  const metadataPath = path.join(parsedPath.dir, `${parsedPath.name}.naviclean-picture.ffmetadata`);
+  const pictureBlock = await flacPictureBlockBase64(coverPath);
+  await fs.writeFile(
+    metadataPath,
+    [";FFMETADATA1", `METADATA_BLOCK_PICTURE=${escapeFfmetadataValue(pictureBlock)}`, ""].join("\n"),
+    "utf8"
   );
+  return metadataPath;
+}
+
+function escapeFfmetadataValue(value: string) {
+  return value.replaceAll("\\", "\\\\").replaceAll("\n", "\\\n").replaceAll("=", "\\=").replaceAll(";", "\\;").replaceAll("#", "\\#");
+}
+
+async function flacPictureBlockBase64(coverPath: string) {
+  const imageBytes = await fs.readFile(coverPath);
+  const mimeBytes = Buffer.from(coverMimeType(coverPath), "utf8");
+  const descriptionBytes = Buffer.from("Cover (front)", "utf8");
+  return Buffer.concat([
+    uint32Be(3), uint32Be(mimeBytes.length), mimeBytes,
+    uint32Be(descriptionBytes.length), descriptionBytes,
+    uint32Be(0), uint32Be(0), uint32Be(0), uint32Be(0),
+    uint32Be(imageBytes.length), imageBytes
+  ]).toString("base64");
+}
+
+function coverMimeType(coverPath: string) {
+  const extension = path.extname(coverPath).toLowerCase();
+  return extension === ".png" ? "image/png" : extension === ".webp" ? "image/webp" : "image/jpeg";
+}
+
+function uint32Be(value: number) {
+  const bytes = Buffer.alloc(4);
+  bytes.writeUInt32BE(value);
+  return bytes;
 }
 
 async function downloadSpotifyAlbumCover(
@@ -860,19 +1061,20 @@ function targetRelativePathForTrack(settings: PrivateSettings, track: CatalogPro
   return targetForTrack(providerTrackToTrackFile(settings, track), settings).targetRelativePath;
 }
 
-function providerTrackToTrackFile(settings: PrivateSettings, track: CatalogProviderTrack): TrackFile {
+export function providerTrackToTrackFile(settings: PrivateSettings, track: CatalogProviderTrack): TrackFile {
   const root = path.resolve(settings.naming.libraryPath);
   const duration = Math.round(track.durationMs / 1000);
+  const profile = providerDownloadProfile(settings);
 
   return {
-    absolutePath: path.join(root, ".naviclean", "planned", `${track.id}${providerDownloadExtension}`),
+    absolutePath: path.join(root, ".naviclean", "planned", `${track.id}${profile.extension}`),
     album: track.album,
     albumArtist: track.albumArtist,
     albumType: track.albumType,
-    bitrate: providerDownloadBitrate,
+    bitrate: profile.bitrate,
     bitsPerSample: null,
-    codec: providerDownloadCodec,
-    container: providerDownloadContainer,
+    codec: profile.codec,
+    container: profile.container,
     discNumber: track.discNumber,
     discTotal: null,
     duplicateKey: buildDuplicateKey({
@@ -886,13 +1088,13 @@ function providerTrackToTrackFile(settings: PrivateSettings, track: CatalogProvi
       year: track.albumReleaseYear
     }),
     duration,
-    extension: providerDownloadExtension,
+    extension: profile.extension,
     id: sha1(`spotify:${track.id}`),
     issues: [],
     lossless: false,
     mtimeMs: 0,
-    qualityScore: providerDownloadQualityScore,
-    relativePath: `.naviclean/planned/${track.id}${providerDownloadExtension}`,
+    qualityScore: profile.qualityScore,
+    relativePath: `.naviclean/planned/${track.id}${profile.extension}`,
     sampleRate: null,
     size: 0,
     targetPath: "",
@@ -1194,11 +1396,13 @@ async function matchingOutputPaths(directory: string, fileBase: string) {
 
 async function findDownloadedPath({
   beforePaths,
+  format,
   outputTemplate,
   stdout,
   targetDirectory
 }: {
   beforePaths: Set<string>;
+  format: ProviderDownloadFormat;
   outputTemplate: string;
   stdout: string;
   targetDirectory: string;
@@ -1215,7 +1419,7 @@ async function findDownloadedPath({
     }
   }
 
-  const expectedOutputPath = path.resolve(outputTemplate.replace("%(ext)s", providerDownloadAudioFormat));
+  const expectedOutputPath = path.resolve(outputTemplate.replace("%(ext)s", format));
 
   if (!beforePaths.has(expectedOutputPath) && (await canAccess(expectedOutputPath, constants.F_OK))) {
     return expectedOutputPath;
@@ -1462,6 +1666,22 @@ function formatYtDlpError(error: unknown, fallbackMessage: string, sourceUrl?: s
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function formatFfmpegError(error: unknown) {
+  const execError = error as ExecFileError;
+  const output = [
+    bufferishToString(execError.stderr),
+    bufferishToString(execError.stdout),
+    error instanceof Error ? error.message : ""
+  ].filter(Boolean).join("\n");
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .reverse()
+    .find((line) => /error|failed|invalid|unable/i.test(line))
+    ?? (error instanceof Error ? error.message : "ffmpeg failed");
 }
 
 function isYtDlpDiagnosticLine(line: string) {

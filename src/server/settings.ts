@@ -22,6 +22,9 @@ export type PrivateSettings = {
     };
     providers: {
       maxConcurrentDownloads: number;
+      opusQuality: 160 | 192 | 256;
+      mp3FallbackEnabled: boolean;
+      mp3FallbackQuality: 192 | 256 | 320;
     };
     discovery: {
       requestsPerMinute: number;
@@ -88,7 +91,10 @@ const defaultCatalog = {
     market: process.env.SPOTIFY_MARKET || "US"
   },
   providers: {
-    maxConcurrentDownloads: 1
+    maxConcurrentDownloads: 1,
+    opusQuality: 192 as const,
+    mp3FallbackEnabled: true,
+    mp3FallbackQuality: 320 as const
   },
   discovery: {
     requestsPerMinute: 40
@@ -217,6 +223,19 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
     if (typeof update.catalog.providers.maxConcurrentDownloads === "number") {
       next.catalog.providers.maxConcurrentDownloads = clampInteger(update.catalog.providers.maxConcurrentDownloads, 1, 3, 1);
     }
+    next.catalog.providers.opusQuality = normalizeChoice(
+      update.catalog.providers.opusQuality,
+      [160, 192, 256] as const,
+      next.catalog.providers.opusQuality
+    );
+    if (typeof update.catalog.providers.mp3FallbackEnabled === "boolean") {
+      next.catalog.providers.mp3FallbackEnabled = update.catalog.providers.mp3FallbackEnabled;
+    }
+    next.catalog.providers.mp3FallbackQuality = normalizeChoice(
+      update.catalog.providers.mp3FallbackQuality,
+      [192, 256, 320] as const,
+      next.catalog.providers.mp3FallbackQuality
+    );
   }
 
   if (update.catalog?.discovery) {
@@ -260,7 +279,7 @@ async function createDefaultSettings(): Promise<PrivateSettings> {
   };
 }
 
-function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
+export function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSettings {
   const fallback = {
     auth: {
       enabled: true,
@@ -333,6 +352,20 @@ function normalizeCatalogSettings(
         1,
         3,
         defaultCatalog.providers.maxConcurrentDownloads
+      ),
+      opusQuality: normalizeChoice(
+        providers.opusQuality,
+        [160, 192, 256] as const,
+        defaultCatalog.providers.opusQuality
+      ),
+      mp3FallbackEnabled:
+        typeof providers.mp3FallbackEnabled === "boolean"
+          ? providers.mp3FallbackEnabled
+          : defaultCatalog.providers.mp3FallbackEnabled,
+      mp3FallbackQuality: normalizeChoice(
+        providers.mp3FallbackQuality,
+        [192, 256, 320] as const,
+        defaultCatalog.providers.mp3FallbackQuality
       )
     },
     discovery: {
@@ -382,6 +415,15 @@ function normalizeAutoScanTime(value: unknown, fallback: string) {
 function clampInteger(value: unknown, min: number, max: number, fallback: number) {
   const parsed = Number(value);
   return Number.isInteger(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+}
+
+function normalizeChoice<const T extends readonly number[]>(
+  value: unknown,
+  choices: T,
+  fallback: T[number]
+): T[number] {
+  const parsed = Number(value);
+  return choices.includes(parsed as T[number]) ? (parsed as T[number]) : fallback;
 }
 
 function normalizeExtensions(extensions: string[]) {

@@ -140,7 +140,7 @@ function settings(libraryPath: string): PrivateSettings {
         requestsPerMinute: 40
       },
       providers: {
-        maxConcurrentDownloads: 1
+        maxConcurrentDownloads: 1, opusQuality: 192, mp3FallbackEnabled: true, mp3FallbackQuality: 320
       },
       spotify: {
         clientId: "",
