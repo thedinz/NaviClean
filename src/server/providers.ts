@@ -125,7 +125,6 @@ type ProviderDownloadLog = {
 
 const execFileAsync = promisify(execFile);
 const providerIds: CatalogProviderId[] = ["youtube", "jiosaavn"];
-const maxBatchItems = 100;
 const maxPreviewConcurrency = 3;
 const minYoutubeSearchResultsPerQuery = 5;
 const maxYoutubeSearchResultsPerQuery = 20;
@@ -161,10 +160,10 @@ export async function previewSpotifyCatalogDownloads(
   trackIds?: string[]
 ): Promise<SpotifyCatalogDownloadPreviewResult> {
   const plan = await buildSpotifyDownloadPlan(settings, localTracks, albumId, trackIds);
-  const selectedTracks = plan.selectedTracks.slice(0, maxBatchItems);
+  const selectedTracks = plan.selectedTracks;
   const items = await mapWithConcurrency(
     selectedTracks,
-    Math.min(settings.catalog.providers.maxConcurrentDownloads, maxPreviewConcurrency),
+    maxPreviewConcurrency,
     async (track) => previewDownloadItem(settings, plan.album, track)
   );
   const downloadableCount = items.filter((item) => item.selectedCandidate?.url).length;
@@ -187,6 +186,7 @@ export async function startSpotifyCatalogDownloadJob({
   bulkRiskAccepted,
   localTracks,
   rightsConfirmed,
+  reviewedCandidates,
   settings,
   trackIds
 }: {
@@ -194,6 +194,7 @@ export async function startSpotifyCatalogDownloadJob({
   bulkRiskAccepted: boolean;
   localTracks: TrackFile[];
   rightsConfirmed: boolean;
+  reviewedCandidates?: Array<{ candidate: CatalogProviderCandidate; trackId: string }>;
   settings: PrivateSettings;
   trackIds?: string[];
 }) {
@@ -205,7 +206,15 @@ export async function startSpotifyCatalogDownloadJob({
     throw new Error("Accept the provider and bulk-download risk warning first.");
   }
 
-  const preview = await previewSpotifyCatalogDownloads(settings, localTracks, albumId, trackIds);
+  const preview = reviewedCandidates?.length
+    ? await previewReviewedProviderCandidates(
+        settings,
+        localTracks,
+        albumId,
+        trackIds,
+        reviewedCandidates
+      )
+    : await previewSpotifyCatalogDownloads(settings, localTracks, albumId, trackIds);
   const now = new Date().toISOString();
   const job: SpotifyCatalogDownloadJob = {
     completedCount: 0,
@@ -589,6 +598,40 @@ async function downloadProviderTrack(
   return withProviderFormatFallback(settings, (format) =>
     downloadProviderTrackAsFormat(settings, track, candidate, targetRelativePath, format)
   );
+}
+
+async function previewReviewedProviderCandidates(
+  settings: PrivateSettings,
+  localTracks: TrackFile[],
+  albumId: string,
+  trackIds: string[] | undefined,
+  reviewedCandidates: Array<{ candidate: CatalogProviderCandidate; trackId: string }>
+): Promise<SpotifyCatalogDownloadPreviewResult> {
+  const plan = await buildSpotifyDownloadPlan(settings, localTracks, albumId, trackIds);
+  const candidatesByTrackId = new Map(
+    reviewedCandidates.map((item) => [item.trackId, item.candidate] as const)
+  );
+  const items = plan.selectedTracks.map((track) => {
+    const candidate = candidatesByTrackId.get(track.id) ?? null;
+    const providerTrack = providerTrackFromSpotify(plan.album, track);
+    return {
+      candidates: candidate ? [candidate] : [],
+      error: candidate ? undefined : "No reviewed provider candidate was found.",
+      selectedCandidate: candidate,
+      targetRelativePath: targetRelativePathForTrack(settings, providerTrack),
+      track
+    } satisfies SpotifyCatalogDownloadPreviewItem;
+  });
+  const downloadableCount = items.filter((item) => item.selectedCandidate).length;
+
+  return {
+    album: plan.album,
+    downloadableCount,
+    failedCount: items.length - downloadableCount,
+    generatedAt: new Date().toISOString(),
+    items,
+    warnings: plan.warnings
+  };
 }
 
 export async function withProviderFormatFallback<T>(
