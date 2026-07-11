@@ -242,6 +242,14 @@ app.post("/api/spotify/download-jobs", asyncHandler(async (req, res) => {
     bulkRiskAccepted: Boolean(req.body.bulkRiskAccepted),
     localTracks: catalog.tracks,
     rightsConfirmed: Boolean(req.body.rightsConfirmed),
+    reviewedCandidates: Array.isArray(req.body.reviewedCandidates)
+      ? req.body.reviewedCandidates
+          .filter((item: unknown) => Boolean(item) && typeof item === "object")
+          .map((item: { candidate?: unknown; trackId?: unknown }) => ({
+            candidate: item.candidate,
+            trackId: String(item.trackId ?? "")
+          })) as Parameters<typeof startSpotifyCatalogDownloadJob>[0]["reviewedCandidates"]
+      : undefined,
     settings,
     trackIds: Array.isArray(req.body.trackIds) ? req.body.trackIds.map(String) : undefined
   }));

@@ -117,6 +117,10 @@ export type SpotifyCatalogDownloadPlan = {
 export type SpotifyCatalogDownloadQueueRequest = {
   spotifyAlbumId: string;
   trackIds?: string[];
+  reviewedCandidates?: Array<{
+    candidate: CatalogProviderCandidate;
+    trackId: string;
+  }>;
   rightsConfirmed?: boolean;
 };
 

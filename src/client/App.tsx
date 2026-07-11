@@ -94,6 +94,7 @@ type OrganizePreviewItem = OrganizePlan["items"][number];
 const libraryArtistPageSize = 25;
 const unindexedPageSize = 150;
 const organizePreviewPageSize = 150;
+const providerPreviewBatchSize = 6;
 const themeStorageKey = "naviclean-theme";
 const navicleanIssuesUrl = "https://github.com/thedinz/NaviClean/issues/new";
 const trashAudioExtensions = new Set([
@@ -3966,26 +3967,43 @@ function DiscoverPage() {
   };
 
   const prepareDownloadPreview = async () => {
-    if (!album) {
+    if (!album || selectedMissingTrackIds.length === 0) {
       return;
     }
 
+    const albumId = album.id;
+    const trackIds = [...selectedMissingTrackIds];
+    const batches = chunkItems(trackIds, providerPreviewBatchSize);
     setBusy("download-preview");
-    setNotice(null);
+    setNotice(`Searching providers: 0 of ${trackIds.length} tracks checked.`);
+    setDownloadPreview(null);
     setDownloadJob(null);
 
     try {
-      const result = await api<{ preview: SpotifyCatalogDownloadPreviewResult }>("/spotify/download-preview", {
-        method: "POST",
-        body: JSON.stringify({
-          spotifyAlbumId: album.id,
-          trackIds: selectedMissingTrackIds
-        })
-      });
+      let combinedPreview: SpotifyCatalogDownloadPreviewResult | null = null;
 
-      setDownloadPreview(result.preview);
+      for (const [batchIndex, batchTrackIds] of batches.entries()) {
+        setNotice(
+          `Searching provider batch ${batchIndex + 1} of ${batches.length}: ${combinedPreview?.items.length ?? 0} of ${trackIds.length} tracks checked.`
+        );
+        const result = await api<{ preview: SpotifyCatalogDownloadPreviewResult }>("/spotify/download-preview", {
+          method: "POST",
+          body: JSON.stringify({ spotifyAlbumId: albumId, trackIds: batchTrackIds })
+        });
+        combinedPreview = mergeProviderPreviews(combinedPreview, result.preview);
+        setDownloadPreview(combinedPreview);
+        setNotice(
+          `Searching providers: ${combinedPreview.items.length} of ${trackIds.length} tracks checked; ${combinedPreview.downloadableCount} ready.`
+        );
+      }
+
+      if (!combinedPreview) {
+        throw new Error("No tracks were selected for provider search.");
+      }
       setNotice(
-        `Found provider candidates for ${result.preview.downloadableCount} of ${result.preview.items.length} selected track${result.preview.items.length === 1 ? "" : "s"}.`
+        combinedPreview.downloadableCount > 0
+          ? `Found provider candidates for ${combinedPreview.downloadableCount} of ${combinedPreview.items.length} selected tracks.`
+          : `No provider candidates were found for ${combinedPreview.items.length} selected tracks.`
       );
     } catch (caught) {
       setNotice((caught as Error).message);
@@ -4009,6 +4027,9 @@ function DiscoverPage() {
           method: "POST",
           body: JSON.stringify({
             bulkRiskAccepted,
+            reviewedCandidates: downloadPreview?.items
+              .filter((item) => item.selectedCandidate)
+              .map((item) => ({ candidate: item.selectedCandidate, trackId: item.track.id })),
             rightsConfirmed,
             spotifyAlbumId: album.id,
             trackIds: selectedMissingTrackIds
@@ -4139,7 +4160,11 @@ function DiscoverPage() {
               disabled={busy === "download-preview" || selectedMissingTrackIds.length === 0}
             >
               {busy === "download-preview" ? <Loader2 className="spin" size={18} /> : <Search size={18} />}
-              <span>{busy === "download-preview" ? "Finding" : "Find sources"}</span>
+              <span>
+                {busy === "download-preview"
+                  ? `Finding ${downloadPreview?.items.length ?? 0}/${selectedMissingTrackIds.length}`
+                  : "Find sources"}
+              </span>
             </button>
           </div>
           <table>
@@ -4185,7 +4210,9 @@ function DiscoverPage() {
             <div>
               <span className="eyebrow">Provider preview</span>
               <h2>
-                {downloadPreview.downloadableCount}/{downloadPreview.items.length} ready
+                {busy === "download-preview"
+                  ? `${downloadPreview.items.length}/${selectedMissingTrackIds.length} checked · ${downloadPreview.downloadableCount} ready`
+                  : `${downloadPreview.downloadableCount}/${downloadPreview.items.length} ready`}
               </h2>
             </div>
             <button
@@ -5581,6 +5608,32 @@ function formatProviderDuration(value?: number) {
 
 function providerLabel(value: string) {
   return value === "jiosaavn" ? "JioSaavn" : "YouTube";
+}
+
+export function chunkItems<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+export function mergeProviderPreviews(
+  current: SpotifyCatalogDownloadPreviewResult | null,
+  next: SpotifyCatalogDownloadPreviewResult
+): SpotifyCatalogDownloadPreviewResult {
+  if (!current) {
+    return next;
+  }
+
+  return {
+    album: current.album,
+    downloadableCount: current.downloadableCount + next.downloadableCount,
+    failedCount: current.failedCount + next.failedCount,
+    generatedAt: next.generatedAt,
+    items: [...current.items, ...next.items],
+    warnings: Array.from(new Set([...current.warnings, ...next.warnings]))
+  };
 }
 
 function isCatalogDownloadJobActive(job: SpotifyCatalogDownloadJob | null) {
