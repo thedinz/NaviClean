@@ -4070,6 +4070,7 @@ function DiscoverPage() {
       );
 
       setDownloadJob(result.job);
+      setAlbum((currentAlbum) => currentAlbum ? albumWithCompletedDownloads(currentAlbum, result.job) : currentAlbum);
 
       if (isCatalogDownloadJobTerminal(result.job)) {
         setNotice(
@@ -5700,6 +5701,24 @@ function isCatalogDownloadJobActive(job: SpotifyCatalogDownloadJob | null) {
 
 function isCatalogDownloadJobTerminal(job: SpotifyCatalogDownloadJob) {
   return job.status === "completed" || job.status === "failed";
+}
+
+export function albumWithCompletedDownloads(
+  album: SpotifyAlbumDetail,
+  job: SpotifyCatalogDownloadJob
+): SpotifyAlbumDetail {
+  const completedTrackIds = new Set(
+    job.items.filter((item) => item.status === "completed").map((item) => item.track.id)
+  );
+  const tracks = album.tracks.map((track) =>
+    completedTrackIds.has(track.id) ? { ...track, present: true } : track
+  );
+
+  return {
+    ...album,
+    localTrackCount: tracks.filter((track) => track.present).length,
+    tracks
+  };
 }
 
 function isAudioConvertJobActive(job: AudioConvertJob | null) {
