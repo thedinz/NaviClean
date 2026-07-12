@@ -15,9 +15,9 @@ import type {
   SpotifyTrackSummary,
   TrackFile
 } from "../shared/types.js";
+import { loadCatalog, saveCatalog } from "./catalog.js";
 import { buildDuplicateKey } from "./matching.js";
 import { targetForTrack } from "./organizer.js";
-import { scanLibrary } from "./scanner.js";
 import type { PrivateSettings } from "./settings.js";
 import { spotifyBuMetadataTagsForSpotifyTrack } from "./spotifybu.js";
 import { normalizeForMatch, sha1, toPosixRelative } from "./utils.js";
@@ -87,6 +87,7 @@ type ProviderDownloadResult = {
   bytesWritten: number;
   destinationPath: string;
   format: ProviderDownloadFormat;
+  mtimeMs: number;
   quality: ProviderDownloadQuality;
   relativePath: string;
 };
@@ -152,6 +153,7 @@ export function providerDownloadProfile(
   };
 }
 const jobs = new Map<string, SpotifyCatalogDownloadJob>();
+let catalogUpdateQueue: Promise<void> = Promise.resolve();
 
 export async function previewSpotifyCatalogDownloads(
   settings: PrivateSettings,
@@ -324,15 +326,6 @@ async function runDownloadJob(
   activeJob.status = activeJob.failedCount === activeJob.totalCount ? "failed" : "completed";
   activeJob.completedAt = new Date().toISOString();
   activeJob.updatedAt = activeJob.completedAt;
-
-  try {
-    await scanLibrary(settings);
-  } catch (error) {
-    console.warn("[naviclean.provider-download] post-download scan failed", {
-      error: errorMessage(error),
-      jobId
-    });
-  }
 }
 
 async function runDownloadJobItem(
@@ -364,6 +357,9 @@ async function runDownloadJobItem(
       item.targetRelativePath
     );
 
+    await registerProviderDownloadInCatalog(
+      providerDownloadResultToTrackFile(settings, providerTrackFromSpotify(album, item.track), result)
+    );
     item.destinationPath = result.destinationPath;
     item.relativePath = result.relativePath;
     item.status = "completed";
@@ -715,6 +711,7 @@ async function downloadProviderTrackAsFormat(
       bytesWritten: fileStats.size,
       destinationPath: targetPath,
       format,
+      mtimeMs: fileStats.mtimeMs,
       quality: profile.quality,
       relativePath
     };
@@ -1133,6 +1130,7 @@ export function providerTrackToTrackFile(settings: PrivateSettings, track: Catal
     duration,
     extension: profile.extension,
     id: sha1(`spotify:${track.id}`),
+    isrc: track.isrc,
     issues: [],
     lossless: false,
     mtimeMs: 0,
@@ -1146,8 +1144,48 @@ export function providerTrackToTrackFile(settings: PrivateSettings, track: Catal
     trackNumber: track.trackNumber,
     trackTotal: track.albumTracksTotal,
     year: track.albumReleaseYear,
-    artist: track.artists.join(", ") || track.albumArtist
+    artist: track.artists.join(", ") || track.albumArtist,
+    targetSource: "spotify"
   };
+}
+
+function providerDownloadResultToTrackFile(
+  settings: PrivateSettings,
+  track: CatalogProviderTrack,
+  result: ProviderDownloadResult
+): TrackFile {
+  const planned = providerTrackToTrackFile(settings, track);
+  const profile = providerDownloadProfile(settings, result.format);
+
+  return {
+    ...planned,
+    absolutePath: result.destinationPath,
+    bitrate: profile.bitrate,
+    codec: profile.codec,
+    container: profile.container,
+    extension: profile.extension,
+    managedBy: "spotifybu",
+    mtimeMs: result.mtimeMs,
+    qualityScore: profile.qualityScore,
+    relativePath: result.relativePath,
+    size: result.bytesWritten,
+    targetPath: result.destinationPath,
+    targetRelativePath: result.relativePath
+  };
+}
+
+async function registerProviderDownloadInCatalog(track: TrackFile) {
+  const update = catalogUpdateQueue.then(async () => {
+    const catalog = await loadCatalog();
+    const tracks = catalog.tracks.filter(
+      (candidate) => candidate.id !== track.id && candidate.absolutePath !== track.absolutePath
+    );
+    tracks.push(track);
+    await saveCatalog(tracks);
+  });
+
+  catalogUpdateQueue = update.catch(() => undefined);
+  await update;
 }
 
 function providerSearchQuery(track: CatalogProviderTrack, includeAlbum = false) {
