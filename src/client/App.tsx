@@ -6,6 +6,8 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   CircleAlert,
   CopyX,
   Database,
@@ -1052,6 +1054,15 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
             <button
               className="icon-button"
               type="button"
+              onClick={() => setArtistPage(1)}
+              disabled={artistPage <= 1}
+              title="First artists"
+            >
+              <ChevronsLeft size={18} />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
               onClick={() => setArtistPage((current) => Math.max(1, current - 1))}
               disabled={artistPage <= 1}
               title="Previous artists"
@@ -1067,6 +1078,15 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
               title="Next artists"
             >
               <ChevronRight size={18} />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => setArtistPage(artistPageCount)}
+              disabled={artistPage >= artistPageCount}
+              title="Last artists"
+            >
+              <ChevronsRight size={18} />
             </button>
           </div>
         )}
@@ -1583,6 +1603,15 @@ function UnindexedPage({
             <button
               className="icon-button"
               type="button"
+              onClick={() => setPageIndex(0)}
+              disabled={currentPage === 0}
+              title="First page"
+            >
+              <ChevronsLeft size={18} />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
               onClick={() => setPageIndex((current) => Math.max(0, current - 1))}
               disabled={currentPage === 0}
               title="Previous page"
@@ -1598,6 +1627,15 @@ function UnindexedPage({
               title="Next page"
             >
               <ChevronRight size={18} />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => setPageIndex(pageCount - 1)}
+              disabled={currentPage >= pageCount - 1}
+              title="Last page"
+            >
+              <ChevronsRight size={18} />
             </button>
           </div>
         </div>
@@ -3725,6 +3763,15 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
               <button
                 className="icon-button"
                 type="button"
+                onClick={() => setPageIndex(0)}
+                disabled={currentPage === 0}
+                title="First page"
+              >
+                <ChevronsLeft size={18} />
+              </button>
+              <button
+                className="icon-button"
+                type="button"
                 onClick={() => setPageIndex((current) => Math.max(0, current - 1))}
                 disabled={currentPage === 0}
                 title="Previous page"
@@ -3740,6 +3787,15 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
                 title="Next page"
               >
                 <ChevronRight size={18} />
+              </button>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => setPageIndex(pageCount - 1)}
+                disabled={currentPage >= pageCount - 1}
+                title="Last page"
+              >
+                <ChevronsRight size={18} />
               </button>
             </div>
           </div>
