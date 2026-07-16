@@ -54,7 +54,7 @@ NaviClean appends the original extension before planning moves. A normal standar
 
 ## Recommended workflow
 
-NaviClean now keeps a simpler metadata boundary: existing library files are organized from the scan catalog, with Navidrome metadata used when Navidrome can match the file. Spotify lookups are not used to rename existing tracks during organizer preview/apply. Spotify metadata is only used for the Discover/download flow, where NaviClean already knows the album and track identity.
+Existing library files are organized from the scan catalog, with Navidrome metadata used when Navidrome can match the file. Artist/album identities that depend on folder or filename inference enter a blocking Metadata review state instead of being silently accepted. Each Organize row can search Spotify using the artist and track title, without treating the current folder or album text as authoritative. NaviClean only uses a result after the user chooses the exact release, then updates the selected track and any unambiguous title/track matches in the same source folder. For a known-good folder, **Trust this folder** confirms its complete artist/album suggestion in bulk. Spotify and trusted-path decisions are persisted across scans and file moves. The refreshed target paths are shown for review before Apply. Spotify also supplies metadata and artwork for the Discover/download flow.
 
 Use this flow when cleaning a mounted Navidrome library:
 

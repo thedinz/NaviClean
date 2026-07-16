@@ -5,6 +5,8 @@ import type {
   SpotifyArtistSummary,
   SpotifyCatalogDownloadPlan,
   SpotifyCatalogMatch,
+  SpotifyMetadataMatch,
+  SpotifyMetadataSearchResult,
   SpotifyTestResult,
   SpotifyTrackSummary,
   TrackFile
@@ -110,6 +112,58 @@ export async function searchSpotifyArtists(
   );
 
   return response.artists.items.map(spotifyArtistSummary);
+}
+
+export async function searchSpotifyTrackMetadata(
+  settings: PrivateSettings,
+  query: string
+): Promise<SpotifyMetadataSearchResult> {
+  const search = query.trim();
+
+  if (!search) {
+    return { query: "", matches: [] };
+  }
+
+  const response = await spotifyRequest<{ tracks: { items: SpotifyTrack[] } }>(
+    settings,
+    spotifyCredentials(settings),
+    "/v1/search",
+    {
+      limit: "12",
+      market: settings.catalog.spotify.market,
+      q: search,
+      type: "track"
+    }
+  );
+
+  return {
+    query: search,
+    matches: response.tracks.items.filter((track) => Boolean(track?.album)).map(spotifyMetadataMatch)
+  };
+}
+
+export async function getSpotifyTrackMetadata(
+  settings: PrivateSettings,
+  trackId: string
+): Promise<SpotifyMetadataMatch> {
+  const id = trackId.trim();
+
+  if (!id) {
+    throw new Error("Spotify track id is required.");
+  }
+
+  const track = await spotifyRequest<SpotifyTrack>(
+    settings,
+    spotifyCredentials(settings),
+    `/v1/tracks/${encodeURIComponent(id)}`,
+    { market: settings.catalog.spotify.market }
+  );
+
+  if (!track.album) {
+    throw new Error("Spotify did not return album metadata for this track.");
+  }
+
+  return spotifyMetadataMatch(track);
 }
 
 export async function matchLibraryArtistsToSpotify(
@@ -438,6 +492,30 @@ function spotifyTrackSummary(
     isrc: normalizeSpotifyIsrc(track.external_ids?.isrc),
     spotifyUrl: track.external_urls?.spotify ?? "",
     present: localTrackPresent(localTracks, albumArtist, album, track.name, track.disc_number, track.track_number)
+  };
+}
+
+function spotifyMetadataMatch(track: SpotifyTrack): SpotifyMetadataMatch {
+  const album = track.album as SpotifyAlbum;
+  const albumArtist = album.artists[0]?.name || track.artists?.[0]?.name || "Unknown Artist";
+  const artists = track.artists?.map((artist) => artist.name).filter(Boolean) ?? [];
+
+  return {
+    id: track.id,
+    name: track.name,
+    artists: artists.length > 0 ? artists : [albumArtist],
+    albumArtist,
+    albumId: album.id,
+    album: album.name,
+    albumType: album.album_type,
+    releaseDate: album.release_date,
+    releaseYear: releaseYear(album.release_date),
+    imageUrl: bestImage(album.images),
+    discNumber: track.disc_number,
+    trackNumber: track.track_number,
+    duration: Math.round(track.duration_ms / 1000),
+    isrc: normalizeSpotifyIsrc(track.external_ids?.isrc),
+    spotifyUrl: track.external_urls?.spotify ?? ""
   };
 }
 
