@@ -5,6 +5,7 @@ import path from "node:path";
 import type { NavidromeMetadataEnrichment, NavidromeMetadataMatchMethod, ScanStatus, TrackFile } from "../shared/types.js";
 import { saveCatalog } from "./catalog.js";
 import { buildDuplicateKey } from "./matching.js";
+import { loadMetadataOverrides, validMetadataOverride, type MetadataOverride } from "./metadata-overrides.js";
 import { fetchNavidromeLibraryTracks, searchNavidromeLibraryTrackCandidates, type NavidromeLibraryTrack } from "./navidrome.js";
 import { targetForTrack } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
@@ -45,10 +46,11 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
   const tracks: TrackFile[] = [];
   const errors: string[] = [];
   const warnings: string[] = [];
+  const metadataOverrides = await loadMetadataOverrides();
 
   for (const filePath of files) {
     try {
-      const track = await readTrack(filePath, root, settings);
+      const track = await readTrack(filePath, root, settings, metadataOverrides);
       tracks.push(track);
     } catch (error) {
       const message = `${toPosixRelative(root, filePath)}: ${(error as Error).message}`;
@@ -487,6 +489,7 @@ function trackFileFromNavidromeTrack(
       matchMethod,
       indexedTrackCount
     },
+    metadataConfidence: "navidrome" as const,
     targetSource: "navidrome"
   } satisfies TrackFile;
   const target = targetForTrack(partialTrack, settings);
@@ -1022,8 +1025,14 @@ async function collectAudioFiles(root: string, extensions: Set<string>, recycleR
   return files;
 }
 
-async function readTrack(filePath: string, root: string, settings: PrivateSettings): Promise<TrackFile> {
+async function readTrack(
+  filePath: string,
+  root: string,
+  settings: PrivateSettings,
+  metadataOverrides: Map<string, MetadataOverride>
+): Promise<TrackFile> {
   const stat = await fs.stat(filePath);
+  const metadataOverride = validMetadataOverride(metadataOverrides, filePath, stat.size);
   const extension = path.extname(filePath).toLowerCase();
   const relativePath = toPosixRelative(root, filePath);
   const inferred = inferMetadataFromPath(relativePath);
@@ -1059,20 +1068,28 @@ async function readTrack(filePath: string, root: string, settings: PrivateSettin
     year: commonYear
   });
 
-  if (structuredPathIdentityReason === "placeholder-tags") {
+  if (!metadataOverride && structuredPathIdentityReason === "placeholder-tags") {
     issues.push("Embedded metadata used unknown placeholders; used structured path metadata");
-  } else if (structuredPathIdentityReason === "conflicting-tags") {
+  } else if (!metadataOverride && structuredPathIdentityReason === "conflicting-tags") {
     issues.push("Embedded metadata conflicted with structured path; used structured path metadata");
   }
 
   const useStructuredPathIdentity = Boolean(structuredPathIdentityReason);
-  const artist = cleanDisplayText(
+  const pathIdentityNeedsReview = Boolean(
+    !metadataOverride &&
+    (structuredPathIdentityReason || ((!commonArtist || !commonAlbum) && (inferred.artist || inferred.album)))
+  );
+  if (pathIdentityNeedsReview) {
+    issues.push("Path-derived artist or album requires metadata review");
+  }
+  const inferredArtist = cleanDisplayText(
     (useStructuredPathIdentity ? inferred.artist : commonArtist || inferred.artist),
     "Unknown Artist",
     "artist",
     issues
   );
-  const albumArtist = cleanDisplayText(
+  const artist = metadataOverride?.metadata.artist ?? inferredArtist;
+  const inferredAlbumArtist = cleanDisplayText(
     (useStructuredPathIdentity
       ? inferred.albumArtist || inferred.artist
       : commonAlbumArtist || commonArtist || inferred.albumArtist || inferred.artist),
@@ -1080,26 +1097,33 @@ async function readTrack(filePath: string, root: string, settings: PrivateSettin
     "album artist",
     issues
   );
-  const album = cleanDisplayText(
+  const albumArtist = metadataOverride?.metadata.albumArtist ?? inferredAlbumArtist;
+  const inferredAlbum = cleanDisplayText(
     (useStructuredPathIdentity ? inferred.album : commonAlbum || inferred.album),
     "Unknown Album",
     "album",
     issues
   );
-  const title = cleanDisplayText(
+  const album = metadataOverride?.metadata.album ?? inferredAlbum;
+  const inferredTitle = cleanDisplayText(
     (useStructuredPathIdentity ? inferred.title : commonTitle || inferred.title),
     titleFromFilename(filePath),
     "title",
     issues
   );
-  const trackNumber = (useStructuredPathIdentity ? inferred.trackNumber : commonTrackNumber || inferred.trackNumber) || null;
-  const trackTotal = common?.track?.of || null;
-  const discNumber = common?.disk?.no || inferred.discNumber || null;
-  const discTotal = common?.disk?.of || null;
-  const year = (useStructuredPathIdentity ? inferred.year : commonYear ?? inferred.year) ?? null;
-  const albumType = normalizeAlbumType(firstCommonString(commonRecord, ["albumtype", "releasetype", "release_type"]) || inferred.albumType, trackTotal);
+  const title = metadataOverride?.metadata.title ?? inferredTitle;
+  const inferredTrackNumber = (useStructuredPathIdentity ? inferred.trackNumber : commonTrackNumber || inferred.trackNumber) || null;
+  const trackNumber = metadataOverride?.metadata.trackNumber ?? inferredTrackNumber;
+  const trackTotal = metadataOverride?.metadata.trackTotal ?? common?.track?.of ?? null;
+  const inferredDiscNumber = common?.disk?.no || inferred.discNumber || null;
+  const discNumber = metadataOverride?.metadata.discNumber ?? inferredDiscNumber;
+  const discTotal = metadataOverride?.metadata.discTotal ?? common?.disk?.of ?? null;
+  const inferredYear = (useStructuredPathIdentity ? inferred.year : commonYear ?? inferred.year) ?? null;
+  const year = metadataOverride?.metadata.year ?? inferredYear;
+  const inferredAlbumType = normalizeAlbumType(firstCommonString(commonRecord, ["albumtype", "releasetype", "release_type"]) || inferred.albumType, trackTotal);
+  const albumType = metadataOverride?.metadata.albumType ?? inferredAlbumType;
   const duration = typeof format?.duration === "number" ? format.duration : null;
-  const isrc = common?.isrc?.[0] || null;
+  const isrc = metadataOverride?.metadata.isrc ?? common?.isrc?.[0] ?? null;
   const bitrate = typeof format?.bitrate === "number" ? Math.round(format.bitrate) : null;
   const sampleRate = typeof format?.sampleRate === "number" ? format.sampleRate : null;
   const bitsPerSample = typeof format?.bitsPerSample === "number" ? format.bitsPerSample : null;
@@ -1160,6 +1184,19 @@ async function readTrack(filePath: string, root: string, settings: PrivateSettin
     qualityScore: qualityScore(extension, bitrate, bitsPerSample, lossless),
     targetPath: "",
     targetRelativePath: "",
+    targetSource: metadataOverride?.source === "spotify" ? "spotify" : undefined,
+    metadataConfidence: metadataOverride?.source ?? (pathIdentityNeedsReview ? "path-suggestion" : "embedded"),
+    metadataSuggestion: pathIdentityNeedsReview
+      ? {
+          artist: inferred.artist ?? null,
+          albumArtist: inferred.albumArtist ?? inferred.artist ?? null,
+          album: inferred.album ?? null,
+          title: inferred.title ?? null,
+          trackNumber: inferred.trackNumber ?? null,
+          discNumber: inferred.discNumber ?? null,
+          year: inferred.year ?? null
+        }
+      : undefined,
     managedBy,
     issues
   } satisfies TrackFile;

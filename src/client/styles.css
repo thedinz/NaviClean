@@ -1053,6 +1053,100 @@ td span {
   min-width: 280px;
 }
 
+.organize-resolve-actions,
+.metadata-review-summary,
+.spotify-metadata-resolver,
+.spotify-metadata-panel,
+.spotify-metadata-results {
+  display: grid;
+  gap: 8px;
+}
+
+.organize-resolve-actions {
+  min-width: 300px;
+}
+
+.metadata-review-summary {
+  padding: 9px;
+  border: 1px solid #d8ad54;
+  border-radius: 8px;
+  background: #fff8e6;
+}
+
+.metadata-review-summary strong {
+  overflow-wrap: anywhere;
+}
+
+.compact-button {
+  min-height: 32px;
+  padding: 0 10px;
+  width: fit-content;
+}
+
+.spotify-metadata-panel {
+  width: min(460px, 70vw);
+  padding: 10px;
+  border: 1px solid var(--table-border);
+  border-radius: 8px;
+  background: #fbfaf5;
+}
+
+.spotify-metadata-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.spotify-metadata-search input {
+  min-width: 0;
+}
+
+.spotify-metadata-match {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--table-border);
+  border-radius: 8px;
+  background: #fffefa;
+  color: #24302d;
+  text-align: left;
+}
+
+.spotify-metadata-match:hover:not(:disabled) {
+  border-color: #16877c;
+}
+
+.spotify-metadata-match img,
+.spotify-metadata-artwork {
+  display: block;
+  width: 48px;
+  height: 48px;
+  margin: 0;
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.spotify-metadata-artwork {
+  background: #e6e5de;
+}
+
+.spotify-metadata-match strong,
+.spotify-metadata-match small {
+  display: block;
+}
+
+.spotify-metadata-match small {
+  margin-top: 2px;
+  color: #66736f;
+}
+
+.spotify-metadata-error {
+  color: #a12f2f;
+}
+
 .collision-candidate {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -1690,6 +1784,9 @@ select:disabled {
 [data-theme="dark"] .library-card,
 [data-theme="dark"] .duplicate-option,
 [data-theme="dark"] .collision-candidate,
+[data-theme="dark"] .metadata-review-summary,
+[data-theme="dark"] .spotify-metadata-panel,
+[data-theme="dark"] .spotify-metadata-match,
 [data-theme="dark"] .unindexed-local-match,
 [data-theme="dark"] .unindexed-candidate,
 [data-theme="dark"] .convert-summary,
@@ -1702,6 +1799,10 @@ select:disabled {
 
 [data-theme="dark"] .unindexed-match-row td {
   background: var(--surface-muted);
+}
+
+[data-theme="dark"] .spotify-metadata-artwork {
+  background: var(--field-muted);
 }
 
 [data-theme="dark"] .unindexed-check-grid span {

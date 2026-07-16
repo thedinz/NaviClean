@@ -65,6 +65,29 @@ export type SpotifyTrackSummary = {
   present: boolean;
 };
 
+export type SpotifyMetadataMatch = {
+  id: string;
+  name: string;
+  artists: string[];
+  albumArtist: string;
+  albumId: string;
+  album: string;
+  albumType: string;
+  releaseDate: string;
+  releaseYear: number | null;
+  imageUrl: string | null;
+  discNumber: number;
+  trackNumber: number;
+  duration: number;
+  isrc: string | null;
+  spotifyUrl: string;
+};
+
+export type SpotifyMetadataSearchResult = {
+  query: string;
+  matches: SpotifyMetadataMatch[];
+};
+
 export type SpotifyAlbumDetail = SpotifyAlbumSummary & {
   artist: SpotifyArtistSummary;
   tracks: SpotifyTrackSummary[];
@@ -321,9 +344,21 @@ export type TrackFile = {
   targetPath: string;
   targetRelativePath: string;
   targetSource?: "naviclean" | "navidrome" | "spotify";
+  metadataConfidence?: "embedded" | "path-suggestion" | "trusted-path" | "navidrome" | "spotify";
+  metadataSuggestion?: TrackMetadataSuggestion;
   navidromeEnrichment?: NavidromeMetadataEnrichment;
   managedBy?: "spotifybu";
   issues: string[];
+};
+
+export type TrackMetadataSuggestion = {
+  artist: string | null;
+  albumArtist: string | null;
+  album: string | null;
+  title: string | null;
+  trackNumber: number | null;
+  discNumber: number | null;
+  year: number | null;
 };
 
 export type WorkflowStage = "scan" | "organize" | "duplicates";
@@ -334,6 +369,7 @@ export type WorkflowState = {
   scanned: boolean;
   pendingMoves: number;
   organizationConflicts: number;
+  metadataReview: number;
   missingFiles: number;
   message: string;
   warnings: string[];
@@ -649,9 +685,30 @@ export type OrganizePlanItem = {
   targetSource?: "naviclean" | "navidrome" | "spotify";
   navidromeEnrichment?: NavidromeMetadataEnrichment;
   managedBy?: "spotifybu";
-  status: "ready" | "same" | "duplicate-target" | "conflict" | "outside-library" | "missing-source";
+  metadataConfidence?: TrackFile["metadataConfidence"];
+  metadataSuggestion?: TrackMetadataSuggestion;
+  artist: string;
+  albumArtist: string;
+  album: string;
+  title: string;
+  trackNumber: number | null;
+  year: number | null;
+  status: "ready" | "same" | "metadata-review" | "duplicate-target" | "conflict" | "outside-library" | "missing-source";
   message: string;
   collision?: OrganizeCollision;
+};
+
+export type OrganizeSpotifyMatchResult = {
+  matchedTracks: number;
+  updatedTrackIds: string[];
+  selected: SpotifyMetadataMatch;
+  plan: OrganizePlan;
+};
+
+export type OrganizeTrustPathResult = {
+  trustedTracks: number;
+  updatedTrackIds: string[];
+  plan: OrganizePlan;
 };
 
 export type OrganizeCollision = {
@@ -692,6 +749,7 @@ export type OrganizePlan = {
     same: number;
     duplicateTargets: number;
     conflicts: number;
+    metadataReview: number;
     missing: number;
   };
 };

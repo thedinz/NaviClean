@@ -65,6 +65,8 @@ import type {
   OrganizeApplyResult,
   OrganizeCollisionCandidate,
   OrganizePlan,
+  OrganizeSpotifyMatchResult,
+  OrganizeTrustPathResult,
   OrganizeTrashResult,
   OrganizeTrashSelection,
   RecycleBinDeleteResult,
@@ -78,6 +80,8 @@ import type {
   SpotifyArtistSummary,
   SpotifyCatalogDownloadJob,
   SpotifyCatalogDownloadPreviewResult,
+  SpotifyMetadataMatch,
+  SpotifyMetadataSearchResult,
   SpotifyTrackSummary,
   TrackFile,
   UnindexedFilesView,
@@ -91,7 +95,7 @@ import { appVersion } from "./version";
 type Page = "dashboard" | "instructions" | "library" | "empty-folders" | "non-music" | "unindexed" | "discover" | "organize" | "convert" | "duplicates" | "trash" | "settings";
 type AppTheme = "light" | "dark";
 type UnindexedFilter = "all" | "possible-stale-scan" | "no-api-match";
-type OrganizePreviewFilter = "attention" | "ready" | "duplicate-target" | "conflict" | "missing" | "spotifybu" | "same" | "all";
+type OrganizePreviewFilter = "attention" | "metadata-review" | "ready" | "duplicate-target" | "conflict" | "missing" | "spotifybu" | "same" | "all";
 type OrganizePreviewItem = OrganizePlan["items"][number];
 
 const libraryArtistPageSize = 25;
@@ -156,6 +160,7 @@ const navItems: NavItem[] = [
 
 const organizePreviewFilters: Array<{ id: OrganizePreviewFilter; label: string }> = [
   { id: "attention", label: "Needs action" },
+  { id: "metadata-review", label: "Metadata review" },
   { id: "ready", label: "Ready" },
   { id: "duplicate-target", label: "Duplicates" },
   { id: "conflict", label: "Conflicts" },
@@ -3668,6 +3673,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
           {plan ? (
             <>
               <span>{plan.summary.ready} ready</span>
+              <span>{plan.summary.metadataReview} metadata review</span>
               <span>{plan.summary.same} organized</span>
               {filterCounts.spotifybu > 0 && <span>{filterCounts.spotifybu} SpotifyBU</span>}
               <span>{plan.summary.duplicateTargets} duplicates</span>
@@ -3679,6 +3685,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
             <>
               <span>{workflow.pendingMoves} {pluralize("move", workflow.pendingMoves)}</span>
               <span>{workflow.organizationConflicts} {pluralize("conflict", workflow.organizationConflicts)}</span>
+              <span>{workflow.metadataReview} metadata review</span>
               <span>{workflow.missingFiles} missing</span>
               <span>Preview needed</span>
             </>
@@ -3851,28 +3858,44 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
                         )}
                       </td>
                       <td>
-                        {item.collision ? (
-                          <CollisionCandidates
-                            item={item}
-                            disabled={Boolean(trashBusyKey)}
-                            selectedCandidateId={selectedTrashCandidates[item.id] || ""}
-                            onSelect={(candidate) => {
-                              setSelectedTrashCandidates((current) => {
-                                if (!candidate) {
-                                  const { [item.id]: _removed, ...next } = current;
-                                  return next;
-                                }
+                        <div className="organize-resolve-actions">
+                          {item.collision && (
+                            <CollisionCandidates
+                              item={item}
+                              disabled={Boolean(trashBusyKey)}
+                              selectedCandidateId={selectedTrashCandidates[item.id] || ""}
+                              onSelect={(candidate) => {
+                                setSelectedTrashCandidates((current) => {
+                                  if (!candidate) {
+                                    const { [item.id]: _removed, ...next } = current;
+                                    return next;
+                                  }
 
-                                return {
-                                  ...current,
-                                  [item.id]: candidate.id
-                                };
-                              });
+                                  return {
+                                    ...current,
+                                    [item.id]: candidate.id
+                                  };
+                                });
+                              }}
+                            />
+                          )}
+                          <SpotifyMetadataResolver
+                            item={item}
+                            disabled={previewBusy || applyBusy || Boolean(trashBusyKey)}
+                            onResolved={(result) => {
+                              showPlan(result.plan);
+                              setNotice(
+                                `Spotify metadata selected for ${result.matchedTracks} ${pluralize("track", result.matchedTracks)} from ${result.selected.album}. Review the updated targets, then Apply.`
+                              );
+                            }}
+                            onTrusted={(result) => {
+                              showPlan(result.plan);
+                              setNotice(
+                                `Trusted path metadata for ${result.trustedTracks} ${pluralize("track", result.trustedTracks)} in this folder. Review the updated targets, then Apply.`
+                              );
                             }}
                           />
-                        ) : (
-                          <span className="muted">-</span>
-                        )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -3883,6 +3906,163 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
         </>
       )}
     </section>
+  );
+}
+
+function SpotifyMetadataResolver({
+  item,
+  disabled,
+  onResolved,
+  onTrusted
+}: {
+  item: OrganizePreviewItem;
+  disabled: boolean;
+  onResolved: (result: OrganizeSpotifyMatchResult) => void;
+  onTrusted: (result: OrganizeTrustPathResult) => void;
+}) {
+  const knownArtist = /^(?:\[?unknown artist\]?|unknown)$/i.test(item.albumArtist || item.artist)
+    ? ""
+    : item.albumArtist || item.artist;
+  const initialQuery = [knownArtist, item.title].filter(Boolean).join(" ");
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState(initialQuery);
+  const [matches, setMatches] = useState<SpotifyMetadataMatch[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [selectingId, setSelectingId] = useState<string | null>(null);
+  const [trustBusy, setTrustBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const search = async (nextQuery = query) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api<SpotifyMetadataSearchResult>(
+        `/spotify/tracks/search?trackId=${encodeURIComponent(item.id)}&query=${encodeURIComponent(nextQuery.trim())}`
+      );
+      setQuery(result.query);
+      setMatches(result.matches);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const choose = async (match: SpotifyMetadataMatch) => {
+    setSelectingId(match.id);
+    setError(null);
+    try {
+      const result = await api<OrganizeSpotifyMatchResult>("/organize/spotify-match", {
+        method: "POST",
+        body: JSON.stringify({ localTrackId: item.id, spotifyTrackId: match.id })
+      });
+      onResolved(result);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setSelectingId(null);
+    }
+  };
+
+  const trustFolder = async () => {
+    if (!window.confirm("Trust the artist and album inferred from this folder for every review-needed track in the folder?")) {
+      return;
+    }
+
+    setTrustBusy(true);
+    setError(null);
+    try {
+      const result = await api<OrganizeTrustPathResult>("/organize/trust-path", {
+        method: "POST",
+        body: JSON.stringify({ localTrackId: item.id })
+      });
+      onTrusted(result);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setTrustBusy(false);
+    }
+  };
+
+  return (
+    <div className="spotify-metadata-resolver">
+      {item.metadataConfidence === "path-suggestion" && (
+        <div className="metadata-review-summary">
+          <span className="status-detail">Suggested from path — not verified</span>
+          <strong>
+            {item.metadataSuggestion?.artist || item.artist} · {item.metadataSuggestion?.album || item.album}
+          </strong>
+          {item.metadataSuggestion?.artist && item.metadataSuggestion.album && (
+            <button
+              className="secondary-button compact-button"
+              type="button"
+              disabled={disabled || trustBusy || busy || Boolean(selectingId)}
+              onClick={() => void trustFolder()}
+            >
+              {trustBusy ? <Loader2 className="spin" size={16} /> : <Check size={16} />}
+              <span>{trustBusy ? "Trusting" : "Trust this folder"}</span>
+            </button>
+          )}
+        </div>
+      )}
+      <button
+        className="secondary-button compact-button"
+        type="button"
+        disabled={disabled || trustBusy || busy || Boolean(selectingId)}
+        onClick={() => {
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          setOpen(true);
+          if (matches.length === 0) {
+            void search(initialQuery);
+          }
+        }}
+      >
+        {busy || selectingId ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
+        <span>{open ? "Close Spotify" : "Find on Spotify"}</span>
+      </button>
+      {open && (
+        <div className="spotify-metadata-panel">
+          <form
+            className="spotify-metadata-search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void search();
+            }}
+          >
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Artist and track title" />
+            <button className="secondary-button compact-button" type="submit" disabled={busy || !query.trim()}>
+              {busy ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
+              <span>Search</span>
+            </button>
+          </form>
+          <span className="status-detail">Choose the exact release. Matching tracks in this source folder will be corrected together.</span>
+          {error && <span className="status-detail spotify-metadata-error">{error}</span>}
+          {!busy && !error && matches.length === 0 && <span className="status-detail">No Spotify tracks found.</span>}
+          <div className="spotify-metadata-results">
+            {matches.map((match) => (
+              <button
+                className="spotify-metadata-match"
+                type="button"
+                key={match.id}
+                disabled={Boolean(selectingId)}
+                onClick={() => void choose(match)}
+              >
+                {match.imageUrl ? <img src={match.imageUrl} alt="" /> : <span className="spotify-metadata-artwork" aria-hidden="true" />}
+                <span>
+                  <strong>{match.name}</strong>
+                  <small>{match.artists.join(", ")}</small>
+                  <small>{match.album}{match.releaseYear ? ` (${match.releaseYear})` : ""} · Track {match.trackNumber}</small>
+                </span>
+                {selectingId === match.id && <Loader2 className="spin" size={16} />}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -5038,6 +5218,7 @@ function workflowBlockerSummary(workflow?: LibraryStats["workflow"]) {
   return [
     countWorkflowItem(workflow.pendingMoves, "move"),
     countWorkflowItem(workflow.organizationConflicts, "conflict"),
+    countWorkflowItem(workflow.metadataReview, "metadata review"),
     countWorkflowItem(workflow.missingFiles, "missing file")
   ].filter(Boolean).join(", ");
 }
@@ -5086,6 +5267,10 @@ function StatusPill({ active, label }: { active: boolean; label: string }) {
 }
 
 function organizeMetadataSourceLabel(item: OrganizePreviewItem) {
+  if (item.metadataConfidence === "path-suggestion") {
+    return "Path suggestion — confirmation required";
+  }
+
   if (item.targetSource === "navidrome") {
     return item.navidromeEnrichment?.matchMethod
       ? `Navidrome metadata (${navidromeMatchMethodLabel(item.navidromeEnrichment.matchMethod)})`
@@ -5156,6 +5341,7 @@ function navidromeMatchMethodLabel(method: NonNullable<OrganizePreviewItem["navi
 function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {
   const counts: Record<OrganizePreviewFilter, number> = {
     attention: 0,
+    "metadata-review": 0,
     ready: 0,
     "duplicate-target": 0,
     conflict: 0,
@@ -5174,6 +5360,9 @@ function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {
 
     if (item.status === "same") {
       counts.same += 1;
+    } else if (item.status === "metadata-review") {
+      counts["metadata-review"] += 1;
+      counts.attention += 1;
     } else if (item.status === "duplicate-target") {
       counts["duplicate-target"] += 1;
     } else {
@@ -5207,6 +5396,10 @@ function organizePreviewItemMatchesFilter(item: OrganizePreviewItem, filter: Org
 
   if (filter === "conflict") {
     return item.status === "conflict" || item.status === "outside-library";
+  }
+
+  if (filter === "metadata-review") {
+    return item.status === "metadata-review";
   }
 
   if (filter === "missing") {
@@ -5295,6 +5488,10 @@ function organizeChangeLabel(item: OrganizePlan["items"][number]) {
 
   if (item.status === "conflict") {
     return "Conflict";
+  }
+
+  if (item.status === "metadata-review") {
+    return "Metadata review";
   }
 
   if (item.status === "duplicate-target") {

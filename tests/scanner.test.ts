@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { hasSpotifyBuIdentityTags, scanLibrary } from "../src/server/scanner.js";
 import { buildOrganizePlan } from "../src/server/organizer.js";
+import { trustPathMetadataForFolder } from "../src/server/metadata-review.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 import { spotifyBuMetadataTagsForSpotifyTrack } from "../src/server/spotifybu.js";
 
@@ -213,6 +214,45 @@ test("scanner ignores unknown placeholder tags when a structured path exposes re
     assert.equal(track?.issues.includes("Missing album"), false);
     assert.ok(track?.issues.includes("Embedded metadata used unknown placeholders; used structured path metadata"));
     assert.equal(track?.targetRelativePath, targetRelativePath);
+    assert.equal(track?.metadataConfidence, "path-suggestion");
+    const reviewPlan = await buildOrganizePlan(result.tracks, settings(root));
+    assert.equal(reviewPlan.items[0]?.status, "metadata-review");
+    assert.equal(reviewPlan.summary.metadataReview, 1);
+
+    const trusted = trustPathMetadataForFolder(settings(root), result.tracks, String(track?.id));
+    assert.equal(trusted.trustedTracks, 1);
+    assert.equal(trusted.tracks[0]?.metadataConfidence, "trusted-path");
+    assert.equal((await buildOrganizePlan(trusted.tracks, settings(root))).items[0]?.status, "ready");
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("scanner does not promote an ambiguous numeric folder name to trusted album metadata", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-untrusted-numeric-album-"));
+  const relativePath =
+    "Russ/Russ - 5280 (2013)/Russ - 5280 (2013) - 09 - Live Slow or Die Fast.m4a";
+
+  try {
+    const filePath = path.join(root, ...relativePath.split("/"));
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "not real audio");
+    const scanSettings = settings(root);
+    scanSettings.scan.extensions.push(".m4a");
+
+    const result = await scanLibrary(scanSettings);
+    const track = result.tracks[0];
+
+    assert.equal(track?.artist, "Russ");
+    assert.equal(track?.album, "Unknown Album");
+    assert.equal(track?.trackNumber, 9);
+    assert.equal(track?.year, 2013);
+    assert.equal(
+      track?.targetRelativePath,
+      "Russ/Russ - Unknown Album (2013)/Russ - Unknown Album (2013) - 09 - Live Slow or Die Fast.m4a"
+    );
+    assert.equal(track?.metadataConfidence, "path-suggestion");
+    assert.equal((await buildOrganizePlan(result.tracks, scanSettings)).items[0]?.status, "metadata-review");
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }
@@ -280,7 +320,7 @@ test("scanner keeps structured path metadata when embedded tags point at a diffe
     assert.equal(track?.year, 2021);
     assert.equal(track?.navidromeEnrichment?.code, "possible-stale-scan");
     assert.ok(track?.issues.includes("Embedded metadata conflicted with structured path; used structured path metadata"));
-    assert.equal(item?.status, "same");
+    assert.equal(item?.status, "metadata-review");
     assert.equal(item?.targetSource, "naviclean");
     assert.equal(item?.targetRelativePath, sourceRelativePath);
   } finally {
@@ -1245,7 +1285,7 @@ test("organized local file without Navidrome API match keeps local metadata with
     assert.equal(track?.targetSource, undefined);
     assert.equal(track?.navidromeEnrichment?.code, "possible-stale-scan");
     assert.match(track?.navidromeEnrichment?.message ?? "", /inspect match details/i);
-    assert.equal(item?.status, "same");
+    assert.equal(item?.status, "metadata-review");
     assert.equal(item?.targetSource, "naviclean");
     assert.equal(item?.targetRelativePath, sourceRelativePath);
     assert.equal(item?.navidromeEnrichment?.code, "possible-stale-scan");

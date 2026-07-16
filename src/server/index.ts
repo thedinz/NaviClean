@@ -17,6 +17,8 @@ import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
 import { getActiveAudioConvertJob, getAudioConvertJob, listAudioConvertView, startAudioConvertJob } from "./converter.js";
 import { advancedDiagnosticsEnabled } from "./diagnostics.js";
 import { buildDuplicateGroups, resolveDuplicates, resolveSelectedDuplicates } from "./duplicates.js";
+import { moveMetadataOverrides, saveMetadataOverridesForTracks } from "./metadata-overrides.js";
+import { trustPathMetadataForFolder } from "./metadata-review.js";
 import {
   buildLibraryAlbums,
   buildLibraryArtists,
@@ -36,6 +38,7 @@ import {
 import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin, restoreRecycleBinItems } from "./recycle-bin.js";
 import { scanLibrary } from "./scanner.js";
 import { loadSettings, toSettingsView, updateSettings } from "./settings.js";
+import { resolveTrackMetadataFromSpotify } from "./spotify-metadata.js";
 import { fetchNavidromeArtwork, getNavidromeScanStatus, startNavidromeScan, testNavidromeConnection } from "./navidrome.js";
 import { findUnindexedNavidromeMatches, listUnindexedFiles, trashUnindexedFiles } from "./unindexed.js";
 import {
@@ -44,6 +47,7 @@ import {
   getSpotifyArtistDiscography,
   matchLibraryArtistsToSpotify,
   searchSpotifyArtists,
+  searchSpotifyTrackMetadata,
   testSpotifyConnection
 } from "./spotify.js";
 
@@ -151,6 +155,24 @@ app.get("/api/spotify/artists/search", asyncHandler(async (req, res) => {
   res.json({
     artists: await searchSpotifyArtists(await loadSettingsForPlanning(), String(req.query.query || ""))
   });
+}));
+
+app.get("/api/spotify/tracks/search", asyncHandler(async (req, res) => {
+  const trackId = String(req.query.trackId || "");
+  const catalog = await loadCatalog();
+  const track = catalog.tracks.find((candidate) => candidate.id === trackId);
+
+  if (!track) {
+    res.status(404).json({ error: "The local track is no longer in the current scan." });
+    return;
+  }
+
+  const requestedQuery = String(req.query.query || "").trim();
+  const knownArtist = /^(?:\[?unknown artist\]?|unknown)$/i.test(track.albumArtist || track.artist)
+    ? ""
+    : track.albumArtist || track.artist;
+  const query = requestedQuery || [knownArtist, track.title].filter(Boolean).join(" ");
+  res.json(await searchSpotifyTrackMetadata(await loadSettingsForPlanning(), query));
 }));
 
 app.get("/api/spotify/library-artists", asyncHandler(async (req, res) => {
@@ -662,6 +684,11 @@ app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
   let latestCatalog = catalog;
 
   if (result.moved > 0) {
+    await moveMetadataOverrides(
+      result.items
+        .filter((item) => item.applied)
+        .map((item) => ({ sourcePath: item.sourcePath, targetPath: item.targetPath }))
+    );
     const movedById = new Map(result.items.filter((item) => item.applied).map((item) => [item.id, item]));
     tracks = planned.tracks.map((track) => {
       const moved = movedById.get(track.id);
@@ -682,6 +709,65 @@ app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
 
   const refreshed = await rebuildOrganizeEvaluation({ ...latestCatalog, tracks }, settings);
   res.json({ ...result, plan: refreshed.plan });
+}));
+
+app.post("/api/organize/spotify-match", asyncHandler(async (req, res) => {
+  const localTrackId = String(req.body.localTrackId || "");
+  const spotifyTrackId = String(req.body.spotifyTrackId || "");
+
+  if (!localTrackId || !spotifyTrackId) {
+    res.status(400).json({ error: "localTrackId and spotifyTrackId are required" });
+    return;
+  }
+
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+  const resolution = await resolveTrackMetadataFromSpotify(
+    settings,
+    catalog.tracks,
+    localTrackId,
+    spotifyTrackId
+  );
+  await saveMetadataOverridesForTracks(
+    resolution.tracks.filter((track) => resolution.updatedTrackIds.includes(track.id)),
+    "spotify"
+  );
+  const latestCatalog = await saveCatalog(resolution.tracks);
+  invalidateOrganizeEvaluationCache();
+  const refreshed = await rebuildOrganizeEvaluation(latestCatalog, settings);
+
+  res.json({
+    matchedTracks: resolution.matchedTracks,
+    updatedTrackIds: resolution.updatedTrackIds,
+    selected: resolution.selected,
+    plan: refreshed.plan
+  });
+}));
+
+app.post("/api/organize/trust-path", asyncHandler(async (req, res) => {
+  const localTrackId = String(req.body.localTrackId || "");
+
+  if (!localTrackId) {
+    res.status(400).json({ error: "localTrackId is required" });
+    return;
+  }
+
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+  const resolution = trustPathMetadataForFolder(settings, catalog.tracks, localTrackId);
+  await saveMetadataOverridesForTracks(
+    resolution.tracks.filter((track) => resolution.updatedTrackIds.includes(track.id)),
+    "trusted-path"
+  );
+  const latestCatalog = await saveCatalog(resolution.tracks);
+  invalidateOrganizeEvaluationCache();
+  const refreshed = await rebuildOrganizeEvaluation(latestCatalog, settings);
+
+  res.json({
+    trustedTracks: resolution.trustedTracks,
+    updatedTrackIds: resolution.updatedTrackIds,
+    plan: refreshed.plan
+  });
 }));
 
 app.post("/api/organize/trash", asyncHandler(async (req, res) => {
@@ -1052,6 +1138,7 @@ function workflowStateFromPlan(
 ): WorkflowState {
   const pendingMoves = plan.summary.ready;
   const organizationConflicts = plan.summary.conflicts;
+  const metadataReview = plan.summary.metadataReview;
   const missingFiles = plan.summary.missing;
   const scanned = Boolean(lastScanFinishedAt);
   const warnings = [
@@ -1066,6 +1153,7 @@ function workflowStateFromPlan(
       scanned,
       pendingMoves,
       organizationConflicts,
+      metadataReview,
       missingFiles,
       message: "Stage 1: scan the mounted Navidrome library before organizing or finding duplicates.",
       warnings
@@ -1079,21 +1167,23 @@ function workflowStateFromPlan(
       scanned,
       pendingMoves,
       organizationConflicts,
+      metadataReview,
       missingFiles,
       message: "No audio files are in the current catalog. Check the library path and scan again.",
       warnings
     };
   }
 
-  if (pendingMoves > 0 || organizationConflicts > 0 || missingFiles > 0) {
+  if (pendingMoves > 0 || organizationConflicts > 0 || metadataReview > 0 || missingFiles > 0) {
     return {
       stage: "organize",
       duplicateScanReady: false,
       scanned,
       pendingMoves,
       organizationConflicts,
+      metadataReview,
       missingFiles,
-      message: `Stage 2: review organization (${workflowBlockerSummary(pendingMoves, organizationConflicts, missingFiles)}).`,
+      message: `Stage 2: review organization (${workflowBlockerSummary(pendingMoves, organizationConflicts, metadataReview, missingFiles)}).`,
       warnings
     };
   }
@@ -1104,16 +1194,18 @@ function workflowStateFromPlan(
     scanned,
     pendingMoves,
     organizationConflicts,
+    metadataReview,
     missingFiles,
     message: "Stage 3: organization is complete. Duplicate cleanup will show same-release matches when any are found.",
     warnings
   };
 }
 
-function workflowBlockerSummary(pendingMoves: number, organizationConflicts: number, missingFiles: number) {
+function workflowBlockerSummary(pendingMoves: number, organizationConflicts: number, metadataReview: number, missingFiles: number) {
   return [
     countLabel(pendingMoves, "move"),
     countLabel(organizationConflicts, "conflict"),
+    countLabel(metadataReview, "metadata review"),
     countLabel(missingFiles, "missing file")
   ].filter(Boolean).join(", ");
 }
@@ -1133,6 +1225,7 @@ function workflowStateDuringScan(lastScanFinishedAt: string | null): WorkflowSta
     scanned: Boolean(lastScanFinishedAt),
     pendingMoves: 0,
     organizationConflicts: 0,
+    metadataReview: 0,
     missingFiles: 0,
     message: "Stage 1: scan is running. Organization and duplicate cleanup unlock after the scan finishes.",
     warnings: [

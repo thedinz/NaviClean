@@ -68,6 +68,14 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       targetSource: track.targetSource ?? "naviclean",
       navidromeEnrichment: track.navidromeEnrichment,
       managedBy: track.managedBy,
+      metadataConfidence: track.metadataConfidence,
+      metadataSuggestion: track.metadataSuggestion,
+      artist: track.artist,
+      albumArtist: track.albumArtist,
+      album: track.album,
+      title: track.title,
+      trackNumber: track.trackNumber,
+      year: track.year,
       status: "ready",
       message: "Ready"
     };
@@ -110,6 +118,9 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     } else if (!(await pathExists(track.absolutePath))) {
       item.status = "missing-source";
       item.message = "Source file is missing";
+    } else if (track.metadataConfidence === "path-suggestion") {
+      item.status = "metadata-review";
+      item.message = "Path-derived artist or album needs confirmation";
     } else if (path.resolve(track.absolutePath) === path.resolve(target.targetPath)) {
       item.status = "same";
       item.message = "Already organized";
@@ -138,6 +149,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       same: items.filter((item) => item.status === "same").length,
       duplicateTargets: items.filter((item) => item.status === "duplicate-target").length,
       conflicts: items.filter((item) => item.status === "conflict" || item.status === "outside-library").length,
+      metadataReview: items.filter((item) => item.status === "metadata-review").length,
       missing: items.filter((item) => item.status === "missing-source").length
     }
   };
