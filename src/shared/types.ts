@@ -314,6 +314,9 @@ export type NavidromeMetadataEnrichment = {
   indexedTrackCount?: number;
 };
 
+/** `spotifybu` is retained only for persisted/external data from before the TrackKeep rename. */
+export type TrackManager = "trackkeep" | "spotifybu";
+
 export type TrackFile = {
   id: string;
   absolutePath: string;
@@ -347,7 +350,7 @@ export type TrackFile = {
   metadataConfidence?: "embedded" | "path-suggestion" | "trusted-path" | "navidrome" | "spotify";
   metadataSuggestion?: TrackMetadataSuggestion;
   navidromeEnrichment?: NavidromeMetadataEnrichment;
-  managedBy?: "spotifybu";
+  managedBy?: TrackManager;
   issues: string[];
 };
 
@@ -684,7 +687,7 @@ export type OrganizePlanItem = {
   targetRelativePath: string;
   targetSource?: "naviclean" | "navidrome" | "spotify";
   navidromeEnrichment?: NavidromeMetadataEnrichment;
-  managedBy?: "spotifybu";
+  managedBy?: TrackManager;
   metadataConfidence?: TrackFile["metadataConfidence"];
   metadataSuggestion?: TrackMetadataSuggestion;
   artist: string;

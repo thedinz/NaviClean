@@ -9,7 +9,7 @@ import { loadMetadataOverrides, validMetadataOverride, type MetadataOverride } f
 import { fetchNavidromeLibraryTracks, searchNavidromeLibraryTrackCandidates, type NavidromeLibraryTrack } from "./navidrome.js";
 import { targetForTrack } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
-import { hasSpotifyBuIdentityTags } from "./spotifybu.js";
+import { hasTrackKeepIdentityTags } from "./trackkeep.js";
 import {
   cleanDisplayValue,
   normalizeForMatch,
@@ -19,7 +19,7 @@ import {
   toPosixRelative
 } from "./utils.js";
 
-export { hasSpotifyBuIdentityTags };
+export { hasTrackKeepIdentityTags };
 
 type ProgressHandler = (status: Partial<ScanStatus>) => void;
 type ParsedAudioMetadata = Awaited<ReturnType<typeof parseFile>>;
@@ -1130,10 +1130,10 @@ async function readTrack(
   const codec = cleanNullable(format?.codec);
   const container = cleanNullable(format?.container);
   const lossless = Boolean(format?.lossless || [".flac", ".alac", ".wav", ".aiff", ".aif"].includes(extension));
-  const managedBy = hasSpotifyBuIdentityTags({
+  const managedBy = hasTrackKeepIdentityTags({
     common: metadata?.common as Record<string, unknown> | undefined,
     native: metadata?.native
-  }) ? "spotifybu" : undefined;
+  }) ? "trackkeep" : undefined;
 
   if (artist === "Unknown Artist") {
     issues.push("Missing artist");

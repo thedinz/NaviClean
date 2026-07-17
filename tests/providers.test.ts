@@ -68,12 +68,13 @@ test("disabled fallback reports the original Opus failure without retrying", asy
   assert.deepEqual(attempts, ["opus"]);
 });
 
-test("Opus metadata includes release, compilation, ISRC, and SpotifyBU identity tags", () => {
+test("Opus metadata includes release, compilation, ISRC, and dual-written TrackKeep identity tags", () => {
   const args = providerMetadataArgsForSpotifyTrack(providerTrack());
   const values = args.filter((_, index) => args[index - 1] === "-metadata");
   assert.ok(values.includes("isrc=USRC17607839"));
   assert.ok(values.includes("releasedate=2026-07-10"));
   assert.ok(values.includes("compilation=1"));
+  assert.ok(values.some((value) => value.startsWith("trackkeep:track_id=")));
   assert.ok(values.some((value) => value.startsWith("spotifybu:track_id=")));
 });
 
@@ -103,7 +104,7 @@ test("lower-bitrate Opus is kept while over-cap Opus is normalized downward", as
   assert.equal(await shouldNormalizeStagedAudioFile({ format: "opus", quality: 160, stagedPath: high }), true);
 });
 
-test("Opus tags and METADATA_BLOCK_PICTURE can be read back", async (t) => {
+test("Opus tags and embedded cover art can be read back", async (t) => {
   if (!(await commandAvailable("ffmpeg")) || !(await commandAvailable("ffprobe"))) {
     t.skip("ffmpeg and ffprobe are required for media regression coverage");
     return;
@@ -116,12 +117,18 @@ test("Opus tags and METADATA_BLOCK_PICTURE can be read back", async (t) => {
   await createOpus(source, 96);
   await fs.writeFile(cover, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=", "base64"));
   await writeTaggedAudioFile(source, tagged, providerMetadataArgsForSpotifyTrack(providerTrack()), cover);
-  const { stdout } = await execFileAsync("ffprobe", ["-v", "quiet", "-print_format", "json", "-show_format", tagged]);
-  const tags = (JSON.parse(stdout.toString()) as { format?: { tags?: Record<string, string> } }).format?.tags ?? {};
+  const { stdout } = await execFileAsync("ffprobe", ["-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", tagged]);
+  const probe = JSON.parse(stdout.toString()) as {
+    format?: { tags?: Record<string, string> };
+    streams?: Array<{ disposition?: { attached_pic?: number }; tags?: Record<string, string> }>;
+  };
+  const tags = { ...(probe.format?.tags ?? {}), ...(probe.streams?.[0]?.tags ?? {}) };
   const normalized = Object.fromEntries(Object.entries(tags).map(([key, value]) => [key.toLowerCase(), value]));
   assert.equal(normalized.title, "Test Track");
   assert.equal(normalized.isrc, "USRC17607839");
-  assert.ok(normalized.metadata_block_picture?.length > 20);
+  assert.equal(normalized["trackkeep:track_id"], "track-id");
+  assert.equal(normalized["spotifybu:track_id"], "track-id");
+  assert.ok(probe.streams?.some((stream) => stream.disposition?.attached_pic === 1));
 });
 
 async function commandAvailable(command: string) {

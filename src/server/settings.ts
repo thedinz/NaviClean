@@ -69,6 +69,7 @@ const defaultScan = {
   autoScanTime: "02:00"
 };
 const defaultCleanup = {
+  // Keep the pre-rebrand .spotifybu path excluded so existing TrackKeep installs remain safe.
   emptyFolderExclusions: ["provider-downloads", ".spotifybu/tmp/provider-downloads"]
 };
 export const standardNamingFormatDefaults = {
