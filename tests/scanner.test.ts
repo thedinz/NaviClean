@@ -3,65 +3,70 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { hasSpotifyBuIdentityTags, scanLibrary } from "../src/server/scanner.js";
+import { hasTrackKeepIdentityTags, scanLibrary } from "../src/server/scanner.js";
 import { buildOrganizePlan } from "../src/server/organizer.js";
 import { trustPathMetadataForFolder } from "../src/server/metadata-review.js";
 import type { PrivateSettings } from "../src/server/settings.js";
-import { spotifyBuMetadataTagsForSpotifyTrack } from "../src/server/spotifybu.js";
+import { normalizeTrackKeepManagedBy, trackKeepMetadataTagsForSpotifyTrack } from "../src/server/trackkeep.js";
 
-test("scanner recognizes SpotifyBU track identity tags", () => {
-  assert.equal(
-    hasSpotifyBuIdentityTags({
-      native: {
-        "ID3v2.4": [{ id: "TXXX:spotifybu:track_id", value: "spotify-track-id" }]
+test("scanner recognizes TrackKeep and legacy SpotifyBU identity aliases", () => {
+  const keys = ["album_id", "identity_version", "isrc", "track_id", "track_uri"];
+
+  for (const namespace of ["trackkeep", "spotifybu"]) {
+    for (const key of keys) {
+      const value = key === "identity_version" ? "1" : `value-${key}`;
+      for (const alias of [
+        `${namespace}:${key}`,
+        `${namespace}_${key}`,
+        `----:com.apple.iTunes:${namespace}:${key}`,
+        `TXXX:${namespace}:${key}`
+      ]) {
+        assert.equal(
+          hasTrackKeepIdentityTags({ native: { container: [{ id: alias.toUpperCase(), value }] } }),
+          true,
+          alias
+        );
       }
-    }),
-    true
-  );
-
-  assert.equal(
-    hasSpotifyBuIdentityTags({
-      native: {
-        iTunes: [{ id: "----:com.apple.iTunes:spotifybu:track_uri", value: "spotify:track:123" }]
-      }
-    }),
-    true
-  );
-
-  assert.equal(
-    hasSpotifyBuIdentityTags({
-      common: {
-        spotifybu_track_uri: "spotify:track:456"
-      } as Record<string, unknown>
-    }),
-    true
-  );
-});
-
-test("scanner recognizes SpotifyBU v1 identity aliases", () => {
-  for (const key of ["album_id", "identity_version", "isrc", "track_id", "track_uri"]) {
-    assert.equal(
-      hasSpotifyBuIdentityTags({
-        common: {
-          [`spotifybu_${key}`]: key === "identity_version" ? "1" : `value-${key}`
-        } as Record<string, unknown>
-      }),
-      true
-    );
-
-    assert.equal(
-      hasSpotifyBuIdentityTags({
-        native: {
-          iTunes: [{ id: `----:com.apple.iTunes:spotifybu:${key}`, value: key === "identity_version" ? "1" : `value-${key}` }]
-        }
-      }),
-      true
-    );
+    }
   }
 });
 
-test("SpotifyBU metadata helper emits scanner-recognized identity tags", () => {
-  const tags = spotifyBuMetadataTagsForSpotifyTrack({
+test("scanner recognizes both TrackKeep M4A identity comment contracts", () => {
+  const cases = [
+    ["TrackKeep identity ", "trackkeep:track_id"],
+    ["TrackKeep identity ", "spotifybu:track_id"],
+    ["SpotifyBU identity ", "trackkeep:track_id"],
+    ["SpotifyBU identity ", "spotifybu:track_id"]
+  ] as const;
+
+  for (const [prefix, key] of cases) {
+    assert.equal(
+      hasTrackKeepIdentityTags({
+        common: { comment: [`${prefix}${JSON.stringify({ [key.toUpperCase()]: "spotify-track-id" })}`] }
+      }),
+      true,
+      `${prefix}${key}`
+    );
+  }
+
+  assert.equal(
+    hasTrackKeepIdentityTags({
+      native: {
+        ID3v24: [{ id: "COMM", value: { text: `TrackKeep identity ${JSON.stringify({ "trackkeep:track_uri": "spotify:track:123" })}` } }]
+      }
+    }),
+    true
+  );
+  assert.equal(hasTrackKeepIdentityTags({ common: { comment: "TrackKeep identity not-json" } }), false);
+  assert.equal(hasTrackKeepIdentityTags({ common: { "trackkeep:track_id": "   " } }), false);
+  assert.equal(
+    hasTrackKeepIdentityTags({ common: { comment: "TrackKeep identity {\"trackkeep:identity_version\":1}" } }),
+    true
+  );
+});
+
+test("TrackKeep metadata helper dual-writes scanner-recognized identity tags", () => {
+  const tags = trackKeepMetadataTagsForSpotifyTrack({
     albumId: "spotify-album-id",
     isrc: "usabc2100001",
     trackId: "spotify-track-id"
@@ -70,6 +75,11 @@ test("SpotifyBU metadata helper emits scanner-recognized identity tags", () => {
   assert.deepEqual(
     tags.map((tag) => tag.key),
     [
+      "trackkeep:track_id",
+      "trackkeep:track_uri",
+      "trackkeep:album_id",
+      "trackkeep:isrc",
+      "trackkeep:identity_version",
       "spotifybu:track_id",
       "spotifybu:track_uri",
       "spotifybu:album_id",
@@ -84,15 +94,26 @@ test("SpotifyBU metadata helper emits scanner-recognized identity tags", () => {
       "spotify:track:spotify-track-id",
       "spotify-album-id",
       "USABC2100001",
+      "1",
+      "spotify-track-id",
+      "spotify:track:spotify-track-id",
+      "spotify-album-id",
+      "USABC2100001",
       "1"
     ]
   );
   assert.equal(
-    hasSpotifyBuIdentityTags({
+    hasTrackKeepIdentityTags({
       common: Object.fromEntries(tags.map((tag) => [tag.key, tag.value]))
     }),
     true
   );
+});
+
+test("legacy persisted SpotifyBU manager values normalize to TrackKeep", () => {
+  assert.equal(normalizeTrackKeepManagedBy("trackkeep"), "trackkeep");
+  assert.equal(normalizeTrackKeepManagedBy("spotifybu"), "trackkeep");
+  assert.equal(normalizeTrackKeepManagedBy("spotify"), undefined);
 });
 
 test("scanner infers the release year when the parent artist folder stripped trailing punctuation", async () => {

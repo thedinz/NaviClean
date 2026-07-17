@@ -129,11 +129,11 @@ test("standard folder with inferred year needs organization when metadata year i
   }
 });
 
-test("SpotifyBU-managed file is not organized only because its path differs", async () => {
+test("TrackKeep-managed file is not organized only because its path differs", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
 
   try {
-    const sourceRelativePath = "SpotifyBU Downloads/Track Copy.mp3";
+    const sourceRelativePath = "Moved Somewhere/Track Copy.mp3";
     const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, "audio");
@@ -143,7 +143,7 @@ test("SpotifyBU-managed file is not organized only because its path differs", as
         track({
           absolutePath: sourcePath,
           relativePath: sourceRelativePath,
-          managedBy: "spotifybu"
+          managedBy: "trackkeep"
         })
       ],
       settings({
@@ -155,7 +155,8 @@ test("SpotifyBU-managed file is not organized only because its path differs", as
     assert.equal(plan.summary.ready, 0);
     assert.equal(plan.summary.same, 1);
     assert.equal(plan.items[0]?.status, "same");
-    assert.equal(plan.items[0]?.message, "Managed by SpotifyBU");
+    assert.equal(plan.items[0]?.managedBy, "trackkeep");
+    assert.equal(plan.items[0]?.message, "Managed by TrackKeep");
     assert.equal(
       plan.items[0]?.targetRelativePath,
       "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3"
@@ -165,7 +166,30 @@ test("SpotifyBU-managed file is not organized only because its path differs", as
   }
 });
 
-test("normal file without SpotifyBU identity keeps existing organization behavior", async () => {
+test("legacy SpotifyBU-managed file receives TrackKeep organization protection", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const sourceRelativePath = "Legacy Downloads/Track Copy.mp3";
+    const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "audio");
+
+    const plan = await buildOrganizePlan(
+      [track({ absolutePath: sourcePath, relativePath: sourceRelativePath, managedBy: "spotifybu" })],
+      settings({ libraryPath: root, mode: "standard" })
+    );
+
+    assert.equal(plan.summary.ready, 0);
+    assert.equal(plan.summary.same, 1);
+    assert.equal(plan.items[0]?.managedBy, "trackkeep");
+    assert.equal(plan.items[0]?.message, "Managed by TrackKeep");
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("normal file without TrackKeep identity keeps existing organization behavior", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
 
   try {
@@ -195,11 +219,11 @@ test("normal file without SpotifyBU identity keeps existing organization behavio
   }
 });
 
-test("SpotifyBU-managed missing source still reports the hard error", async () => {
+test("TrackKeep-managed missing source still reports the hard error", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
 
   try {
-    const sourceRelativePath = "SpotifyBU Downloads/Missing Track.mp3";
+    const sourceRelativePath = "TrackKeep Downloads/Missing Track.mp3";
     const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
 
     const plan = await buildOrganizePlan(
@@ -207,7 +231,7 @@ test("SpotifyBU-managed missing source still reports the hard error", async () =
         track({
           absolutePath: sourcePath,
           relativePath: sourceRelativePath,
-          managedBy: "spotifybu"
+          managedBy: "trackkeep"
         })
       ],
       settings({

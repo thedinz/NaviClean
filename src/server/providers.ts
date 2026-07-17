@@ -19,7 +19,7 @@ import { loadCatalog, saveCatalog } from "./catalog.js";
 import { buildDuplicateKey } from "./matching.js";
 import { targetForTrack } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
-import { spotifyBuMetadataTagsForSpotifyTrack } from "./spotifybu.js";
+import { trackKeepMetadataTagsForSpotifyTrack } from "./trackkeep.js";
 import { normalizeForMatch, sha1, toPosixRelative } from "./utils.js";
 import { buildSpotifyDownloadPlan } from "./spotify.js";
 
@@ -915,7 +915,7 @@ export function providerMetadataArgsForSpotifyTrack(track: CatalogProviderTrack)
     metadataArgs.push("-metadata", `comment=Spotify metadata: ${track.spotifyUrl}`);
   }
 
-  for (const tag of spotifyBuMetadataTagsForSpotifyTrack({
+  for (const tag of trackKeepMetadataTagsForSpotifyTrack({
     albumId: track.albumId,
     isrc: track.isrc,
     trackId: track.id
@@ -1164,7 +1164,7 @@ function providerDownloadResultToTrackFile(
     codec: profile.codec,
     container: profile.container,
     extension: profile.extension,
-    managedBy: "spotifybu",
+    managedBy: "trackkeep",
     mtimeMs: result.mtimeMs,
     qualityScore: profile.qualityScore,
     relativePath: result.relativePath,

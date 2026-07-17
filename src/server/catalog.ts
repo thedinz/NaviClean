@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { LibraryStats, TrackFile, WorkflowState } from "../shared/types.js";
 import { getDataDir } from "./settings.js";
+import { normalizeTrackKeepManagedBy } from "./trackkeep.js";
 
 export type Catalog = {
   updatedAt: string | null;
@@ -30,7 +31,7 @@ export async function saveCatalog(tracks: TrackFile[]) {
   await fs.mkdir(path.dirname(catalogPath), { recursive: true });
   const catalog: Catalog = {
     updatedAt: new Date().toISOString(),
-    tracks
+    tracks: tracks.map(normalizeCatalogTrack)
   };
   const tempPath = `${catalogPath}.tmp`;
   await fs.writeFile(tempPath, `${JSON.stringify(catalog, null, 2)}\n`, "utf8");
@@ -65,7 +66,7 @@ export function createStats(
 function normalizeCatalogTrack(track: TrackFile) {
   return {
     ...track,
-    albumType: typeof track.albumType === "string" ? track.albumType.trim() : ""
+    albumType: typeof track.albumType === "string" ? track.albumType.trim() : "",
+    managedBy: normalizeTrackKeepManagedBy(track.managedBy)
   };
 }
-

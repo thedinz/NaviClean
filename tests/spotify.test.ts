@@ -92,6 +92,7 @@ test("NaviClean provider tags Spotify compilation albums for Navidrome", () => {
   assert.equal(tags.date, "2026-01-02");
   assert.equal(tags.releasedate, "2026-01-02");
   assert.equal(tags.compilation, "1");
+  assert.equal(tags["trackkeep:track_id"], "track-1");
   assert.equal(tags["spotifybu:track_id"], "track-1");
 });
 

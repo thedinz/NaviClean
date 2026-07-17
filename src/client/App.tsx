@@ -95,7 +95,7 @@ import { appVersion } from "./version";
 type Page = "dashboard" | "instructions" | "library" | "empty-folders" | "non-music" | "unindexed" | "discover" | "organize" | "convert" | "duplicates" | "trash" | "settings";
 type AppTheme = "light" | "dark";
 type UnindexedFilter = "all" | "possible-stale-scan" | "no-api-match";
-type OrganizePreviewFilter = "attention" | "metadata-review" | "ready" | "duplicate-target" | "conflict" | "missing" | "spotifybu" | "same" | "all";
+type OrganizePreviewFilter = "attention" | "metadata-review" | "ready" | "duplicate-target" | "conflict" | "missing" | "trackkeep" | "same" | "all";
 type OrganizePreviewItem = OrganizePlan["items"][number];
 
 const libraryArtistPageSize = 25;
@@ -165,7 +165,7 @@ const organizePreviewFilters: Array<{ id: OrganizePreviewFilter; label: string }
   { id: "duplicate-target", label: "Duplicates" },
   { id: "conflict", label: "Conflicts" },
   { id: "missing", label: "Missing" },
-  { id: "spotifybu", label: "SpotifyBU" },
+  { id: "trackkeep", label: "TrackKeep" },
   { id: "same", label: "Organized" },
   { id: "all", label: "All" }
 ];
@@ -1739,7 +1739,7 @@ function UnindexedTable({
                   <td>
                     <strong>{track.title}</strong>
                     <span>{libraryMeta([track.artist, track.album, albumReleaseLabel(track), trackNumberLabel(track)])}</span>
-                    <span>{libraryMeta([track.isrc ? `ISRC ${track.isrc}` : "", track.managedBy === "spotifybu" ? "SpotifyBU" : ""])}</span>
+                    <span>{libraryMeta([track.isrc ? `ISRC ${track.isrc}` : "", isTrackKeepManaged(track.managedBy) ? "TrackKeep" : ""])}</span>
                   </td>
                   <td>
                     <span className="path-diff">{track.relativePath}</span>
@@ -3527,8 +3527,8 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
   const organizeItems = plan?.items || [];
   const filterCounts = useMemo(() => countOrganizePreviewFilters(organizeItems), [organizeItems]);
   const visibleOrganizeFilters = useMemo(
-    () => organizePreviewFilters.filter((filter) => filter.id !== "spotifybu" || filterCounts.spotifybu > 0),
-    [filterCounts.spotifybu]
+    () => organizePreviewFilters.filter((filter) => filter.id !== "trackkeep" || filterCounts.trackkeep > 0),
+    [filterCounts.trackkeep]
   );
   const filteredItems = useMemo(
     () => organizeItems.filter((item) => organizePreviewItemMatchesFilter(item, organizeFilter)),
@@ -3675,7 +3675,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
               <span>{plan.summary.ready} ready</span>
               <span>{plan.summary.metadataReview} metadata review</span>
               <span>{plan.summary.same} organized</span>
-              {filterCounts.spotifybu > 0 && <span>{filterCounts.spotifybu} SpotifyBU</span>}
+              {filterCounts.trackkeep > 0 && <span>{filterCounts.trackkeep} TrackKeep</span>}
               <span>{plan.summary.duplicateTargets} duplicates</span>
               <span>{plan.summary.conflicts} conflicts</span>
               <span>{plan.summary.missing} missing</span>
@@ -3835,7 +3835,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
                         {item.status !== "ready" && item.status !== "same" && (
                           <span className="status-detail">{item.message}</span>
                         )}
-                        {item.status === "same" && item.managedBy === "spotifybu" && (
+                        {item.status === "same" && isTrackKeepManaged(item.managedBy) && (
                           <span className="status-detail">{item.message}</span>
                         )}
                       </td>
@@ -5338,6 +5338,11 @@ function navidromeMatchMethodLabel(method: NonNullable<OrganizePreviewItem["navi
   return "metadata key";
 }
 
+function isTrackKeepManaged(value: TrackFile["managedBy"]) {
+  // The SpotifyBU value can still arrive from persisted data written before the rename.
+  return value === "trackkeep" || value === "spotifybu";
+}
+
 function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {
   const counts: Record<OrganizePreviewFilter, number> = {
     attention: 0,
@@ -5346,7 +5351,7 @@ function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {
     "duplicate-target": 0,
     conflict: 0,
     missing: 0,
-    spotifybu: 0,
+    trackkeep: 0,
     same: 0,
     all: 0
   };
@@ -5354,8 +5359,8 @@ function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {
   for (const item of items) {
     counts.all += 1;
 
-    if (item.managedBy === "spotifybu") {
-      counts.spotifybu += 1;
+    if (isTrackKeepManaged(item.managedBy)) {
+      counts.trackkeep += 1;
     }
 
     if (item.status === "same") {
@@ -5406,8 +5411,8 @@ function organizePreviewItemMatchesFilter(item: OrganizePreviewItem, filter: Org
     return item.status === "missing-source";
   }
 
-  if (filter === "spotifybu") {
-    return item.managedBy === "spotifybu";
+  if (filter === "trackkeep") {
+    return isTrackKeepManaged(item.managedBy);
   }
 
   return item.status === filter;
@@ -5479,8 +5484,8 @@ function duplicateTrashSelectionWouldRemoveGroup(
 
 function organizeChangeLabel(item: OrganizePlan["items"][number]) {
   if (item.status === "same") {
-    if (item.managedBy === "spotifybu") {
-      return "SpotifyBU";
+    if (isTrackKeepManaged(item.managedBy)) {
+      return "TrackKeep";
     }
 
     return "Already organized";

@@ -1,6 +1,6 @@
+import { constants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Stats } from "node:fs";
 import type {
   NavidromeMetadataDiagnosticCode,
   OrganizeApplyResult,
@@ -15,6 +15,7 @@ import type {
 import { duplicateKeyForTrack } from "./matching.js";
 import { standardNamingFormatDefaults } from "./settings.js";
 import type { PrivateSettings } from "./settings.js";
+import { isTrackKeepManaged, normalizeTrackKeepManagedBy } from "./trackkeep.js";
 import { isInsidePath, toPosixRelative } from "./utils.js";
 
 const unknownReleaseYear = "Unknown Year";
@@ -67,7 +68,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       targetRelativePath: target.targetRelativePath,
       targetSource: track.targetSource ?? "naviclean",
       navidromeEnrichment: track.navidromeEnrichment,
-      managedBy: track.managedBy,
+      managedBy: normalizeTrackKeepManagedBy(track.managedBy),
       metadataConfidence: track.metadataConfidence,
       metadataSuggestion: track.metadataSuggestion,
       artist: track.artist,
@@ -91,6 +92,10 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
   const plannedItemsByTargetPath = new Map<string, PlannedOrganizeItem[]>();
 
   for (const planned of plannedItems) {
+    if (isTrackKeepManaged(planned.track.managedBy)) {
+      continue;
+    }
+
     const targetGroup = plannedItemsByTargetPath.get(planned.targetKey) || [];
     targetGroup.push(planned);
     plannedItemsByTargetPath.set(planned.targetKey, targetGroup);
@@ -99,25 +104,30 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
   for (const planned of plannedItems) {
     const { item, target, targetKey, track } = planned;
     const targetGroup = plannedItemsByTargetPath.get(targetKey) || [];
-    const targetStat = target.outsideLibrary ? null : await statIfExists(target.targetPath);
-    const collision = buildCollision(
-      track,
-      target,
-      targetGroup,
-      tracksBySourcePath.get(targetKey),
-      targetStat
-    );
+    const sourceExists = await pathExists(track.absolutePath);
+    const sourceReadable = sourceExists && await pathIsReadable(track.absolutePath);
+    const trackKeepManaged = isTrackKeepManaged(track.managedBy);
+    const targetStat = !trackKeepManaged && !target.outsideLibrary ? await statIfExists(target.targetPath) : null;
+    const collision = !trackKeepManaged
+      ? buildCollision(track, target, targetGroup, tracksBySourcePath.get(targetKey), targetStat)
+      : undefined;
 
     if (collision) {
       item.collision = collision;
     }
 
-    if (target.outsideLibrary) {
-      item.status = "outside-library";
-      item.message = "Target leaves library root";
-    } else if (!(await pathExists(track.absolutePath))) {
+    if (!sourceExists) {
       item.status = "missing-source";
       item.message = "Source file is missing";
+    } else if (!sourceReadable) {
+      item.status = "missing-source";
+      item.message = "Source file is unreadable";
+    } else if (trackKeepManaged) {
+      item.status = "same";
+      item.message = "Managed by TrackKeep";
+    } else if (target.outsideLibrary) {
+      item.status = "outside-library";
+      item.message = "Target leaves library root";
     } else if (track.metadataConfidence === "path-suggestion") {
       item.status = "metadata-review";
       item.message = "Path-derived artist or album needs confirmation";
@@ -133,9 +143,6 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     } else if (targetGroup.length > 1) {
       item.status = "conflict";
       item.message = "Multiple tracks resolve to this target";
-    } else if (track.managedBy === "spotifybu") {
-      item.status = "same";
-      item.message = "Managed by SpotifyBU";
     }
 
     items.push(item);
@@ -465,7 +472,7 @@ export async function trashOrganizeCandidates(
 }
 
 export function trackNeedsMove(track: TrackFile) {
-  return track.managedBy !== "spotifybu" && path.resolve(track.absolutePath) !== path.resolve(track.targetPath);
+  return !isTrackKeepManaged(track.managedBy) && path.resolve(track.absolutePath) !== path.resolve(track.targetPath);
 }
 
 function templateRelativePath(track: TrackFile, settings: PrivateSettings, extension: string) {
@@ -731,6 +738,15 @@ function releaseYear(track: TrackFile) {
 async function pathExists(filePath: string) {
   try {
     await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function pathIsReadable(filePath: string) {
+  try {
+    await fs.access(filePath, constants.R_OK);
     return true;
   } catch {
     return false;
