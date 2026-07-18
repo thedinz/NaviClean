@@ -3986,7 +3986,7 @@ function SpotifyMetadataResolver({
 
   return (
     <div className="spotify-metadata-resolver">
-      {item.metadataConfidence === "path-suggestion" && (
+      {!isTrackKeepManaged(item.managedBy) && item.metadataConfidence === "path-suggestion" && (
         <div className="metadata-review-summary">
           <span className="status-detail">Suggested from path — not verified</span>
           <strong>
