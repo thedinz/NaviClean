@@ -2,6 +2,7 @@ import path from "node:path";
 import type { TrackFile } from "../shared/types.js";
 import { targetForTrack } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
+import { isTrackKeepManaged } from "./trackkeep.js";
 
 export function trustPathMetadataForFolder(
   settings: PrivateSettings,
@@ -12,6 +13,10 @@ export function trustPathMetadataForFolder(
 
   if (!selected) {
     throw new Error("The local track is no longer in the current scan. Refresh the organize preview and try again.");
+  }
+
+  if (isTrackKeepManaged(selected.managedBy)) {
+    throw new Error("TrackKeep-managed files do not use path metadata trust.");
   }
 
   if (selected.metadataConfidence !== "path-suggestion") {
@@ -28,6 +33,7 @@ export function trustPathMetadataForFolder(
     const folder = path.posix.dirname(track.relativePath.replace(/\\/g, "/"));
     if (
       folder !== selectedFolder ||
+      isTrackKeepManaged(track.managedBy) ||
       track.metadataConfidence !== "path-suggestion" ||
       !track.metadataSuggestion?.artist ||
       !track.metadataSuggestion.album

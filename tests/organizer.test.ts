@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { TrackFile } from "../src/shared/types.js";
+import { trustPathMetadataForFolder } from "../src/server/metadata-review.js";
 import { buildOrganizePlan, targetForTrack, trashOrganizeCandidate, trashOrganizeCandidates } from "../src/server/organizer.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 
@@ -187,6 +188,70 @@ test("legacy SpotifyBU-managed file receives TrackKeep organization protection",
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }
+});
+
+test("TrackKeep and legacy SpotifyBU files reject path metadata trust", () => {
+  for (const managedBy of ["trackkeep", "spotifybu"] as const) {
+    const managedTrack = track({
+      managedBy,
+      metadataConfidence: "path-suggestion",
+      metadataSuggestion: {
+        artist: "Artist",
+        albumArtist: "Artist",
+        album: "Album Name",
+        title: "Track",
+        trackNumber: 3,
+        discNumber: 1,
+        year: 2026
+      }
+    });
+
+    assert.throws(
+      () => trustPathMetadataForFolder(settings(), [managedTrack], managedTrack.id),
+      /TrackKeep-managed files do not use path metadata trust/
+    );
+  }
+});
+
+test("trusting an ordinary folder never trusts managed tracks in that folder", () => {
+  const suggestion = {
+    artist: "Artist",
+    albumArtist: "Artist",
+    album: "Album Name",
+    title: "Track",
+    trackNumber: 3,
+    discNumber: 1,
+    year: 2026
+  };
+  const tracks = [
+    track({
+      id: "ordinary",
+      relativePath: "Incoming/ordinary.mp3",
+      metadataConfidence: "path-suggestion",
+      metadataSuggestion: suggestion
+    }),
+    track({
+      id: "trackkeep",
+      relativePath: "Incoming/trackkeep.mp3",
+      managedBy: "trackkeep",
+      metadataConfidence: "path-suggestion",
+      metadataSuggestion: suggestion
+    }),
+    track({
+      id: "legacy",
+      relativePath: "Incoming/legacy.mp3",
+      managedBy: "spotifybu",
+      metadataConfidence: "path-suggestion",
+      metadataSuggestion: suggestion
+    })
+  ];
+
+  const result = trustPathMetadataForFolder(settings(), tracks, "ordinary");
+
+  assert.deepEqual(result.updatedTrackIds, ["ordinary"]);
+  assert.equal(result.tracks[0]?.metadataConfidence, "trusted-path");
+  assert.equal(result.tracks[1]?.metadataConfidence, "path-suggestion");
+  assert.equal(result.tracks[2]?.metadataConfidence, "path-suggestion");
 });
 
 test("normal file without TrackKeep identity keeps existing organization behavior", async () => {

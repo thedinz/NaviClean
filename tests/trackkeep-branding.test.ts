@@ -7,5 +7,9 @@ test("organizer filter and badges use current TrackKeep wording", async () => {
 
   assert.match(appSource, /id: "trackkeep", label: "TrackKeep"/);
   assert.match(appSource, /filterCounts\.trackkeep[^\n]+TrackKeep/);
+  assert.match(
+    appSource,
+    /!isTrackKeepManaged\(item\.managedBy\) && item\.metadataConfidence === "path-suggestion"/
+  );
   assert.doesNotMatch(appSource, /label: "SpotifyBU"/);
 });
