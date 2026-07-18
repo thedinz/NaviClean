@@ -62,6 +62,8 @@ type SpotifyToken = {
 let cachedToken: SpotifyToken | null = null;
 let requestWindowStartedAt = 0;
 let requestWindowCount = 0;
+const spotifyMetadataMatchCache = new Map<string, { expiresAt: number; match: SpotifyMetadataMatch }>();
+const spotifyMetadataMatchCacheTtlMs = 10 * 60 * 1000;
 
 export async function testSpotifyConnection(
   settings: PrivateSettings,
@@ -136,9 +138,18 @@ export async function searchSpotifyTrackMetadata(
     }
   );
 
+  const matches = response.tracks.items.filter((track) => Boolean(track?.album)).map(spotifyMetadataMatch);
+
+  for (const match of matches) {
+    spotifyMetadataMatchCache.set(match.id, {
+      expiresAt: Date.now() + spotifyMetadataMatchCacheTtlMs,
+      match
+    });
+  }
+
   return {
     query: search,
-    matches: response.tracks.items.filter((track) => Boolean(track?.album)).map(spotifyMetadataMatch)
+    matches
   };
 }
 
@@ -151,6 +162,13 @@ export async function getSpotifyTrackMetadata(
   if (!id) {
     throw new Error("Spotify track id is required.");
   }
+
+  const cached = spotifyMetadataMatchCache.get(id);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.match;
+  }
+
+  spotifyMetadataMatchCache.delete(id);
 
   const track = await spotifyRequest<SpotifyTrack>(
     settings,
@@ -223,7 +241,8 @@ export async function getSpotifyArtistDiscography(
 export async function getSpotifyAlbumDetail(
   settings: PrivateSettings,
   localTracks: TrackFile[],
-  albumId: string
+  albumId: string,
+  options: { hydrateTrackDetails?: boolean } = {}
 ): Promise<SpotifyAlbumDetail> {
   const album = await spotifyRequest<SpotifyAlbum & { tracks: { items: SpotifyTrack[] } }>(
     settings,
@@ -239,7 +258,9 @@ export async function getSpotifyAlbumDetail(
   };
   const albumArtist = artist.name;
   const albumName = album.name;
-  const detailedTracks = await fetchSpotifyTrackDetails(settings, album.tracks.items);
+  const detailedTracks = options.hydrateTrackDetails === false
+    ? album.tracks.items
+    : await fetchSpotifyTrackDetails(settings, album.tracks.items);
   const tracks = detailedTracks.map((track) =>
     spotifyTrackSummary(track, localTracks, albumArtist, albumName)
   );

@@ -26,7 +26,9 @@ export async function resolveTrackMetadataFromSpotify(
   }
 
   const selected = await getSpotifyTrackMetadata(settings, spotifyTrackId);
-  const album = await getSpotifyAlbumDetail(settings, tracks, selected.albumId);
+  const album = await getSpotifyAlbumDetail(settings, tracks, selected.albumId, {
+    hydrateTrackDetails: false
+  });
   const selectedFolder = path.posix.dirname(selectedLocalTrack.relativePath.replace(/\\/g, "/"));
   const albumDiscTotal = Math.max(1, ...album.tracks.map((track) => track.discNumber));
   const updatedTrackIds: string[] = [];
@@ -37,7 +39,7 @@ export async function resolveTrackMetadataFromSpotify(
     }
 
     const spotifyTrack = track.id === localTrackId
-      ? album.tracks.find((candidate) => candidate.id === selected.id) ?? spotifySummaryFromMatch(selected)
+      ? selectedSpotifyTrack(selected, album.tracks)
       : uniqueAlbumTrackMatch(track, album.tracks);
 
     if (!spotifyTrack) {
@@ -61,6 +63,19 @@ export async function resolveTrackMetadataFromSpotify(
     tracks: nextTracks,
     updatedTrackIds
   };
+}
+
+function selectedSpotifyTrack(selected: SpotifyMetadataMatch, albumTracks: SpotifyTrackSummary[]) {
+  const selectedSummary = spotifySummaryFromMatch(selected);
+  const albumTrack = albumTracks.find((candidate) => candidate.id === selected.id);
+
+  return albumTrack
+    ? {
+        ...albumTrack,
+        ...selectedSummary,
+        isrc: selectedSummary.isrc ?? albumTrack.isrc
+      }
+    : selectedSummary;
 }
 
 function uniqueAlbumTrackMatch(localTrack: TrackFile, spotifyTracks: SpotifyTrackSummary[]) {

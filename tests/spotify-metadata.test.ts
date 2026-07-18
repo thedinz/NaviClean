@@ -3,6 +3,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { resolveTrackMetadataFromSpotify } from "../src/server/spotify-metadata.js";
 import type { PrivateSettings } from "../src/server/settings.js";
+import { searchSpotifyTrackMetadata } from "../src/server/spotify.js";
 import type { TrackFile } from "../src/shared/types.js";
 
 test("a confirmed Spotify match corrects unambiguous album siblings in the same source folder", async () => {
@@ -59,6 +60,60 @@ test("a confirmed Spotify match corrects unambiguous album siblings in the same 
     assert.equal(result.tracks[1]?.isrc, "USABC1300010");
     assert.equal(result.tracks[1]?.targetRelativePath, "Russ/Russ - 5280 (2013)/Russ - 5280 (2013) - 10 - Set Me Free.m4a");
     assert.equal(result.tracks[2]?.album, "Unknown Album");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("choosing a recent Spotify search result avoids redundant track and album hydration requests", async () => {
+  const originalFetch = globalThis.fetch;
+  const catalogRequests: string[] = [];
+  const selectedTrack = spotifyTrack("cached-spotify-9", "Live Slow or Die Fast", 9, true);
+  const albumTrack = {
+    ...spotifyTrack("cached-spotify-9", "Live Slow or Die Fast", 9, false),
+    external_ids: undefined
+  };
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.hostname === "accounts.spotify.com") {
+      return jsonResponse({ access_token: "metadata-cache-test-token", expires_in: 3600 });
+    }
+
+    catalogRequests.push(url.pathname);
+    if (url.pathname === "/v1/search") {
+      return jsonResponse({ tracks: { items: [selectedTrack] } });
+    }
+
+    if (url.pathname === "/v1/albums/album-5280") {
+      return jsonResponse({
+        ...spotifyAlbum(),
+        tracks: { items: [albumTrack] }
+      });
+    }
+
+    return jsonResponse({ error: `Unexpected request: ${url.pathname}` }, 404);
+  };
+
+  try {
+    const local = localTrack(
+      "local-cached-9",
+      "Russ/Unknown source/09 - Live Slow or Die Fast.m4a",
+      "Live Slow or Die Fast",
+      9
+    );
+    const search = await searchSpotifyTrackMetadata(settings(), "Russ Live Slow or Die Fast");
+    const result = await resolveTrackMetadataFromSpotify(
+      settings(),
+      [local],
+      local.id,
+      search.matches[0]?.id ?? ""
+    );
+
+    assert.deepEqual(catalogRequests, ["/v1/search", "/v1/albums/album-5280"]);
+    assert.equal(result.tracks[0]?.metadataConfidence, "spotify");
+    assert.equal(result.tracks[0]?.isrc, "USABC130009");
   } finally {
     globalThis.fetch = originalFetch;
   }

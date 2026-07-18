@@ -3556,6 +3556,13 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
     setSelectedTrashCandidates((current) => pruneSelectedTrashCandidates(nextPlan.items, current));
   };
 
+  const showMutationPlan = (nextPlan: OrganizePlan) => {
+    // A completed mutation is authoritative over any older preview still in flight.
+    previewRequestId.current += 1;
+    setPreviewBusy(false);
+    showPlan(nextPlan);
+  };
+
   const load = async ({
     clearNotice = true,
     quick = false,
@@ -3883,13 +3890,13 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
                             item={item}
                             disabled={previewBusy || applyBusy || Boolean(trashBusyKey)}
                             onResolved={(result) => {
-                              showPlan(result.plan);
+                              showMutationPlan(result.plan);
                               setNotice(
                                 `Spotify metadata selected for ${result.matchedTracks} ${pluralize("track", result.matchedTracks)} from ${result.selected.album}. Review the updated targets, then Apply.`
                               );
                             }}
                             onTrusted={(result) => {
-                              showPlan(result.plan);
+                              showMutationPlan(result.plan);
                               setNotice(
                                 `Trusted path metadata for ${result.trustedTracks} ${pluralize("track", result.trustedTracks)} in this folder. Review the updated targets, then Apply.`
                               );
@@ -3956,6 +3963,14 @@ function SpotifyMetadataResolver({
         method: "POST",
         body: JSON.stringify({ localTrackId: item.id, spotifyTrackId: match.id })
       });
+
+      const resolvedItem = result.plan.items.find((candidate) => candidate.id === item.id);
+      if (!result.updatedTrackIds.includes(item.id) || resolvedItem?.metadataConfidence !== "spotify") {
+        throw new Error("Spotify metadata was returned but the organizer preview did not update. Refresh the preview and try again.");
+      }
+
+      setOpen(false);
+      setMatches([]);
       onResolved(result);
     } catch (caught) {
       setError((caught as Error).message);
