@@ -5,7 +5,8 @@ import path from "node:path";
 import { test } from "node:test";
 import type { TrackFile } from "../src/shared/types.js";
 import { trustPathMetadataForFolder } from "../src/server/metadata-review.js";
-import { buildOrganizePlan, targetForTrack, trashOrganizeCandidate, trashOrganizeCandidates } from "../src/server/organizer.js";
+import { preserveOrganizationSkipDecisions, setTrackOrganizationSkipped } from "../src/server/organize-skip.js";
+import { buildOrganizePlan, targetForTrack, trackNeedsMove, trashOrganizeCandidate, trashOrganizeCandidates } from "../src/server/organizer.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 
 const standardTrackFormat =
@@ -228,6 +229,7 @@ test("trusting an ordinary folder never trusts managed tracks in that folder", (
       id: "ordinary",
       relativePath: "Incoming/ordinary.mp3",
       metadataConfidence: "path-suggestion",
+      organizeSkippedAt: "2026-07-18T12:00:00.000Z",
       metadataSuggestion: suggestion
     }),
     track({
@@ -250,6 +252,7 @@ test("trusting an ordinary folder never trusts managed tracks in that folder", (
 
   assert.deepEqual(result.updatedTrackIds, ["ordinary"]);
   assert.equal(result.tracks[0]?.metadataConfidence, "trusted-path");
+  assert.equal(result.tracks[0]?.organizeSkippedAt, undefined);
   assert.equal(result.tracks[1]?.metadataConfidence, "path-suggestion");
   assert.equal(result.tracks[2]?.metadataConfidence, "path-suggestion");
 });
@@ -282,6 +285,82 @@ test("normal file without TrackKeep identity keeps existing organization behavio
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }
+});
+
+test("a skipped metadata-review track is saved for later and excluded from organization", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const sourceRelativePath = "Incoming/Track Copy.mp3";
+    const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "audio");
+    const skippedTrack = track({
+      absolutePath: sourcePath,
+      relativePath: sourceRelativePath,
+      metadataConfidence: "path-suggestion",
+      organizeSkippedAt: "2026-07-18T12:00:00.000Z"
+    });
+    const plan = await buildOrganizePlan([skippedTrack], settings({ libraryPath: root }));
+
+    assert.equal(plan.items[0]?.status, "skipped");
+    assert.equal(plan.items[0]?.message, "Skipped by user");
+    assert.equal(plan.summary.skipped, 1);
+    assert.equal(plan.summary.ready, 0);
+    assert.equal(plan.summary.metadataReview, 0);
+    assert.equal(trackNeedsMove({ ...skippedTrack, targetPath: path.join(root, "different.mp3") }), false);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("a skipped track still reports a missing source while remaining browseable as skipped", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+  const missingPath = path.join(root, "Incoming", "Missing.mp3");
+
+  try {
+    const plan = await buildOrganizePlan(
+      [track({ absolutePath: missingPath, relativePath: "Incoming/Missing.mp3", organizeSkippedAt: "2026-07-18T12:00:00.000Z" })],
+      settings({ libraryPath: root })
+    );
+
+    assert.equal(plan.items[0]?.status, "missing-source");
+    assert.equal(plan.summary.missing, 1);
+    assert.equal(plan.summary.skipped, 1);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("skip and retry decisions validate eligibility and preserve the original catalog track", () => {
+  const original = track({ metadataConfidence: "path-suggestion" });
+  const skipped = setTrackOrganizationSkipped([original], original.id, true, new Date("2026-07-18T12:00:00.000Z"));
+
+  assert.equal(skipped.tracks[0]?.organizeSkippedAt, "2026-07-18T12:00:00.000Z");
+  assert.equal(original.organizeSkippedAt, undefined);
+  assert.deepEqual(skipped.updatedTrackIds, [original.id]);
+
+  const retried = setTrackOrganizationSkipped(skipped.tracks, original.id, false);
+  assert.equal(retried.tracks[0]?.organizeSkippedAt, undefined);
+  assert.equal(retried.skipped, false);
+  assert.throws(
+    () => setTrackOrganizationSkipped([track({ metadataConfidence: "embedded" })], "track-1", true),
+    /Only tracks with unconfirmed filename or folder metadata/
+  );
+  assert.throws(
+    () => setTrackOrganizationSkipped([track({ managedBy: "trackkeep", metadataConfidence: "path-suggestion" })], "track-1", true),
+    /TrackKeep-managed files/
+  );
+});
+
+test("skip decisions survive rescans by absolute source path", () => {
+  const scanned = track({ id: "new-scan-id", organizeSkippedAt: undefined });
+  const previous = track({ id: "old-scan-id", organizeSkippedAt: "2026-07-18T12:00:00.000Z" });
+  const preserved = preserveOrganizationSkipDecisions([scanned], [previous]);
+
+  assert.equal(preserved[0]?.id, "new-scan-id");
+  assert.equal(preserved[0]?.organizeSkippedAt, "2026-07-18T12:00:00.000Z");
+  assert.equal(scanned.organizeSkippedAt, undefined);
 });
 
 test("TrackKeep-managed missing source still reports the hard error", async () => {

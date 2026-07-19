@@ -351,6 +351,7 @@ export type TrackFile = {
   metadataSuggestion?: TrackMetadataSuggestion;
   navidromeEnrichment?: NavidromeMetadataEnrichment;
   managedBy?: TrackManager;
+  organizeSkippedAt?: string;
   issues: string[];
 };
 
@@ -688,6 +689,7 @@ export type OrganizePlanItem = {
   targetSource?: "naviclean" | "navidrome" | "spotify";
   navidromeEnrichment?: NavidromeMetadataEnrichment;
   managedBy?: TrackManager;
+  organizeSkippedAt?: string;
   metadataConfidence?: TrackFile["metadataConfidence"];
   metadataSuggestion?: TrackMetadataSuggestion;
   artist: string;
@@ -696,7 +698,7 @@ export type OrganizePlanItem = {
   title: string;
   trackNumber: number | null;
   year: number | null;
-  status: "ready" | "same" | "metadata-review" | "duplicate-target" | "conflict" | "outside-library" | "missing-source";
+  status: "ready" | "same" | "skipped" | "metadata-review" | "duplicate-target" | "conflict" | "outside-library" | "missing-source";
   message: string;
   collision?: OrganizeCollision;
 };
@@ -710,6 +712,12 @@ export type OrganizeSpotifyMatchResult = {
 
 export type OrganizeTrustPathResult = {
   trustedTracks: number;
+  updatedTrackIds: string[];
+  plan: OrganizePlan;
+};
+
+export type OrganizeSkipResult = {
+  skipped: boolean;
   updatedTrackIds: string[];
   plan: OrganizePlan;
 };
@@ -754,6 +762,7 @@ export type OrganizePlan = {
     conflicts: number;
     metadataReview: number;
     missing: number;
+    skipped: number;
   };
 };
 

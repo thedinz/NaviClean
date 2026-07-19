@@ -46,7 +46,10 @@ test("a confirmed Spotify match corrects unambiguous album siblings in the same 
 
   try {
     const tracks = [
-      localTrack("local-9", "Russ/Unknown source/09 - Live Slow or Die Fast.m4a", "Live Slow or Die Fast", 9),
+      {
+        ...localTrack("local-9", "Russ/Unknown source/09 - Live Slow or Die Fast.m4a", "Live Slow or Die Fast", 9),
+        organizeSkippedAt: "2026-07-18T12:00:00.000Z"
+      },
       localTrack("local-10", "Russ/Unknown source/10 - Set Me Free.m4a", "Set Me Free", 10),
       localTrack("other", "Russ/Another folder/10 - Set Me Free.m4a", "Set Me Free", 10)
     ];
@@ -55,6 +58,7 @@ test("a confirmed Spotify match corrects unambiguous album siblings in the same 
     assert.equal(result.matchedTracks, 2);
     assert.deepEqual(result.updatedTrackIds, ["local-9", "local-10"]);
     assert.equal(result.tracks[0]?.album, "5280");
+    assert.equal(result.tracks[0]?.organizeSkippedAt, undefined);
     assert.equal(result.tracks[1]?.album, "5280");
     assert.equal(result.tracks[1]?.targetSource, "spotify");
     assert.equal(result.tracks[1]?.isrc, "USABC1300010");
