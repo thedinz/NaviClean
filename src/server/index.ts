@@ -30,6 +30,7 @@ import {
 } from "./library.js";
 import { listNonMusicFileGroup, listNonMusicFiles, trashNonMusicFileGroups, trashNonMusicFiles } from "./non-music.js";
 import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate, trashOrganizeCandidates } from "./organizer.js";
+import { setTrackOrganizationSkipped } from "./organize-skip.js";
 import {
   getSpotifyCatalogDownloadJob,
   previewSpotifyCatalogDownloads,
@@ -765,6 +766,29 @@ app.post("/api/organize/trust-path", asyncHandler(async (req, res) => {
 
   res.json({
     trustedTracks: resolution.trustedTracks,
+    updatedTrackIds: resolution.updatedTrackIds,
+    plan: refreshed.plan
+  });
+}));
+
+app.post("/api/organize/skip", asyncHandler(async (req, res) => {
+  const localTrackId = String(req.body.localTrackId || "");
+  const skipped = req.body.skipped;
+
+  if (!localTrackId || typeof skipped !== "boolean") {
+    res.status(400).json({ error: "localTrackId and skipped are required" });
+    return;
+  }
+
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+  const resolution = setTrackOrganizationSkipped(catalog.tracks, localTrackId, skipped);
+  const latestCatalog = await saveCatalog(resolution.tracks);
+  invalidateOrganizeEvaluationCache();
+  const refreshed = await rebuildOrganizeEvaluation(latestCatalog, settings);
+
+  res.json({
+    skipped: resolution.skipped,
     updatedTrackIds: resolution.updatedTrackIds,
     plan: refreshed.plan
   });

@@ -65,6 +65,7 @@ import type {
   OrganizeApplyResult,
   OrganizeCollisionCandidate,
   OrganizePlan,
+  OrganizeSkipResult,
   OrganizeSpotifyMatchResult,
   OrganizeTrustPathResult,
   OrganizeTrashResult,
@@ -95,7 +96,7 @@ import { appVersion } from "./version";
 type Page = "dashboard" | "instructions" | "library" | "empty-folders" | "non-music" | "unindexed" | "discover" | "organize" | "convert" | "duplicates" | "trash" | "settings";
 type AppTheme = "light" | "dark";
 type UnindexedFilter = "all" | "possible-stale-scan" | "no-api-match";
-type OrganizePreviewFilter = "attention" | "metadata-review" | "ready" | "duplicate-target" | "conflict" | "missing" | "trackkeep" | "same" | "all";
+type OrganizePreviewFilter = "attention" | "metadata-review" | "skipped" | "ready" | "duplicate-target" | "conflict" | "missing" | "trackkeep" | "same" | "all";
 type OrganizePreviewItem = OrganizePlan["items"][number];
 
 const libraryArtistPageSize = 25;
@@ -161,6 +162,7 @@ const navItems: NavItem[] = [
 const organizePreviewFilters: Array<{ id: OrganizePreviewFilter; label: string }> = [
   { id: "attention", label: "Needs action" },
   { id: "metadata-review", label: "Metadata review" },
+  { id: "skipped", label: "Skipped" },
   { id: "ready", label: "Ready" },
   { id: "duplicate-target", label: "Duplicates" },
   { id: "conflict", label: "Conflicts" },
@@ -3681,6 +3683,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
             <>
               <span>{plan.summary.ready} ready</span>
               <span>{plan.summary.metadataReview} metadata review</span>
+              <span>{plan.summary.skipped} skipped</span>
               <span>{plan.summary.same} organized</span>
               {filterCounts.trackkeep > 0 && <span>{filterCounts.trackkeep} TrackKeep</span>}
               <span>{plan.summary.duplicateTargets} duplicates</span>
@@ -3901,6 +3904,15 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
                                 `Trusted path metadata for ${result.trustedTracks} ${pluralize("track", result.trustedTracks)} in this folder. Review the updated targets, then Apply.`
                               );
                             }}
+                            onSkipped={(result) => {
+                              showMutationPlan(result.plan);
+                              if (result.skipped) {
+                                setOrganizeFilter("skipped");
+                                setNotice("Track skipped. You can revisit it anytime from the Skipped section.");
+                              } else {
+                                setNotice("Track returned to organization review using the latest available metadata.");
+                              }
+                            }}
                           />
                         </div>
                       </td>
@@ -3920,12 +3932,14 @@ function SpotifyMetadataResolver({
   item,
   disabled,
   onResolved,
-  onTrusted
+  onTrusted,
+  onSkipped
 }: {
   item: OrganizePreviewItem;
   disabled: boolean;
   onResolved: (result: OrganizeSpotifyMatchResult) => void;
   onTrusted: (result: OrganizeTrustPathResult) => void;
+  onSkipped: (result: OrganizeSkipResult) => void;
 }) {
   const knownArtist = /^(?:\[?unknown artist\]?|unknown)$/i.test(item.albumArtist || item.artist)
     ? ""
@@ -3937,7 +3951,9 @@ function SpotifyMetadataResolver({
   const [busy, setBusy] = useState(false);
   const [selectingId, setSelectingId] = useState<string | null>(null);
   const [trustBusy, setTrustBusy] = useState(false);
+  const [skipBusy, setSkipBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const organizationSkipped = Boolean(item.organizeSkippedAt);
 
   const search = async (nextQuery = query) => {
     setBusy(true);
@@ -3999,9 +4015,32 @@ function SpotifyMetadataResolver({
     }
   };
 
+  const setSkipped = async (skipped: boolean) => {
+    if (
+      skipped &&
+      !window.confirm("Skip this track instead of organizing it with unverified filename or folder metadata?")
+    ) {
+      return;
+    }
+
+    setSkipBusy(true);
+    setError(null);
+    try {
+      const result = await api<OrganizeSkipResult>("/organize/skip", {
+        method: "POST",
+        body: JSON.stringify({ localTrackId: item.id, skipped })
+      });
+      onSkipped(result);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setSkipBusy(false);
+    }
+  };
+
   return (
     <div className="spotify-metadata-resolver">
-      {!isTrackKeepManaged(item.managedBy) && item.metadataConfidence === "path-suggestion" && (
+      {!isTrackKeepManaged(item.managedBy) && item.metadataConfidence === "path-suggestion" && !organizationSkipped && (
         <div className="metadata-review-summary">
           <span className="status-detail">Suggested from path — not verified</span>
           <strong>
@@ -4011,19 +4050,42 @@ function SpotifyMetadataResolver({
             <button
               className="secondary-button compact-button"
               type="button"
-              disabled={disabled || trustBusy || busy || Boolean(selectingId)}
+              disabled={disabled || trustBusy || skipBusy || busy || Boolean(selectingId)}
               onClick={() => void trustFolder()}
             >
               {trustBusy ? <Loader2 className="spin" size={16} /> : <Check size={16} />}
               <span>{trustBusy ? "Trusting" : "Trust this folder"}</span>
             </button>
           )}
+          <button
+            className="secondary-button compact-button"
+            type="button"
+            disabled={disabled || trustBusy || skipBusy || busy || Boolean(selectingId)}
+            onClick={() => void setSkipped(true)}
+          >
+            {skipBusy ? <Loader2 className="spin" size={16} /> : <FolderX size={16} />}
+            <span>{skipBusy ? "Skipping" : "Skip track"}</span>
+          </button>
+        </div>
+      )}
+      {organizationSkipped && (
+        <div className="metadata-review-summary">
+          <span className="status-detail">Saved for later — no file changes will be made</span>
+          <button
+            className="secondary-button compact-button"
+            type="button"
+            disabled={disabled || skipBusy || busy || Boolean(selectingId)}
+            onClick={() => void setSkipped(false)}
+          >
+            {skipBusy ? <Loader2 className="spin" size={16} /> : <Undo2 size={16} />}
+            <span>{skipBusy ? "Retrying" : "Retry organization"}</span>
+          </button>
         </div>
       )}
       <button
         className="secondary-button compact-button"
         type="button"
-        disabled={disabled || trustBusy || busy || Boolean(selectingId)}
+        disabled={disabled || trustBusy || skipBusy || busy || Boolean(selectingId)}
         onClick={() => {
           if (open) {
             setOpen(false);
@@ -4038,6 +4100,7 @@ function SpotifyMetadataResolver({
         {busy || selectingId ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
         <span>{open ? "Close Spotify" : "Find on Spotify"}</span>
       </button>
+      {error && !open && <span className="status-detail spotify-metadata-error">{error}</span>}
       {open && (
         <div className="spotify-metadata-panel">
           <form
@@ -5362,6 +5425,7 @@ function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {
   const counts: Record<OrganizePreviewFilter, number> = {
     attention: 0,
     "metadata-review": 0,
+    skipped: 0,
     ready: 0,
     "duplicate-target": 0,
     conflict: 0,
@@ -5378,6 +5442,10 @@ function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {
       counts.trackkeep += 1;
     }
 
+    if (item.organizeSkippedAt) {
+      counts.skipped += 1;
+    }
+
     if (item.status === "same") {
       counts.same += 1;
     } else if (item.status === "metadata-review") {
@@ -5385,7 +5453,7 @@ function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {
       counts.attention += 1;
     } else if (item.status === "duplicate-target") {
       counts["duplicate-target"] += 1;
-    } else {
+    } else if (item.status !== "skipped") {
       counts.attention += 1;
     }
 
@@ -5411,7 +5479,7 @@ function organizePreviewItemMatchesFilter(item: OrganizePreviewItem, filter: Org
   }
 
   if (filter === "attention") {
-    return item.status !== "same" && item.status !== "duplicate-target";
+    return item.status !== "same" && item.status !== "skipped" && item.status !== "duplicate-target";
   }
 
   if (filter === "conflict") {
@@ -5420,6 +5488,10 @@ function organizePreviewItemMatchesFilter(item: OrganizePreviewItem, filter: Org
 
   if (filter === "metadata-review") {
     return item.status === "metadata-review";
+  }
+
+  if (filter === "skipped") {
+    return Boolean(item.organizeSkippedAt);
   }
 
   if (filter === "missing") {
@@ -5512,6 +5584,10 @@ function organizeChangeLabel(item: OrganizePlan["items"][number]) {
 
   if (item.status === "metadata-review") {
     return "Metadata review";
+  }
+
+  if (item.status === "skipped") {
+    return "Skipped";
   }
 
   if (item.status === "duplicate-target") {

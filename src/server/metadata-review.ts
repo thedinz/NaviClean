@@ -43,6 +43,7 @@ export function trustPathMetadataForFolder(
 
     const partialTrack = {
       ...track,
+      organizeSkippedAt: undefined,
       metadataConfidence: "trusted-path" as const,
       issues: track.issues.filter((issue) => issue !== "Path-derived artist or album requires metadata review")
     };

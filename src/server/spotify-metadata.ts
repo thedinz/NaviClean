@@ -143,6 +143,7 @@ function trackWithSpotifyMetadata(
       isrc: spotifyTrack.isrc ?? track.isrc ?? null
     }),
     issues,
+    organizeSkippedAt: undefined,
     navidromeEnrichment: undefined,
     metadataConfidence: "spotify" as const,
     targetSource: "spotify" as const

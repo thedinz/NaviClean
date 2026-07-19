@@ -69,6 +69,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       targetSource: track.targetSource ?? "naviclean",
       navidromeEnrichment: track.navidromeEnrichment,
       managedBy: normalizeTrackKeepManagedBy(track.managedBy),
+      organizeSkippedAt: track.organizeSkippedAt,
       metadataConfidence: track.metadataConfidence,
       metadataSuggestion: track.metadataSuggestion,
       artist: track.artist,
@@ -92,7 +93,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
   const plannedItemsByTargetPath = new Map<string, PlannedOrganizeItem[]>();
 
   for (const planned of plannedItems) {
-    if (isTrackKeepManaged(planned.track.managedBy)) {
+    if (isTrackKeepManaged(planned.track.managedBy) || planned.track.organizeSkippedAt) {
       continue;
     }
 
@@ -106,11 +107,12 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     const targetGroup = plannedItemsByTargetPath.get(targetKey) || [];
     const sourceStatus = await sourcePathStatus(track.absolutePath);
     const trackKeepManaged = isTrackKeepManaged(track.managedBy);
+    const organizationSkipped = Boolean(track.organizeSkippedAt);
     const sourceMatchesTarget = path.resolve(track.absolutePath) === path.resolve(target.targetPath);
-    const targetStat = !trackKeepManaged && !target.outsideLibrary && !sourceMatchesTarget
+    const targetStat = !trackKeepManaged && !organizationSkipped && !target.outsideLibrary && !sourceMatchesTarget
       ? await statIfExists(target.targetPath)
       : null;
-    const collision = !trackKeepManaged
+    const collision = !trackKeepManaged && !organizationSkipped
       ? buildCollision(track, target, targetGroup, tracksBySourcePath.get(targetKey), targetStat)
       : undefined;
 
@@ -127,6 +129,9 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     } else if (trackKeepManaged) {
       item.status = "same";
       item.message = "Managed by TrackKeep";
+    } else if (organizationSkipped) {
+      item.status = "skipped";
+      item.message = "Skipped by user";
     } else if (target.outsideLibrary) {
       item.status = "outside-library";
       item.message = "Target leaves library root";
@@ -159,7 +164,8 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       duplicateTargets: items.filter((item) => item.status === "duplicate-target").length,
       conflicts: items.filter((item) => item.status === "conflict" || item.status === "outside-library").length,
       metadataReview: items.filter((item) => item.status === "metadata-review").length,
-      missing: items.filter((item) => item.status === "missing-source").length
+      missing: items.filter((item) => item.status === "missing-source").length,
+      skipped: items.filter((item) => Boolean(item.organizeSkippedAt)).length
     }
   };
 }
@@ -474,7 +480,7 @@ export async function trashOrganizeCandidates(
 }
 
 export function trackNeedsMove(track: TrackFile) {
-  return !isTrackKeepManaged(track.managedBy) && path.resolve(track.absolutePath) !== path.resolve(track.targetPath);
+  return !isTrackKeepManaged(track.managedBy) && !track.organizeSkippedAt && path.resolve(track.absolutePath) !== path.resolve(track.targetPath);
 }
 
 function templateRelativePath(track: TrackFile, settings: PrivateSettings, extension: string) {

@@ -3,11 +3,12 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { NavidromeMetadataEnrichment, NavidromeMetadataMatchMethod, ScanStatus, TrackFile } from "../shared/types.js";
-import { saveCatalog } from "./catalog.js";
+import { loadCatalog, saveCatalog } from "./catalog.js";
 import { buildDuplicateKey } from "./matching.js";
 import { loadMetadataOverrides, validMetadataOverride, type MetadataOverride } from "./metadata-overrides.js";
 import { fetchNavidromeLibraryTracks, searchNavidromeLibraryTrackCandidates, type NavidromeLibraryTrack } from "./navidrome.js";
 import { targetForTrack } from "./organizer.js";
+import { preserveOrganizationSkipDecisions } from "./organize-skip.js";
 import type { PrivateSettings } from "./settings.js";
 import { hasTrackKeepIdentityTags } from "./trackkeep.js";
 import {
@@ -72,8 +73,10 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
     warnings.push(warning);
   }
 
-  await saveCatalog(navidromeEnriched.tracks);
-  return { tracks: navidromeEnriched.tracks, errors, warnings };
+  const latestCatalog = await loadCatalog();
+  const nextTracks = preserveOrganizationSkipDecisions(navidromeEnriched.tracks, latestCatalog.tracks);
+  await saveCatalog(nextTracks);
+  return { tracks: nextTracks, errors, warnings };
 }
 
 async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, tracks: TrackFile[]) {
