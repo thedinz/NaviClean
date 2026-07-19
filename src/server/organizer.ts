@@ -24,6 +24,7 @@ const combiningMarks = /[\u0300-\u036f]/g;
 const reservedWindowsNames = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 const unsafePathCharacters = ["\\", "/", "<", ">", "?", "*", "|", "\""];
 const pathReplacementCharacters = ["+", "+", "", "", "!", "-", "", ""];
+const organizePlanIoConcurrency = 24;
 
 type PlannedOrganizeItem = {
   item: OrganizePlanItem;
@@ -57,7 +58,6 @@ function targetForRelativePath(track: TrackFile, settings: PrivateSettings, targ
 }
 
 export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSettings): Promise<OrganizePlan> {
-  const items: OrganizePlanItem[] = [];
   const plannedItems: PlannedOrganizeItem[] = tracks.map((track) => {
     const target = targetForTrack(track, settings);
     const item: OrganizePlanItem = {
@@ -101,13 +101,15 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     plannedItemsByTargetPath.set(planned.targetKey, targetGroup);
   }
 
-  for (const planned of plannedItems) {
+  const items = await mapWithConcurrency(plannedItems, organizePlanIoConcurrency, async (planned) => {
     const { item, target, targetKey, track } = planned;
     const targetGroup = plannedItemsByTargetPath.get(targetKey) || [];
-    const sourceExists = await pathExists(track.absolutePath);
-    const sourceReadable = sourceExists && await pathIsReadable(track.absolutePath);
+    const sourceStatus = await sourcePathStatus(track.absolutePath);
     const trackKeepManaged = isTrackKeepManaged(track.managedBy);
-    const targetStat = !trackKeepManaged && !target.outsideLibrary ? await statIfExists(target.targetPath) : null;
+    const sourceMatchesTarget = path.resolve(track.absolutePath) === path.resolve(target.targetPath);
+    const targetStat = !trackKeepManaged && !target.outsideLibrary && !sourceMatchesTarget
+      ? await statIfExists(target.targetPath)
+      : null;
     const collision = !trackKeepManaged
       ? buildCollision(track, target, targetGroup, tracksBySourcePath.get(targetKey), targetStat)
       : undefined;
@@ -116,10 +118,10 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       item.collision = collision;
     }
 
-    if (!sourceExists) {
+    if (sourceStatus === "missing") {
       item.status = "missing-source";
       item.message = "Source file is missing";
-    } else if (!sourceReadable) {
+    } else if (sourceStatus === "unreadable") {
       item.status = "missing-source";
       item.message = "Source file is unreadable";
     } else if (trackKeepManaged) {
@@ -131,7 +133,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     } else if (track.metadataConfidence === "path-suggestion") {
       item.status = "metadata-review";
       item.message = "Path-derived artist or album needs confirmation";
-    } else if (path.resolve(track.absolutePath) === path.resolve(target.targetPath)) {
+    } else if (sourceMatchesTarget) {
       item.status = "same";
       item.message = "Already organized";
     } else if (collision?.duplicateKeyMatches) {
@@ -145,8 +147,8 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       item.message = "Multiple tracks resolve to this target";
     }
 
-    items.push(item);
-  }
+    return item;
+  });
 
   return {
     items,
@@ -744,13 +746,39 @@ async function pathExists(filePath: string) {
   }
 }
 
-async function pathIsReadable(filePath: string) {
+async function sourcePathStatus(filePath: string): Promise<"readable" | "missing" | "unreadable"> {
   try {
     await fs.access(filePath, constants.R_OK);
-    return true;
-  } catch {
-    return false;
+    return "readable";
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unreadable";
   }
+}
+
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<R>
+) {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(values[index]);
+    }
+  }
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(Math.max(concurrency, 1), values.length || 1) },
+      () => worker()
+    )
+  );
+
+  return results;
 }
 
 async function statIfExists(filePath: string) {
