@@ -1,6 +1,5 @@
 import path from "node:path";
 import type { TrackFile } from "../shared/types.js";
-import { isTrackKeepManaged } from "./trackkeep.js";
 
 export function setTrackOrganizationSkipped(
   tracks: TrackFile[],
@@ -12,14 +11,6 @@ export function setTrackOrganizationSkipped(
 
   if (!selected) {
     throw new Error("The local track is no longer in the current scan. Refresh the organize preview and try again.");
-  }
-
-  if (isTrackKeepManaged(selected.managedBy)) {
-    throw new Error("TrackKeep-managed files do not use organizer skip decisions.");
-  }
-
-  if (skipped && selected.metadataConfidence !== "path-suggestion") {
-    throw new Error("Only tracks with unconfirmed filename or folder metadata can be skipped.");
   }
 
   if (!skipped && !selected.organizeSkippedAt) {
@@ -47,9 +38,7 @@ export function preserveOrganizationSkipDecisions(scannedTracks: TrackFile[], pr
   );
 
   return scannedTracks.map((track) => {
-    const organizeSkippedAt = isTrackKeepManaged(track.managedBy)
-      ? undefined
-      : skippedByPath.get(path.resolve(track.absolutePath));
+    const organizeSkippedAt = skippedByPath.get(path.resolve(track.absolutePath));
 
     return organizeSkippedAt ? { ...track, organizeSkippedAt } : track;
   });
