@@ -425,6 +425,12 @@ function trackFileFromNavidromeTrack(
   matchMethod: NavidromeMetadataMatchMethod,
   indexedTrackCount: number
 ): TrackFile {
+  const navidromeEnrichment = matchedNavidromeDiagnostic(matchMethod, indexedTrackCount);
+
+  if (track.metadataConfidence === "spotify" || track.metadataConfidence === "trusted-path") {
+    return withNavidromeDiagnostic(track, navidromeEnrichment);
+  }
+
   const navidromeArtist = cleanDisplayValue(navidromeTrack.artist, track.artist);
   const navidromeAlbumArtist = cleanDisplayValue(
     navidromeTrack.albumArtist || navidromeTrack.artist,
@@ -485,13 +491,7 @@ function trackFileFromNavidromeTrack(
       isrc
     }),
     issues,
-    navidromeEnrichment: {
-      status: "matched",
-      code: "matched",
-      message: `Matched Navidrome metadata by ${navidromeMatchMethodLabel(matchMethod)}.`,
-      matchMethod,
-      indexedTrackCount
-    },
+    navidromeEnrichment,
     metadataConfidence: "navidrome" as const,
     targetSource: "navidrome"
   } satisfies TrackFile;
@@ -501,6 +501,19 @@ function trackFileFromNavidromeTrack(
     ...partialTrack,
     targetPath: target.targetPath,
     targetRelativePath: target.targetRelativePath
+  };
+}
+
+function matchedNavidromeDiagnostic(
+  matchMethod: NavidromeMetadataMatchMethod,
+  indexedTrackCount: number
+): NavidromeMetadataEnrichment {
+  return {
+    status: "matched",
+    code: "matched",
+    message: `Matched Navidrome metadata by ${navidromeMatchMethodLabel(matchMethod)}.`,
+    matchMethod,
+    indexedTrackCount
   };
 }
 
