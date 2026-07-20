@@ -332,7 +332,7 @@ test("a skipped track still reports a missing source while remaining browseable 
   }
 });
 
-test("skip and retry decisions validate eligibility and preserve the original catalog track", () => {
+test("every track can be skipped and retried without mutating the original catalog track", () => {
   const original = track({ metadataConfidence: "path-suggestion" });
   const skipped = setTrackOrganizationSkipped([original], original.id, true, new Date("2026-07-18T12:00:00.000Z"));
 
@@ -343,14 +343,12 @@ test("skip and retry decisions validate eligibility and preserve the original ca
   const retried = setTrackOrganizationSkipped(skipped.tracks, original.id, false);
   assert.equal(retried.tracks[0]?.organizeSkippedAt, undefined);
   assert.equal(retried.skipped, false);
-  assert.throws(
-    () => setTrackOrganizationSkipped([track({ metadataConfidence: "embedded" })], "track-1", true),
-    /Only tracks with unconfirmed filename or folder metadata/
-  );
-  assert.throws(
-    () => setTrackOrganizationSkipped([track({ managedBy: "trackkeep", metadataConfidence: "path-suggestion" })], "track-1", true),
-    /TrackKeep-managed files/
-  );
+
+  const embedded = setTrackOrganizationSkipped([track({ metadataConfidence: "embedded" })], "track-1", true);
+  assert.ok(embedded.tracks[0]?.organizeSkippedAt);
+
+  const trackKeep = setTrackOrganizationSkipped([track({ managedBy: "trackkeep" })], "track-1", true);
+  assert.ok(trackKeep.tracks[0]?.organizeSkippedAt);
 });
 
 test("skip decisions survive rescans by absolute source path", () => {
@@ -361,6 +359,32 @@ test("skip decisions survive rescans by absolute source path", () => {
   assert.equal(preserved[0]?.id, "new-scan-id");
   assert.equal(preserved[0]?.organizeSkippedAt, "2026-07-18T12:00:00.000Z");
   assert.equal(scanned.organizeSkippedAt, undefined);
+});
+
+test("TrackKeep skip decisions survive rescans and appear in the skipped plan", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+  const relativePath = "TrackKeep Downloads/Managed.mp3";
+  const absolutePath = path.join(root, ...relativePath.split("/"));
+
+  try {
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    await fs.writeFile(absolutePath, "audio");
+    const previous = track({
+      absolutePath,
+      relativePath,
+      managedBy: "trackkeep",
+      organizeSkippedAt: "2026-07-18T12:00:00.000Z"
+    });
+    const scanned = track({ absolutePath, relativePath, managedBy: "trackkeep" });
+    const preserved = preserveOrganizationSkipDecisions([scanned], [previous]);
+    const plan = await buildOrganizePlan(preserved, settings({ libraryPath: root }));
+
+    assert.equal(preserved[0]?.organizeSkippedAt, "2026-07-18T12:00:00.000Z");
+    assert.equal(plan.items[0]?.status, "skipped");
+    assert.equal(plan.summary.skipped, 1);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
 });
 
 test("TrackKeep-managed missing source still reports the hard error", async () => {

@@ -126,12 +126,12 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     } else if (sourceStatus === "unreadable") {
       item.status = "missing-source";
       item.message = "Source file is unreadable";
-    } else if (trackKeepManaged) {
-      item.status = "same";
-      item.message = "Managed by TrackKeep";
     } else if (organizationSkipped) {
       item.status = "skipped";
       item.message = "Skipped by user";
+    } else if (trackKeepManaged) {
+      item.status = "same";
+      item.message = "Managed by TrackKeep";
     } else if (target.outsideLibrary) {
       item.status = "outside-library";
       item.message = "Target leaves library root";

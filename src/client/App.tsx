@@ -4057,15 +4057,6 @@ function SpotifyMetadataResolver({
               <span>{trustBusy ? "Trusting" : "Trust this folder"}</span>
             </button>
           )}
-          <button
-            className="secondary-button compact-button"
-            type="button"
-            disabled={disabled || trustBusy || skipBusy || busy || Boolean(selectingId)}
-            onClick={() => void setSkipped(true)}
-          >
-            {skipBusy ? <Loader2 className="spin" size={16} /> : <FolderX size={16} />}
-            <span>{skipBusy ? "Skipping" : "Skip track"}</span>
-          </button>
         </div>
       )}
       {organizationSkipped && (
@@ -4081,6 +4072,17 @@ function SpotifyMetadataResolver({
             <span>{skipBusy ? "Retrying" : "Retry organization"}</span>
           </button>
         </div>
+      )}
+      {!organizationSkipped && (
+        <button
+          className="secondary-button compact-button"
+          type="button"
+          disabled={disabled || trustBusy || skipBusy || busy || Boolean(selectingId)}
+          onClick={() => void setSkipped(true)}
+        >
+          {skipBusy ? <Loader2 className="spin" size={16} /> : <FolderX size={16} />}
+          <span>{skipBusy ? "Skipping" : "Skip track"}</span>
+        </button>
       )}
       <button
         className="secondary-button compact-button"
