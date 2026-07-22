@@ -79,6 +79,73 @@ test("Spotify album detail hydrates track ISRC values", async () => {
   }
 });
 
+test("Spotify album detail loads and hydrates every paginated album track", async () => {
+  const originalFetch = globalThis.fetch;
+  const trackDetailBatchSizes: number[] = [];
+  const tracks = Array.from({ length: 85 }, (_, index) => spotifyTrack(index + 1));
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.hostname === "accounts.spotify.com") {
+      return jsonResponse({
+        access_token: "test-token",
+        expires_in: 3600
+      });
+    }
+
+    if (url.hostname === "api.spotify.com" && url.pathname === "/v1/albums/album-large") {
+      return jsonResponse({
+        album_type: "album",
+        artists: [{ id: "artist-1", name: "Album Artist" }],
+        external_urls: { spotify: "https://open.spotify.com/album/album-large" },
+        id: "album-large",
+        images: [],
+        name: "Large Album",
+        release_date: "2026-01-02",
+        total_tracks: 85,
+        tracks: {
+          items: tracks.slice(0, 50),
+          next: "https://api.spotify.com/v1/albums/album-large/tracks?offset=50&limit=50"
+        }
+      });
+    }
+
+    if (url.hostname === "api.spotify.com" && url.pathname === "/v1/albums/album-large/tracks") {
+      assert.equal(url.searchParams.get("offset"), "50");
+      return jsonResponse({
+        items: tracks.slice(50),
+        next: null
+      });
+    }
+
+    if (url.hostname === "api.spotify.com" && url.pathname === "/v1/tracks") {
+      const ids = String(url.searchParams.get("ids")).split(",");
+      trackDetailBatchSizes.push(ids.length);
+      return jsonResponse({
+        tracks: ids.map((id) => ({
+          ...tracks.find((track) => track.id === id),
+          external_ids: { isrc: `USABC${id.slice(-7).padStart(7, "0")}` }
+        }))
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
+
+  try {
+    const album = await getSpotifyAlbumDetail(settings(), [], "album-large");
+
+    assert.equal(album.totalTracks, 85);
+    assert.equal(album.tracks.length, 85);
+    assert.deepEqual(trackDetailBatchSizes, [50, 35]);
+    assert.equal(album.tracks[84]?.id, "track-85");
+    assert.ok(album.tracks[84]?.isrc);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("NaviClean provider tags Spotify compilation albums for Navidrome", () => {
   const tags = metadataTags(providerMetadataArgsForSpotifyTrack(providerTrack({ albumType: "compilation" })));
 
@@ -134,6 +201,19 @@ function providerTrack(overrides: { albumType: string }) {
     name: "Track Name",
     spotifyUrl: "https://open.spotify.com/track/track-1",
     trackNumber: 7
+  };
+}
+
+function spotifyTrack(number: number) {
+  return {
+    artists: [{ id: "artist-1", name: "Album Artist" }],
+    disc_number: number > 50 ? 2 : 1,
+    duration_ms: 180000,
+    explicit: false,
+    external_urls: { spotify: `https://open.spotify.com/track/track-${number}` },
+    id: `track-${number}`,
+    name: `Track ${number}`,
+    track_number: number > 50 ? number - 50 : number
   };
 }
 
