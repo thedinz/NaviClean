@@ -53,6 +53,11 @@ type SpotifyTrack = {
   track_number: number;
 };
 
+type SpotifyPage<T> = {
+  items: T[];
+  next?: string | null;
+};
+
 type SpotifyToken = {
   accessToken: string;
   expiresAt: number;
@@ -244,7 +249,7 @@ export async function getSpotifyAlbumDetail(
   albumId: string,
   options: { hydrateTrackDetails?: boolean } = {}
 ): Promise<SpotifyAlbumDetail> {
-  const album = await spotifyRequest<SpotifyAlbum & { tracks: { items: SpotifyTrack[] } }>(
+  const album = await spotifyRequest<SpotifyAlbum & { tracks: SpotifyPage<SpotifyTrack> }>(
     settings,
     spotifyCredentials(settings),
     `/v1/albums/${encodeURIComponent(albumId)}`,
@@ -258,9 +263,13 @@ export async function getSpotifyAlbumDetail(
   };
   const albumArtist = artist.name;
   const albumName = album.name;
+  const remainingTracks = album.tracks.next
+    ? await getAllSpotifyPages<SpotifyTrack>(settings, album.tracks.next, {})
+    : [];
+  const albumTracks = [...album.tracks.items, ...remainingTracks];
   const detailedTracks = options.hydrateTrackDetails === false
-    ? album.tracks.items
-    : await fetchSpotifyTrackDetails(settings, album.tracks.items);
+    ? albumTracks
+    : await fetchSpotifyTrackDetails(settings, albumTracks);
   const tracks = detailedTracks.map((track) =>
     spotifyTrackSummary(track, localTracks, albumArtist, albumName)
   );
@@ -381,16 +390,15 @@ async function getAllSpotifyPages<T>(
   let nextParams: Record<string, string> = params;
 
   while (nextUrl) {
-    const page: {
-      items: T[];
-      next: string | null;
-    } = await spotifyRequest<{
-      items: T[];
-      next: string | null;
-    }>(settings, spotifyCredentials(settings), nextUrl, nextParams);
+    const page: SpotifyPage<T> = await spotifyRequest<SpotifyPage<T>>(
+      settings,
+      spotifyCredentials(settings),
+      nextUrl,
+      nextParams
+    );
 
     items.push(...page.items);
-    nextUrl = page.next;
+    nextUrl = page.next ?? null;
     nextParams = {};
   }
 
