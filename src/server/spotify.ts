@@ -74,6 +74,7 @@ const spotifyTrackDetailCacheTtlMs = 60 * 60 * 1000;
 const spotifyTrackDetailConcurrency = 4;
 const spotifySearchPageLimit = 10;
 const spotifyTrackSearchResultLimit = 12;
+const spotifyRequestAttempts = 4;
 
 export async function testSpotifyConnection(
   settings: PrivateSettings,
@@ -433,7 +434,7 @@ async function spotifyRequest<T>(
   endpoint: string,
   params: Record<string, string> = {}
 ): Promise<T> {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < spotifyRequestAttempts; attempt += 1) {
     await throttleSpotifyRequest(settings);
     const token = await getSpotifyAccessToken(credentials);
     const url = new URL(endpoint, "https://api.spotify.com");
@@ -444,25 +445,48 @@ async function spotifyRequest<T>(
       }
     }
 
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
-    });
+    let response: Response;
 
-    if (response.status === 429 && attempt < 3) {
-      await waitForSpotifyRetry(response);
+    try {
+      response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+    } catch (error) {
+      if (attempt < spotifyRequestAttempts - 1) {
+        await waitForSpotifyRetry(null, attempt);
+        continue;
+      }
+
+      const message = error instanceof Error && error.message
+        ? `: ${error.message}`
+        : "";
+      throw new Error(`Spotify catalog request failed after ${spotifyRequestAttempts} attempts${message}`);
+    }
+
+    if (isRetryableSpotifyStatus(response.status) && attempt < spotifyRequestAttempts - 1) {
+      await waitForSpotifyRetry(response, attempt);
       continue;
     }
 
     if (!response.ok) {
+      if (response.status >= 500) {
+        throw new Error(
+          `Spotify catalog is temporarily unavailable (HTTP ${response.status}). Try again shortly.`
+        );
+      }
       throw new Error(`Spotify catalog returned HTTP ${response.status}`);
     }
 
     return response.json() as Promise<T>;
   }
 
-  throw new Error("Spotify catalog rate limit did not clear in time.");
+  throw new Error("Spotify catalog request did not succeed.");
+}
+
+function isRetryableSpotifyStatus(status: number) {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
 }
 
 async function getAllSpotifyPages<T>(
@@ -547,11 +571,16 @@ async function throttleSpotifyRequest(settings: PrivateSettings) {
   requestWindowCount += 1;
 }
 
-async function waitForSpotifyRetry(response: Response) {
-  const retryAfter = Number(response.headers.get("retry-after"));
+async function waitForSpotifyRetry(response: Response | null, attempt: number) {
+  const retryAfterHeader = response?.headers.get("retry-after");
+  const retryAfter = retryAfterHeader === null || retryAfterHeader === undefined
+    ? Number.NaN
+    : Number(retryAfterHeader);
   const waitMs = Number.isFinite(retryAfter)
-    ? Math.max(1000, Math.min(60_000, retryAfter * 1000))
-    : 2000;
+    ? Math.max(0, Math.min(60_000, retryAfter * 1000))
+    : response?.status === 429
+      ? 2000
+      : Math.min(4000, 500 * (2 ** attempt));
 
   await new Promise((resolve) => setTimeout(resolve, waitMs));
 }
