@@ -5,6 +5,7 @@ import { providerMetadataArgsForSpotifyTrack } from "../src/server/providers.js"
 import {
   buildSpotifyDownloadPlan,
   getSpotifyAlbumDetail,
+  searchSpotifyArtists,
   searchSpotifyTrackMetadata
 } from "../src/server/spotify.js";
 import type { PrivateSettings } from "../src/server/settings.js";
@@ -179,6 +180,85 @@ test("Spotify track search transparently paginates beyond the new limit of ten",
   }
 });
 
+test("Spotify artist search retries temporary service failures", async () => {
+  const originalFetch = globalThis.fetch;
+  let catalogCalls = 0;
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.hostname === "accounts.spotify.com") {
+      return jsonResponse({ access_token: "artist-retry-token", expires_in: 3600 });
+    }
+
+    if (url.pathname === "/v1/search") {
+      catalogCalls += 1;
+      if (catalogCalls < 3) {
+        return jsonResponse(
+          { error: { message: "Service unavailable", status: 503 } },
+          503,
+          { "retry-after": "0" }
+        );
+      }
+      return jsonResponse({
+        artists: {
+          items: [{
+            external_urls: { spotify: "https://open.spotify.com/artist/artist-retry" },
+            id: "artist-retry",
+            images: [],
+            name: "Retry Artist"
+          }]
+        }
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
+
+  try {
+    const artists = await searchSpotifyArtists(settings(), "Retry Artist");
+
+    assert.equal(catalogCalls, 3);
+    assert.equal(artists[0]?.name, "Retry Artist");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Spotify catalog reports a clear error after temporary failures persist", async () => {
+  const originalFetch = globalThis.fetch;
+  let catalogCalls = 0;
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.hostname === "accounts.spotify.com") {
+      return jsonResponse({ access_token: "artist-failure-token", expires_in: 3600 });
+    }
+
+    if (url.pathname === "/v1/search") {
+      catalogCalls += 1;
+      return jsonResponse(
+        { error: { message: "Service unavailable", status: 503 } },
+        503,
+        { "retry-after": "0" }
+      );
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
+
+  try {
+    await assert.rejects(
+      searchSpotifyArtists(settings(), "Unavailable Artist"),
+      /temporarily unavailable \(HTTP 503\)/
+    );
+    assert.equal(catalogCalls, 4);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("Spotify download plans hydrate only selected tracks and reuse cached details", async () => {
   const originalFetch = globalThis.fetch;
   let trackDetailCalls = 0;
@@ -318,10 +398,15 @@ function spotifySearchTrack(number: number) {
   };
 }
 
-function jsonResponse(body: unknown, status = 200) {
+function jsonResponse(
+  body: unknown,
+  status = 200,
+  headers: Record<string, string> = {}
+) {
   return new Response(JSON.stringify(body), {
     headers: {
-      "content-type": "application/json"
+      "content-type": "application/json",
+      ...headers
     },
     status
   });
