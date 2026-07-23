@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import { providerMetadataArgsForSpotifyTrack } from "../src/server/providers.js";
-import { getSpotifyAlbumDetail } from "../src/server/spotify.js";
+import {
+  buildSpotifyDownloadPlan,
+  getSpotifyAlbumDetail,
+  searchSpotifyTrackMetadata
+} from "../src/server/spotify.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 
 test("Spotify album detail hydrates track ISRC values", async () => {
@@ -46,23 +50,19 @@ test("Spotify album detail hydrates track ISRC values", async () => {
       });
     }
 
-    if (url.hostname === "api.spotify.com" && url.pathname === "/v1/tracks") {
+    if (url.hostname === "api.spotify.com" && url.pathname === "/v1/tracks/track-1") {
       trackDetailCalls += 1;
-      assert.equal(url.searchParams.get("ids"), "track-1");
+      assert.equal(url.searchParams.has("ids"), false);
       return jsonResponse({
-        tracks: [
-          {
-            artists: [{ id: "artist-1", name: "Album Artist" }],
-            disc_number: 1,
-            duration_ms: 180000,
-            explicit: false,
-            external_ids: { isrc: "usabc2100001" },
-            external_urls: { spotify: "https://open.spotify.com/track/track-1" },
-            id: "track-1",
-            name: "Track Name",
-            track_number: 1
-          }
-        ]
+        artists: [{ id: "artist-1", name: "Album Artist" }],
+        disc_number: 1,
+        duration_ms: 180000,
+        explicit: false,
+        external_ids: { isrc: "usabc2100001" },
+        external_urls: { spotify: "https://open.spotify.com/track/track-1" },
+        id: "track-1",
+        name: "Track Name",
+        track_number: 1
       });
     }
 
@@ -70,7 +70,9 @@ test("Spotify album detail hydrates track ISRC values", async () => {
   };
 
   try {
-    const album = await getSpotifyAlbumDetail(settings(), [], "album-1");
+    const album = await getSpotifyAlbumDetail(settings(), [], "album-1", {
+      hydrateTrackDetails: true
+    });
 
     assert.equal(trackDetailCalls, 1);
     assert.equal(album.tracks[0]?.isrc, "USABC2100001");
@@ -79,9 +81,9 @@ test("Spotify album detail hydrates track ISRC values", async () => {
   }
 });
 
-test("Spotify album detail loads and hydrates every paginated album track", async () => {
+test("Spotify album detail loads every paginated album track without bulk hydration", async () => {
   const originalFetch = globalThis.fetch;
-  const trackDetailBatchSizes: number[] = [];
+  let trackDetailCalls = 0;
   const tracks = Array.from({ length: 85 }, (_, index) => spotifyTrack(index + 1));
 
   globalThis.fetch = async (input) => {
@@ -119,15 +121,9 @@ test("Spotify album detail loads and hydrates every paginated album track", asyn
       });
     }
 
-    if (url.hostname === "api.spotify.com" && url.pathname === "/v1/tracks") {
-      const ids = String(url.searchParams.get("ids")).split(",");
-      trackDetailBatchSizes.push(ids.length);
-      return jsonResponse({
-        tracks: ids.map((id) => ({
-          ...tracks.find((track) => track.id === id),
-          external_ids: { isrc: `USABC${id.slice(-7).padStart(7, "0")}` }
-        }))
-      });
+    if (url.hostname === "api.spotify.com" && url.pathname.startsWith("/v1/tracks")) {
+      trackDetailCalls += 1;
+      return jsonResponse({ error: "album loading should not hydrate track details" }, 500);
     }
 
     return jsonResponse({ error: "unexpected request" }, 404);
@@ -138,9 +134,98 @@ test("Spotify album detail loads and hydrates every paginated album track", asyn
 
     assert.equal(album.totalTracks, 85);
     assert.equal(album.tracks.length, 85);
-    assert.deepEqual(trackDetailBatchSizes, [50, 35]);
+    assert.equal(trackDetailCalls, 0);
     assert.equal(album.tracks[84]?.id, "track-85");
-    assert.ok(album.tracks[84]?.isrc);
+    assert.equal(album.tracks[84]?.isrc, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Spotify track search transparently paginates beyond the new limit of ten", async () => {
+  const originalFetch = globalThis.fetch;
+  const searchPages: string[] = [];
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.hostname === "accounts.spotify.com") {
+      return jsonResponse({ access_token: "search-test-token", expires_in: 3600 });
+    }
+
+    if (url.pathname === "/v1/search") {
+      const limit = Number(url.searchParams.get("limit"));
+      const offset = Number(url.searchParams.get("offset"));
+      searchPages.push(`${limit}:${offset}`);
+      return jsonResponse({
+        tracks: {
+          items: Array.from({ length: limit }, (_, index) =>
+            spotifySearchTrack(offset + index + 1)
+          )
+        }
+      });
+    }
+
+    return jsonResponse({ error: "unexpected request" }, 404);
+  };
+
+  try {
+    const result = await searchSpotifyTrackMetadata(settings(), "Album Artist Track");
+
+    assert.equal(result.matches.length, 12);
+    assert.deepEqual(searchPages, ["10:0", "2:10"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Spotify download plans hydrate only selected tracks and reuse cached details", async () => {
+  const originalFetch = globalThis.fetch;
+  let trackDetailCalls = 0;
+  const tracks = Array.from({ length: 3 }, (_, index) => spotifyTrack(index + 201));
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.hostname === "accounts.spotify.com") {
+      return jsonResponse({ access_token: "plan-test-token", expires_in: 3600 });
+    }
+
+    if (url.pathname === "/v1/albums/album-plan") {
+      return jsonResponse({
+        album_type: "album",
+        artists: [{ id: "artist-plan", name: "Plan Artist" }],
+        external_urls: { spotify: "https://open.spotify.com/album/album-plan" },
+        id: "album-plan",
+        images: [],
+        name: "Plan Album",
+        release_date: "2026-07-23",
+        total_tracks: tracks.length,
+        tracks: { items: tracks }
+      });
+    }
+
+    if (url.pathname === "/v1/tracks/track-202") {
+      trackDetailCalls += 1;
+      return jsonResponse({
+        ...tracks[1],
+        external_ids: { isrc: "USABC2600202" }
+      });
+    }
+
+    return jsonResponse({ error: `unexpected request: ${url.pathname}` }, 404);
+  };
+
+  try {
+    const first = await buildSpotifyDownloadPlan(settings(), [], "album-plan", ["track-202"]);
+    const second = await buildSpotifyDownloadPlan(settings(), [], "album-plan", ["track-202"]);
+
+    assert.equal(first.selectedTracks.length, 1);
+    assert.equal(first.selectedTracks[0]?.isrc, "USABC2600202");
+    assert.equal(first.album.tracks[0]?.isrc, null);
+    assert.equal(first.album.tracks[1]?.isrc, "USABC2600202");
+    assert.equal(second.selectedTracks[0]?.isrc, "USABC2600202");
+    assert.equal(trackDetailCalls, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -214,6 +299,22 @@ function spotifyTrack(number: number) {
     id: `track-${number}`,
     name: `Track ${number}`,
     track_number: number > 50 ? number - 50 : number
+  };
+}
+
+function spotifySearchTrack(number: number) {
+  return {
+    ...spotifyTrack(number + 300),
+    album: {
+      album_type: "album",
+      artists: [{ id: "artist-search", name: "Search Artist" }],
+      external_urls: { spotify: "https://open.spotify.com/album/album-search" },
+      id: `album-search-${number}`,
+      images: [],
+      name: `Search Album ${number}`,
+      release_date: "2026",
+      total_tracks: 12
+    }
   };
 }
 

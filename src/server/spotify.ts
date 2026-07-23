@@ -69,6 +69,11 @@ let requestWindowStartedAt = 0;
 let requestWindowCount = 0;
 const spotifyMetadataMatchCache = new Map<string, { expiresAt: number; match: SpotifyMetadataMatch }>();
 const spotifyMetadataMatchCacheTtlMs = 10 * 60 * 1000;
+const spotifyTrackDetailCache = new Map<string, { expiresAt: number; track: SpotifyTrack }>();
+const spotifyTrackDetailCacheTtlMs = 60 * 60 * 1000;
+const spotifyTrackDetailConcurrency = 4;
+const spotifySearchPageLimit = 10;
+const spotifyTrackSearchResultLimit = 12;
 
 export async function testSpotifyConnection(
   settings: PrivateSettings,
@@ -131,19 +136,8 @@ export async function searchSpotifyTrackMetadata(
     return { query: "", matches: [] };
   }
 
-  const response = await spotifyRequest<{ tracks: { items: SpotifyTrack[] } }>(
-    settings,
-    spotifyCredentials(settings),
-    "/v1/search",
-    {
-      limit: "12",
-      market: settings.catalog.spotify.market,
-      q: search,
-      type: "track"
-    }
-  );
-
-  const matches = response.tracks.items.filter((track) => Boolean(track?.album)).map(spotifyMetadataMatch);
+  const tracks = await searchSpotifyTracks(settings, search, spotifyTrackSearchResultLimit);
+  const matches = tracks.filter((track) => Boolean(track?.album)).map(spotifyMetadataMatch);
 
   for (const match of matches) {
     spotifyMetadataMatchCache.set(match.id, {
@@ -175,12 +169,7 @@ export async function getSpotifyTrackMetadata(
 
   spotifyMetadataMatchCache.delete(id);
 
-  const track = await spotifyRequest<SpotifyTrack>(
-    settings,
-    spotifyCredentials(settings),
-    `/v1/tracks/${encodeURIComponent(id)}`,
-    { market: settings.catalog.spotify.market }
-  );
+  const track = await getSpotifyTrackDetail(settings, id);
 
   if (!track.album) {
     throw new Error("Spotify did not return album metadata for this track.");
@@ -267,9 +256,9 @@ export async function getSpotifyAlbumDetail(
     ? await getAllSpotifyPages<SpotifyTrack>(settings, album.tracks.next, {})
     : [];
   const albumTracks = [...album.tracks.items, ...remainingTracks];
-  const detailedTracks = options.hydrateTrackDetails === false
-    ? albumTracks
-    : await fetchSpotifyTrackDetails(settings, albumTracks);
+  const detailedTracks = options.hydrateTrackDetails === true
+    ? await fetchSpotifyTrackDetails(settings, albumTracks)
+    : albumTracks;
   const tracks = detailedTracks.map((track) =>
     spotifyTrackSummary(track, localTracks, albumArtist, albumName)
   );
@@ -283,26 +272,13 @@ export async function getSpotifyAlbumDetail(
 }
 
 async function fetchSpotifyTrackDetails(settings: PrivateSettings, tracks: SpotifyTrack[]) {
-  const hydrated = new Map<string, SpotifyTrack>();
   const ids = tracks.map((track) => track.id).filter(Boolean);
-
-  for (const batch of chunks(ids, 50)) {
-    const response = await spotifyRequest<{ tracks: SpotifyTrack[] }>(
-      settings,
-      spotifyCredentials(settings),
-      "/v1/tracks",
-      {
-        ids: batch.join(","),
-        market: settings.catalog.spotify.market
-      }
-    );
-
-    for (const track of response.tracks) {
-      if (track?.id) {
-        hydrated.set(track.id, track);
-      }
-    }
-  }
+  const details = await mapWithConcurrency(
+    ids,
+    spotifyTrackDetailConcurrency,
+    (id) => getSpotifyTrackDetail(settings, id)
+  );
+  const hydrated = new Map(details.map((track) => [track.id, track]));
 
   return tracks.map((track) => ({
     ...track,
@@ -310,14 +286,87 @@ async function fetchSpotifyTrackDetails(settings: PrivateSettings, tracks: Spoti
   }));
 }
 
-function chunks<T>(items: T[], size: number) {
-  const result: T[][] = [];
+async function searchSpotifyTracks(
+  settings: PrivateSettings,
+  query: string,
+  resultLimit: number
+) {
+  const tracks: SpotifyTrack[] = [];
+  let offset = 0;
 
-  for (let index = 0; index < items.length; index += size) {
-    result.push(items.slice(index, index + size));
+  while (tracks.length < resultLimit) {
+    const limit = Math.min(spotifySearchPageLimit, resultLimit - tracks.length);
+    const response = await spotifyRequest<{ tracks: { items: SpotifyTrack[] } }>(
+      settings,
+      spotifyCredentials(settings),
+      "/v1/search",
+      {
+        limit: String(limit),
+        market: settings.catalog.spotify.market,
+        offset: String(offset),
+        q: query,
+        type: "track"
+      }
+    );
+    const items = response.tracks.items ?? [];
+
+    tracks.push(...items);
+    if (items.length < limit) {
+      break;
+    }
+    offset += items.length;
   }
 
-  return result;
+  return tracks;
+}
+
+async function getSpotifyTrackDetail(settings: PrivateSettings, trackId: string) {
+  const cacheKey = [
+    settings.catalog.spotify.clientId,
+    settings.catalog.spotify.market,
+    trackId
+  ].join(":");
+  const cached = spotifyTrackDetailCache.get(cacheKey);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.track;
+  }
+
+  spotifyTrackDetailCache.delete(cacheKey);
+  const track = await spotifyRequest<SpotifyTrack>(
+    settings,
+    spotifyCredentials(settings),
+    `/v1/tracks/${encodeURIComponent(trackId)}`,
+    { market: settings.catalog.spotify.market }
+  );
+
+  spotifyTrackDetailCache.set(cacheKey, {
+    expiresAt: Date.now() + spotifyTrackDetailCacheTtlMs,
+    track
+  });
+  return track;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  operation: (item: T) => Promise<R>
+) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(Math.max(1, concurrency), items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await operation(items[index]);
+      }
+    }
+  );
+
+  await Promise.all(workers);
+  return results;
 }
 
 export async function buildSpotifyDownloadPlan(
@@ -326,20 +375,56 @@ export async function buildSpotifyDownloadPlan(
   albumId: string,
   trackIds?: string[]
 ): Promise<SpotifyCatalogDownloadPlan> {
-  const album = await getSpotifyAlbumDetail(settings, localTracks, albumId);
+  const album = await getSpotifyAlbumDetail(settings, localTracks, albumId, {
+    hydrateTrackDetails: false
+  });
   const selectedIds = new Set(trackIds?.filter(Boolean) ?? []);
-  const selectedTracks = selectedIds.size
+  const selectedTrackSummaries = selectedIds.size
     ? album.tracks.filter((track) => selectedIds.has(track.id))
     : album.tracks.filter((track) => !track.present);
+  const selectedTracks = await hydrateSpotifyTrackSummaries(settings, selectedTrackSummaries);
+  const selectedTracksById = new Map(selectedTracks.map((track) => [track.id, track]));
+  const hydratedAlbum = {
+    ...album,
+    tracks: album.tracks.map((track) => selectedTracksById.get(track.id) ?? track)
+  };
 
   return {
-    album,
+    album: hydratedAlbum,
     selectedTracks,
     supportedProviders: ["youtube", "jiosaavn"],
     warnings: [
       "Spotify is used for metadata only. Provider downloads must be limited to content you are authorized to download."
     ]
   };
+}
+
+async function hydrateSpotifyTrackSummaries(
+  settings: PrivateSettings,
+  tracks: SpotifyTrackSummary[]
+) {
+  const details = await mapWithConcurrency(
+    tracks,
+    spotifyTrackDetailConcurrency,
+    (track) => getSpotifyTrackDetail(settings, track.id)
+  );
+
+  return tracks.map((track, index) => {
+    const detail = details[index];
+    const artists = detail.artists?.map((artist) => artist.name).filter(Boolean) ?? [];
+
+    return {
+      ...track,
+      name: detail.name,
+      artists: artists.length > 0 ? artists : track.artists,
+      discNumber: detail.disc_number,
+      trackNumber: detail.track_number,
+      duration: Math.round(detail.duration_ms / 1000),
+      explicit: detail.explicit,
+      isrc: normalizeSpotifyIsrc(detail.external_ids?.isrc) ?? track.isrc,
+      spotifyUrl: detail.external_urls?.spotify ?? track.spotifyUrl
+    };
+  });
 }
 
 async function spotifyRequest<T>(
