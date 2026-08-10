@@ -23,7 +23,7 @@ test("Diagnostics exposes Spotify resolution and refreshes unmatched files after
   const appSource = await fs.readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
 
   assert.match(appSource, /function UnindexedTable[\s\S]+<th>Resolve<\/th>/);
-  assert.match(appSource, /item=\{track\}[\s\S]+showOrganizationActions=\{false\}/);
+  assert.match(appSource, /useSpotifyMetadataSearch\(track, onSpotifyResolved\)/);
   assert.match(appSource, /const spotifyResolved = async[\s\S]+await load\(\{ quiet: true \}\)/);
 });
 
@@ -33,4 +33,13 @@ test("Diagnostics keeps Spotify resolution before wide detail columns", async ()
 
   assert.match(appSource, /<th>Track<\/th>\s*<th>Resolve<\/th>\s*<th>Current path<\/th>/);
   assert.match(styles, /\.unindexed-table \{\s*min-width: 1080px/);
+});
+
+test("Diagnostics renders open Spotify results in a full-width row", async () => {
+  const appSource = await fs.readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+  const styles = await fs.readFile(new URL("../src/client/styles.css", import.meta.url), "utf8");
+
+  assert.match(appSource, /<tr className="unindexed-spotify-row">\s*<td colSpan=\{7\}>/);
+  assert.match(appSource, /<SpotifyMetadataSearchPanel spotify=\{spotify\} wide \/>/);
+  assert.match(styles, /\.unindexed-spotify-panel \{\s*width: min\(760px, 100%\)/);
 });
