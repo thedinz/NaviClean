@@ -191,7 +191,7 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
 
   if (searchFallbackMatched > 0) {
     warnings.push(
-      `Navidrome metadata: ${searchFallbackMatched.toLocaleString()} files matched through Navidrome search fallback after the full album catalog did not expose a matching key.`
+      `Navidrome metadata: ${searchFallbackMatched.toLocaleString()} files matched through Navidrome search fallback after the full album catalog did not expose a matching key; these matches succeeded and need no action.`
     );
   }
 
@@ -221,13 +221,13 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
 
   if (noApiMatchCount > 0) {
     warnings.push(
-      `Navidrome metadata: ${noApiMatchCount.toLocaleString()} local files did not match any Navidrome API record by absolute path, relative path, filename+size, metadata key, or metadata+size.`
+      `Navidrome metadata: ${noApiMatchCount.toLocaleString()} local files did not match any Navidrome API record by absolute path, relative path, filename+size, metadata key, or metadata+size. Review them under Organize > Navidrome unmatched.`
     );
   }
 
   if (possibleStaleScanCount > 0) {
     warnings.push(
-      `Navidrome metadata: ${possibleStaleScanCount.toLocaleString()} organized local files did not match any Navidrome API record by path or metadata+size. If these files were recently moved, rescan Navidrome; otherwise inspect match details for metadata/path differences.`
+      `Navidrome metadata: ${possibleStaleScanCount.toLocaleString()} organized local files did not match any Navidrome API record by path or metadata+size. If these files were recently moved, rescan Navidrome; otherwise inspect match details for metadata/path differences and review them under Organize > Navidrome unmatched.`
     );
   }
 

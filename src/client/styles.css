@@ -772,7 +772,7 @@ legend {
 }
 
 .unindexed-table {
-  min-width: 1080px;
+  min-width: 1430px;
   table-layout: fixed;
 }
 
@@ -805,6 +805,11 @@ legend {
 .unindexed-table td:nth-child(6) {
   width: 90px;
   text-align: center;
+}
+
+.unindexed-table th:nth-child(7),
+.unindexed-table td:nth-child(7) {
+  width: 350px;
 }
 
 .unindexed-table .quality-pill {

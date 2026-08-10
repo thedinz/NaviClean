@@ -96,8 +96,12 @@ import { appVersion } from "./version";
 type Page = "dashboard" | "instructions" | "library" | "empty-folders" | "non-music" | "unindexed" | "discover" | "organize" | "convert" | "duplicates" | "trash" | "settings";
 type AppTheme = "light" | "dark";
 type UnindexedFilter = "all" | "possible-stale-scan" | "no-api-match";
-type OrganizePreviewFilter = "attention" | "metadata-review" | "skipped" | "ready" | "duplicate-target" | "conflict" | "missing" | "trackkeep" | "same" | "all";
+type OrganizePreviewFilter = "attention" | "metadata-review" | "navidrome-unmatched" | "skipped" | "ready" | "duplicate-target" | "conflict" | "missing" | "trackkeep" | "same" | "all";
 type OrganizePreviewItem = OrganizePlan["items"][number];
+type SpotifyResolvableItem = Pick<
+  TrackFile,
+  "id" | "albumArtist" | "album" | "artist" | "title" | "managedBy" | "organizeSkippedAt" | "metadataConfidence" | "metadataSuggestion"
+>;
 
 const libraryArtistPageSize = 25;
 const unindexedPageSize = 150;
@@ -162,6 +166,7 @@ const navItems: NavItem[] = [
 const organizePreviewFilters: Array<{ id: OrganizePreviewFilter; label: string }> = [
   { id: "attention", label: "Needs action" },
   { id: "metadata-review", label: "Metadata review" },
+  { id: "navidrome-unmatched", label: "Navidrome unmatched" },
   { id: "skipped", label: "Skipped" },
   { id: "ready", label: "Ready" },
   { id: "duplicate-target", label: "Duplicates" },
@@ -1549,6 +1554,15 @@ function UnindexedPage({
     }
   };
 
+  const spotifyResolved = async (result: OrganizeSpotifyMatchResult) => {
+    setNotice(
+      `Spotify metadata selected for ${result.matchedTracks} ${pluralize("track", result.matchedTracks)} from ${result.selected.album}. Review the updated target under Organize, then Apply.`
+    );
+    setError(null);
+    await load({ quiet: true });
+    await onChanged();
+  };
+
   return (
     <section className="panel unindexed-page">
       <div className="toolbar">
@@ -1676,6 +1690,7 @@ function UnindexedPage({
           matchBusyId={matchBusyId}
           matchResults={matchResults}
           onCheckNavidrome={checkNavidrome}
+          onSpotifyResolved={spotifyResolved}
         />
       )}
     </section>
@@ -1691,7 +1706,8 @@ function UnindexedTable({
   onToggleAll,
   matchBusyId,
   matchResults,
-  onCheckNavidrome
+  onCheckNavidrome,
+  onSpotifyResolved
 }: {
   allSelected: boolean;
   disabled: boolean;
@@ -1702,6 +1718,7 @@ function UnindexedTable({
   matchBusyId: string | null;
   matchResults: Record<string, UnindexedNavidromeLookupResult>;
   onCheckNavidrome: (track: TrackFile) => void;
+  onSpotifyResolved: (result: OrganizeSpotifyMatchResult) => void;
 }) {
   return (
     <div className="table-wrap">
@@ -1716,6 +1733,7 @@ function UnindexedTable({
             <th>Current path</th>
             <th>Quality</th>
             <th>Navidrome</th>
+            <th>Resolve</th>
           </tr>
         </thead>
         <tbody>
@@ -1762,10 +1780,18 @@ function UnindexedTable({
                       {matchBusyId === track.id ? <Loader2 className="spin" size={17} /> : <Search size={17} />}
                     </button>
                   </td>
+                  <td>
+                    <SpotifyMetadataResolver
+                      item={track}
+                      disabled={disabled}
+                      showOrganizationActions={false}
+                      onResolved={onSpotifyResolved}
+                    />
+                  </td>
                 </tr>
                 {matchResult && (
                   <tr className="unindexed-match-row">
-                    <td colSpan={6}>
+                    <td colSpan={7}>
                       <UnindexedMatchPanel result={matchResult} />
                     </td>
                   </tr>
@@ -3529,8 +3555,18 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
   const organizeItems = plan?.items || [];
   const filterCounts = useMemo(() => countOrganizePreviewFilters(organizeItems), [organizeItems]);
   const visibleOrganizeFilters = useMemo(
-    () => organizePreviewFilters.filter((filter) => filter.id !== "trackkeep" || filterCounts.trackkeep > 0),
-    [filterCounts.trackkeep]
+    () => organizePreviewFilters.filter((filter) => {
+      if (filter.id === "trackkeep") {
+        return filterCounts.trackkeep > 0;
+      }
+
+      if (filter.id === "navidrome-unmatched") {
+        return filterCounts["navidrome-unmatched"] > 0;
+      }
+
+      return true;
+    }),
+    [filterCounts]
   );
   const filteredItems = useMemo(
     () => organizeItems.filter((item) => organizePreviewItemMatchesFilter(item, organizeFilter)),
@@ -3933,13 +3969,15 @@ function SpotifyMetadataResolver({
   disabled,
   onResolved,
   onTrusted,
-  onSkipped
+  onSkipped,
+  showOrganizationActions = true
 }: {
-  item: OrganizePreviewItem;
+  item: SpotifyResolvableItem;
   disabled: boolean;
   onResolved: (result: OrganizeSpotifyMatchResult) => void;
-  onTrusted: (result: OrganizeTrustPathResult) => void;
-  onSkipped: (result: OrganizeSkipResult) => void;
+  onTrusted?: (result: OrganizeTrustPathResult) => void;
+  onSkipped?: (result: OrganizeSkipResult) => void;
+  showOrganizationActions?: boolean;
 }) {
   const knownArtist = /^(?:\[?unknown artist\]?|unknown)$/i.test(item.albumArtist || item.artist)
     ? ""
@@ -3996,6 +4034,10 @@ function SpotifyMetadataResolver({
   };
 
   const trustFolder = async () => {
+    if (!onTrusted) {
+      return;
+    }
+
     if (!window.confirm("Trust the artist and album inferred from this folder for every review-needed track in the folder?")) {
       return;
     }
@@ -4016,6 +4058,10 @@ function SpotifyMetadataResolver({
   };
 
   const setSkipped = async (skipped: boolean) => {
+    if (!onSkipped) {
+      return;
+    }
+
     if (
       skipped &&
       !window.confirm("Skip this track instead of organizing it with unverified filename or folder metadata?")
@@ -4040,7 +4086,7 @@ function SpotifyMetadataResolver({
 
   return (
     <div className="spotify-metadata-resolver">
-      {!isTrackKeepManaged(item.managedBy) && item.metadataConfidence === "path-suggestion" && !organizationSkipped && (
+      {showOrganizationActions && !isTrackKeepManaged(item.managedBy) && item.metadataConfidence === "path-suggestion" && !organizationSkipped && (
         <div className="metadata-review-summary">
           <span className="status-detail">Suggested from path — not verified</span>
           <strong>
@@ -4059,7 +4105,7 @@ function SpotifyMetadataResolver({
           )}
         </div>
       )}
-      {organizationSkipped && (
+      {showOrganizationActions && organizationSkipped && (
         <div className="metadata-review-summary">
           <span className="status-detail">Saved for later — no file changes will be made</span>
           <button
@@ -4073,7 +4119,7 @@ function SpotifyMetadataResolver({
           </button>
         </div>
       )}
-      {!organizationSkipped && (
+      {showOrganizationActions && !organizationSkipped && (
         <button
           className="secondary-button compact-button"
           type="button"
@@ -5427,6 +5473,7 @@ function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {
   const counts: Record<OrganizePreviewFilter, number> = {
     attention: 0,
     "metadata-review": 0,
+    "navidrome-unmatched": 0,
     skipped: 0,
     ready: 0,
     "duplicate-target": 0,
@@ -5439,6 +5486,10 @@ function countOrganizePreviewFilters(items: OrganizePreviewItem[]) {
 
   for (const item of items) {
     counts.all += 1;
+
+    if (item.navidromeEnrichment?.status === "unmatched") {
+      counts["navidrome-unmatched"] += 1;
+    }
 
     if (isTrackKeepManaged(item.managedBy)) {
       counts.trackkeep += 1;
@@ -5490,6 +5541,10 @@ function organizePreviewItemMatchesFilter(item: OrganizePreviewItem, filter: Org
 
   if (filter === "metadata-review") {
     return item.status === "metadata-review";
+  }
+
+  if (filter === "navidrome-unmatched") {
+    return item.navidromeEnrichment?.status === "unmatched";
   }
 
   if (filter === "skipped") {

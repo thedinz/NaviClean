@@ -221,7 +221,7 @@ function navidromePlanWarning(code: NavidromeMetadataDiagnosticCode, count: numb
   }
 
   if (code === "possible-stale-scan") {
-    return `Navidrome metadata: ${formattedCount} organized files did not match any API record by path or metadata+size. If they were recently moved, rescan Navidrome; otherwise inspect match details for metadata/path differences.`;
+    return `Navidrome metadata: ${formattedCount} organized files did not match any API record by path or metadata+size. If they were recently moved, rescan Navidrome; otherwise inspect match details for metadata/path differences and review them under Navidrome unmatched.`;
   }
 
   if (code === "track-no-usable-path") {
@@ -232,7 +232,7 @@ function navidromePlanWarning(code: NavidromeMetadataDiagnosticCode, count: numb
     return `Navidrome metadata: ${formattedCount} indexed tracks pointed outside the configured library root.`;
   }
 
-  return `Navidrome metadata: ${formattedCount} local files did not match any API record by absolute path, relative path, filename+size, metadata key, or metadata+size.`;
+  return `Navidrome metadata: ${formattedCount} local files did not match any API record by absolute path, relative path, filename+size, metadata key, or metadata+size. Review them under Navidrome unmatched.`;
 }
 
 function buildCollision(
