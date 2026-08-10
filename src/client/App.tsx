@@ -1730,10 +1730,10 @@ function UnindexedTable({
             </th>
             <th>Reason</th>
             <th>Track</th>
+            <th>Resolve</th>
             <th>Current path</th>
             <th>Quality</th>
             <th>Navidrome</th>
-            <th>Resolve</th>
           </tr>
         </thead>
         <tbody>
@@ -1762,6 +1762,14 @@ function UnindexedTable({
                     <span>{libraryMeta([track.isrc ? `ISRC ${track.isrc}` : "", isTrackKeepManaged(track.managedBy) ? "TrackKeep" : ""])}</span>
                   </td>
                   <td>
+                    <SpotifyMetadataResolver
+                      item={track}
+                      disabled={disabled}
+                      showOrganizationActions={false}
+                      onResolved={onSpotifyResolved}
+                    />
+                  </td>
+                  <td>
                     <span className="path-diff">{track.relativePath}</span>
                   </td>
                   <td>
@@ -1779,14 +1787,6 @@ function UnindexedTable({
                     >
                       {matchBusyId === track.id ? <Loader2 className="spin" size={17} /> : <Search size={17} />}
                     </button>
-                  </td>
-                  <td>
-                    <SpotifyMetadataResolver
-                      item={track}
-                      disabled={disabled}
-                      showOrganizationActions={false}
-                      onResolved={onSpotifyResolved}
-                    />
                   </td>
                 </tr>
                 {matchResult && (
