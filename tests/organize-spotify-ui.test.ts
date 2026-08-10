@@ -10,3 +10,19 @@ test("Spotify selection wins over stale organizer previews and verifies its resu
   assert.match(appSource, /resolvedItem\?\.metadataConfidence !== "spotify"/);
   assert.match(appSource, /setOpen\(false\)/);
 });
+
+test("unmatched Navidrome files have a dedicated organizer filter with Spotify resolution", async () => {
+  const appSource = await fs.readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+
+  assert.match(appSource, /id: "navidrome-unmatched", label: "Navidrome unmatched"/);
+  assert.match(appSource, /item\.navidromeEnrichment\?\.status === "unmatched"/);
+  assert.match(appSource, /<SpotifyMetadataResolver[\s\S]+item=\{item\}/);
+});
+
+test("Diagnostics exposes Spotify resolution and refreshes unmatched files after selection", async () => {
+  const appSource = await fs.readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+
+  assert.match(appSource, /function UnindexedTable[\s\S]+<th>Resolve<\/th>/);
+  assert.match(appSource, /item=\{track\}[\s\S]+showOrganizationActions=\{false\}/);
+  assert.match(appSource, /const spotifyResolved = async[\s\S]+await load\(\{ quiet: true \}\)/);
+});
