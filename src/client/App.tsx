@@ -1737,71 +1737,106 @@ function UnindexedTable({
           </tr>
         </thead>
         <tbody>
-          {tracks.map((track) => {
-            const matchResult = matchResults[track.id];
-
-            return (
-              <Fragment key={track.id}>
-                <tr>
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(selectedIds[track.id])}
-                      onChange={() => onToggle(track)}
-                      disabled={disabled}
-                      aria-label={`Select ${track.relativePath}`}
-                    />
-                  </td>
-                  <td>
-                    <StatusPill active={track.navidromeEnrichment?.code === "no-api-match"} label={unindexedReasonShortLabel(track)} />
-                    <span className="status-detail navidrome-diagnostic">{track.navidromeEnrichment?.message}</span>
-                  </td>
-                  <td>
-                    <strong>{track.title}</strong>
-                    <span>{libraryMeta([track.artist, track.album, albumReleaseLabel(track), trackNumberLabel(track)])}</span>
-                    <span>{libraryMeta([track.isrc ? `ISRC ${track.isrc}` : "", isTrackKeepManaged(track.managedBy) ? "TrackKeep" : ""])}</span>
-                  </td>
-                  <td>
-                    <SpotifyMetadataResolver
-                      item={track}
-                      disabled={disabled}
-                      showOrganizationActions={false}
-                      onResolved={onSpotifyResolved}
-                    />
-                  </td>
-                  <td>
-                    <span className="path-diff">{track.relativePath}</span>
-                  </td>
-                  <td>
-                    <span className="quality-pill">{qualitySummary(track)}</span>
-                    <span>{formatBytes(track.size)}</span>
-                  </td>
-                  <td>
-                    <button
-                      className="icon-button"
-                      type="button"
-                      onClick={() => onCheckNavidrome(track)}
-                      disabled={disabled || matchBusyId === track.id}
-                      title={`Find Navidrome matches for ${track.title}`}
-                      aria-label={`Find Navidrome matches for ${track.title}`}
-                    >
-                      {matchBusyId === track.id ? <Loader2 className="spin" size={17} /> : <Search size={17} />}
-                    </button>
-                  </td>
-                </tr>
-                {matchResult && (
-                  <tr className="unindexed-match-row">
-                    <td colSpan={7}>
-                      <UnindexedMatchPanel result={matchResult} />
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            );
-          })}
+          {tracks.map((track) => (
+            <UnindexedTrackRows
+              key={track.id}
+              disabled={disabled}
+              matchBusy={matchBusyId === track.id}
+              matchResult={matchResults[track.id]}
+              selected={Boolean(selectedIds[track.id])}
+              track={track}
+              onCheckNavidrome={() => onCheckNavidrome(track)}
+              onSpotifyResolved={onSpotifyResolved}
+              onToggle={() => onToggle(track)}
+            />
+          ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function UnindexedTrackRows({
+  disabled,
+  matchBusy,
+  matchResult,
+  selected,
+  track,
+  onCheckNavidrome,
+  onSpotifyResolved,
+  onToggle
+}: {
+  disabled: boolean;
+  matchBusy: boolean;
+  matchResult?: UnindexedNavidromeLookupResult;
+  selected: boolean;
+  track: TrackFile;
+  onCheckNavidrome: () => void;
+  onSpotifyResolved: (result: OrganizeSpotifyMatchResult) => void;
+  onToggle: () => void;
+}) {
+  const spotify = useSpotifyMetadataSearch(track, onSpotifyResolved);
+
+  return (
+    <>
+      <tr>
+        <td>
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggle}
+            disabled={disabled}
+            aria-label={`Select ${track.relativePath}`}
+          />
+        </td>
+        <td>
+          <StatusPill active={track.navidromeEnrichment?.code === "no-api-match"} label={unindexedReasonShortLabel(track)} />
+          <span className="status-detail navidrome-diagnostic">{track.navidromeEnrichment?.message}</span>
+        </td>
+        <td>
+          <strong>{track.title}</strong>
+          <span>{libraryMeta([track.artist, track.album, albumReleaseLabel(track), trackNumberLabel(track)])}</span>
+          <span>{libraryMeta([track.isrc ? `ISRC ${track.isrc}` : "", isTrackKeepManaged(track.managedBy) ? "TrackKeep" : ""])}</span>
+        </td>
+        <td>
+          <SpotifyMetadataToggle disabled={disabled} spotify={spotify} />
+          {spotify.error && !spotify.open && <span className="status-detail spotify-metadata-error">{spotify.error}</span>}
+        </td>
+        <td>
+          <span className="path-diff">{track.relativePath}</span>
+        </td>
+        <td>
+          <span className="quality-pill">{qualitySummary(track)}</span>
+          <span>{formatBytes(track.size)}</span>
+        </td>
+        <td>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={onCheckNavidrome}
+            disabled={disabled || matchBusy}
+            title={`Find Navidrome matches for ${track.title}`}
+            aria-label={`Find Navidrome matches for ${track.title}`}
+          >
+            {matchBusy ? <Loader2 className="spin" size={17} /> : <Search size={17} />}
+          </button>
+        </td>
+      </tr>
+      {spotify.open && (
+        <tr className="unindexed-spotify-row">
+          <td colSpan={7}>
+            <SpotifyMetadataSearchPanel spotify={spotify} wide />
+          </td>
+        </tr>
+      )}
+      {matchResult && (
+        <tr className="unindexed-match-row">
+          <td colSpan={7}>
+            <UnindexedMatchPanel result={matchResult} />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -3969,16 +4004,127 @@ function SpotifyMetadataResolver({
   disabled,
   onResolved,
   onTrusted,
-  onSkipped,
-  showOrganizationActions = true
+  onSkipped
 }: {
   item: SpotifyResolvableItem;
   disabled: boolean;
   onResolved: (result: OrganizeSpotifyMatchResult) => void;
   onTrusted?: (result: OrganizeTrustPathResult) => void;
   onSkipped?: (result: OrganizeSkipResult) => void;
-  showOrganizationActions?: boolean;
 }) {
+  const spotify = useSpotifyMetadataSearch(item, onResolved);
+  const [trustBusy, setTrustBusy] = useState(false);
+  const [skipBusy, setSkipBusy] = useState(false);
+  const organizationSkipped = Boolean(item.organizeSkippedAt);
+
+  const trustFolder = async () => {
+    if (!onTrusted) {
+      return;
+    }
+
+    if (!window.confirm("Trust the artist and album inferred from this folder for every review-needed track in the folder?")) {
+      return;
+    }
+
+    setTrustBusy(true);
+    spotify.setError(null);
+    try {
+      const result = await api<OrganizeTrustPathResult>("/organize/trust-path", {
+        method: "POST",
+        body: JSON.stringify({ localTrackId: item.id })
+      });
+      onTrusted(result);
+    } catch (caught) {
+      spotify.setError((caught as Error).message);
+    } finally {
+      setTrustBusy(false);
+    }
+  };
+
+  const setSkipped = async (skipped: boolean) => {
+    if (!onSkipped) {
+      return;
+    }
+
+    if (
+      skipped &&
+      !window.confirm("Skip this track instead of organizing it with unverified filename or folder metadata?")
+    ) {
+      return;
+    }
+
+    setSkipBusy(true);
+    spotify.setError(null);
+    try {
+      const result = await api<OrganizeSkipResult>("/organize/skip", {
+        method: "POST",
+        body: JSON.stringify({ localTrackId: item.id, skipped })
+      });
+      onSkipped(result);
+    } catch (caught) {
+      spotify.setError((caught as Error).message);
+    } finally {
+      setSkipBusy(false);
+    }
+  };
+
+  return (
+    <div className="spotify-metadata-resolver">
+      {!isTrackKeepManaged(item.managedBy) && item.metadataConfidence === "path-suggestion" && !organizationSkipped && (
+        <div className="metadata-review-summary">
+          <span className="status-detail">Suggested from path — not verified</span>
+          <strong>
+            {item.metadataSuggestion?.artist || item.artist} · {item.metadataSuggestion?.album || item.album}
+          </strong>
+          {item.metadataSuggestion?.artist && item.metadataSuggestion.album && (
+            <button
+              className="secondary-button compact-button"
+              type="button"
+              disabled={disabled || trustBusy || skipBusy || spotify.busy || Boolean(spotify.selectingId)}
+              onClick={() => void trustFolder()}
+            >
+              {trustBusy ? <Loader2 className="spin" size={16} /> : <Check size={16} />}
+              <span>{trustBusy ? "Trusting" : "Trust this folder"}</span>
+            </button>
+          )}
+        </div>
+      )}
+      {organizationSkipped && (
+        <div className="metadata-review-summary">
+          <span className="status-detail">Saved for later — no file changes will be made</span>
+          <button
+            className="secondary-button compact-button"
+            type="button"
+            disabled={disabled || skipBusy || spotify.busy || Boolean(spotify.selectingId)}
+            onClick={() => void setSkipped(false)}
+          >
+            {skipBusy ? <Loader2 className="spin" size={16} /> : <Undo2 size={16} />}
+            <span>{skipBusy ? "Retrying" : "Retry organization"}</span>
+          </button>
+        </div>
+      )}
+      {!organizationSkipped && (
+        <button
+          className="secondary-button compact-button"
+          type="button"
+          disabled={disabled || trustBusy || skipBusy || spotify.busy || Boolean(spotify.selectingId)}
+          onClick={() => void setSkipped(true)}
+        >
+          {skipBusy ? <Loader2 className="spin" size={16} /> : <FolderX size={16} />}
+          <span>{skipBusy ? "Skipping" : "Skip track"}</span>
+        </button>
+      )}
+      <SpotifyMetadataToggle disabled={disabled || trustBusy || skipBusy} spotify={spotify} />
+      {spotify.error && !spotify.open && <span className="status-detail spotify-metadata-error">{spotify.error}</span>}
+      {spotify.open && <SpotifyMetadataSearchPanel spotify={spotify} />}
+    </div>
+  );
+}
+
+function useSpotifyMetadataSearch(
+  item: SpotifyResolvableItem,
+  onResolved: (result: OrganizeSpotifyMatchResult) => void
+) {
   const knownArtist = /^(?:\[?unknown artist\]?|unknown)$/i.test(item.albumArtist || item.artist)
     ? ""
     : item.albumArtist || item.artist;
@@ -3988,10 +4134,7 @@ function SpotifyMetadataResolver({
   const [matches, setMatches] = useState<SpotifyMetadataMatch[]>([]);
   const [busy, setBusy] = useState(false);
   const [selectingId, setSelectingId] = useState<string | null>(null);
-  const [trustBusy, setTrustBusy] = useState(false);
-  const [skipBusy, setSkipBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const organizationSkipped = Boolean(item.organizeSkippedAt);
 
   const search = async (nextQuery = query) => {
     setBusy(true);
@@ -4033,161 +4176,91 @@ function SpotifyMetadataResolver({
     }
   };
 
-  const trustFolder = async () => {
-    if (!onTrusted) {
-      return;
-    }
-
-    if (!window.confirm("Trust the artist and album inferred from this folder for every review-needed track in the folder?")) {
-      return;
-    }
-
-    setTrustBusy(true);
-    setError(null);
-    try {
-      const result = await api<OrganizeTrustPathResult>("/organize/trust-path", {
-        method: "POST",
-        body: JSON.stringify({ localTrackId: item.id })
-      });
-      onTrusted(result);
-    } catch (caught) {
-      setError((caught as Error).message);
-    } finally {
-      setTrustBusy(false);
-    }
+  return {
+    busy,
+    choose,
+    error,
+    initialQuery,
+    matches,
+    open,
+    query,
+    search,
+    selectingId,
+    setError,
+    setOpen,
+    setQuery
   };
+}
 
-  const setSkipped = async (skipped: boolean) => {
-    if (!onSkipped) {
-      return;
-    }
+type SpotifyMetadataSearchState = ReturnType<typeof useSpotifyMetadataSearch>;
 
-    if (
-      skipped &&
-      !window.confirm("Skip this track instead of organizing it with unverified filename or folder metadata?")
-    ) {
-      return;
-    }
-
-    setSkipBusy(true);
-    setError(null);
-    try {
-      const result = await api<OrganizeSkipResult>("/organize/skip", {
-        method: "POST",
-        body: JSON.stringify({ localTrackId: item.id, skipped })
-      });
-      onSkipped(result);
-    } catch (caught) {
-      setError((caught as Error).message);
-    } finally {
-      setSkipBusy(false);
-    }
-  };
-
+function SpotifyMetadataToggle({ disabled, spotify }: { disabled: boolean; spotify: SpotifyMetadataSearchState }) {
   return (
-    <div className="spotify-metadata-resolver">
-      {showOrganizationActions && !isTrackKeepManaged(item.managedBy) && item.metadataConfidence === "path-suggestion" && !organizationSkipped && (
-        <div className="metadata-review-summary">
-          <span className="status-detail">Suggested from path — not verified</span>
-          <strong>
-            {item.metadataSuggestion?.artist || item.artist} · {item.metadataSuggestion?.album || item.album}
-          </strong>
-          {item.metadataSuggestion?.artist && item.metadataSuggestion.album && (
-            <button
-              className="secondary-button compact-button"
-              type="button"
-              disabled={disabled || trustBusy || skipBusy || busy || Boolean(selectingId)}
-              onClick={() => void trustFolder()}
-            >
-              {trustBusy ? <Loader2 className="spin" size={16} /> : <Check size={16} />}
-              <span>{trustBusy ? "Trusting" : "Trust this folder"}</span>
-            </button>
-          )}
-        </div>
-      )}
-      {showOrganizationActions && organizationSkipped && (
-        <div className="metadata-review-summary">
-          <span className="status-detail">Saved for later — no file changes will be made</span>
-          <button
-            className="secondary-button compact-button"
-            type="button"
-            disabled={disabled || skipBusy || busy || Boolean(selectingId)}
-            onClick={() => void setSkipped(false)}
-          >
-            {skipBusy ? <Loader2 className="spin" size={16} /> : <Undo2 size={16} />}
-            <span>{skipBusy ? "Retrying" : "Retry organization"}</span>
-          </button>
-        </div>
-      )}
-      {showOrganizationActions && !organizationSkipped && (
-        <button
-          className="secondary-button compact-button"
-          type="button"
-          disabled={disabled || trustBusy || skipBusy || busy || Boolean(selectingId)}
-          onClick={() => void setSkipped(true)}
-        >
-          {skipBusy ? <Loader2 className="spin" size={16} /> : <FolderX size={16} />}
-          <span>{skipBusy ? "Skipping" : "Skip track"}</span>
-        </button>
-      )}
-      <button
-        className="secondary-button compact-button"
-        type="button"
-        disabled={disabled || trustBusy || skipBusy || busy || Boolean(selectingId)}
-        onClick={() => {
-          if (open) {
-            setOpen(false);
-            return;
-          }
-          setOpen(true);
-          if (matches.length === 0) {
-            void search(initialQuery);
-          }
+    <button
+      className="secondary-button compact-button"
+      type="button"
+      disabled={disabled || spotify.busy || Boolean(spotify.selectingId)}
+      onClick={() => {
+        if (spotify.open) {
+          spotify.setOpen(false);
+          return;
+        }
+        spotify.setOpen(true);
+        if (spotify.matches.length === 0) {
+          void spotify.search(spotify.initialQuery);
+        }
+      }}
+    >
+      {spotify.busy || spotify.selectingId ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
+      <span>{spotify.open ? "Close Spotify" : "Find on Spotify"}</span>
+    </button>
+  );
+}
+
+function SpotifyMetadataSearchPanel({
+  spotify,
+  wide = false
+}: {
+  spotify: SpotifyMetadataSearchState;
+  wide?: boolean;
+}) {
+  return (
+    <div className={wide ? "spotify-metadata-panel unindexed-spotify-panel" : "spotify-metadata-panel"}>
+      <form
+        className="spotify-metadata-search"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void spotify.search();
         }}
       >
-        {busy || selectingId ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
-        <span>{open ? "Close Spotify" : "Find on Spotify"}</span>
-      </button>
-      {error && !open && <span className="status-detail spotify-metadata-error">{error}</span>}
-      {open && (
-        <div className="spotify-metadata-panel">
-          <form
-            className="spotify-metadata-search"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void search();
-            }}
+        <input value={spotify.query} onChange={(event) => spotify.setQuery(event.target.value)} placeholder="Artist and track title" />
+        <button className="secondary-button compact-button" type="submit" disabled={spotify.busy || !spotify.query.trim()}>
+          {spotify.busy ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
+          <span>Search</span>
+        </button>
+      </form>
+      <span className="status-detail">Choose the exact release. Matching tracks in this source folder will be corrected together.</span>
+      {spotify.error && <span className="status-detail spotify-metadata-error">{spotify.error}</span>}
+      {!spotify.busy && !spotify.error && spotify.matches.length === 0 && <span className="status-detail">No Spotify tracks found.</span>}
+      <div className="spotify-metadata-results">
+        {spotify.matches.map((match) => (
+          <button
+            className="spotify-metadata-match"
+            type="button"
+            key={match.id}
+            disabled={Boolean(spotify.selectingId)}
+            onClick={() => void spotify.choose(match)}
           >
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Artist and track title" />
-            <button className="secondary-button compact-button" type="submit" disabled={busy || !query.trim()}>
-              {busy ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
-              <span>Search</span>
-            </button>
-          </form>
-          <span className="status-detail">Choose the exact release. Matching tracks in this source folder will be corrected together.</span>
-          {error && <span className="status-detail spotify-metadata-error">{error}</span>}
-          {!busy && !error && matches.length === 0 && <span className="status-detail">No Spotify tracks found.</span>}
-          <div className="spotify-metadata-results">
-            {matches.map((match) => (
-              <button
-                className="spotify-metadata-match"
-                type="button"
-                key={match.id}
-                disabled={Boolean(selectingId)}
-                onClick={() => void choose(match)}
-              >
-                {match.imageUrl ? <img src={match.imageUrl} alt="" /> : <span className="spotify-metadata-artwork" aria-hidden="true" />}
-                <span>
-                  <strong>{match.name}</strong>
-                  <small>{match.artists.join(", ")}</small>
-                  <small>{match.album}{match.releaseYear ? ` (${match.releaseYear})` : ""} · Track {match.trackNumber}</small>
-                </span>
-                {selectingId === match.id && <Loader2 className="spin" size={16} />}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+            {match.imageUrl ? <img src={match.imageUrl} alt="" /> : <span className="spotify-metadata-artwork" aria-hidden="true" />}
+            <span>
+              <strong>{match.name}</strong>
+              <small>{match.artists.join(", ")}</small>
+              <small>{match.album}{match.releaseYear ? ` (${match.releaseYear})` : ""} · Track {match.trackNumber}</small>
+            </span>
+            {spotify.selectingId === match.id && <Loader2 className="spin" size={16} />}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

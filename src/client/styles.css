@@ -1173,8 +1173,13 @@ td span {
   overflow-wrap: anywhere;
 }
 
-.unindexed-match-row td {
+.unindexed-match-row td,
+.unindexed-spotify-row td {
   background: #fbfaf5;
+}
+
+.unindexed-spotify-panel {
+  width: min(760px, 100%);
 }
 
 .unindexed-match-panel {
