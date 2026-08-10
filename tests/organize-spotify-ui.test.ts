@@ -26,3 +26,11 @@ test("Diagnostics exposes Spotify resolution and refreshes unmatched files after
   assert.match(appSource, /item=\{track\}[\s\S]+showOrganizationActions=\{false\}/);
   assert.match(appSource, /const spotifyResolved = async[\s\S]+await load\(\{ quiet: true \}\)/);
 });
+
+test("Diagnostics keeps Spotify resolution before wide detail columns", async () => {
+  const appSource = await fs.readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+  const styles = await fs.readFile(new URL("../src/client/styles.css", import.meta.url), "utf8");
+
+  assert.match(appSource, /<th>Track<\/th>\s*<th>Resolve<\/th>\s*<th>Current path<\/th>/);
+  assert.match(styles, /\.unindexed-table \{\s*min-width: 1080px/);
+});
