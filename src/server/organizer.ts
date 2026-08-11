@@ -199,6 +199,7 @@ const navidromePlanWarningOrder: NavidromeMetadataDiagnosticCode[] = [
   "settings-missing",
   "api-request-failed",
   "zero-tracks",
+  "spotify-confirmed",
   "no-api-match",
   "possible-stale-scan",
   "track-no-usable-path",
@@ -218,6 +219,10 @@ function navidromePlanWarning(code: NavidromeMetadataDiagnosticCode, count: numb
 
   if (code === "zero-tracks") {
     return `Navidrome metadata: ${formattedCount} files used local metadata because Navidrome returned zero tracks.`;
+  }
+
+  if (code === "spotify-confirmed") {
+    return `Navidrome metadata: ${formattedCount} files did not match Navidrome and retained user-confirmed Spotify metadata; no action is required.`;
   }
 
   if (code === "possible-stale-scan") {
