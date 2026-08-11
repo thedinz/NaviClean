@@ -1807,7 +1807,8 @@ select:disabled {
   color: var(--text);
 }
 
-[data-theme="dark"] .unindexed-match-row td {
+[data-theme="dark"] .unindexed-match-row td,
+[data-theme="dark"] .unindexed-spotify-row td {
   background: var(--surface-muted);
 }
 

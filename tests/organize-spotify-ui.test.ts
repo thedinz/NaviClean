@@ -42,4 +42,8 @@ test("Diagnostics renders open Spotify results in a full-width row", async () =>
   assert.match(appSource, /<tr className="unindexed-spotify-row">\s*<td colSpan=\{7\}>/);
   assert.match(appSource, /<SpotifyMetadataSearchPanel spotify=\{spotify\} wide \/>/);
   assert.match(styles, /\.unindexed-spotify-panel \{\s*width: min\(760px, 100%\)/);
+  assert.match(
+    styles,
+    /\[data-theme="dark"\] \.unindexed-match-row td,\s*\[data-theme="dark"\] \.unindexed-spotify-row td \{\s*background: var\(--surface-muted\)/,
+  );
 });
