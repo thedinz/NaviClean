@@ -5,49 +5,73 @@ import path from "node:path";
 import { test } from "node:test";
 import type { PrivateSettings } from "../src/server/settings.js";
 
-test("user metadata decisions survive later scans even when Navidrome matches", async () => {
+test("user metadata decisions survive later scans whether Navidrome matches or not", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-metadata-override-"));
   const dataDir = path.join(root, "data");
   process.env.NAVICLEAN_DATA_DIR = dataDir;
   const { scanLibrary } = await import("../src/server/scanner.js");
   const { saveMetadataOverridesForTracks } = await import("../src/server/metadata-overrides.js");
+  const { listUnindexedFiles } = await import("../src/server/unindexed.js");
   const trustedRelativePath = "Artist/Artist - Real Album (2020)/Artist - Real Album (2020) - 01 - Track.mp3";
   const spotifyRelativePath = "[Unknown Artist]/[Unknown Artist] - [Unknown Album] (2018)/[Unknown Artist] - [Unknown Album] (2018) - 01 - The Flute Song.mp3";
+  const unmatchedSpotifyRelativePath = "[Unknown Artist]/[Unknown Artist] - [Unknown Album] (1994)/[Unknown Artist] - [Unknown Album] (1994) - 01 - N.Y. State of Mind.mp3";
   const originalFetch = globalThis.fetch;
 
   try {
     const libraryPath = path.join(root, "music");
     const trustedFilePath = path.join(libraryPath, ...trustedRelativePath.split("/"));
     const spotifyFilePath = path.join(libraryPath, ...spotifyRelativePath.split("/"));
+    const unmatchedSpotifyFilePath = path.join(libraryPath, ...unmatchedSpotifyRelativePath.split("/"));
     await fs.mkdir(path.dirname(trustedFilePath), { recursive: true });
     await fs.mkdir(path.dirname(spotifyFilePath), { recursive: true });
+    await fs.mkdir(path.dirname(unmatchedSpotifyFilePath), { recursive: true });
     await fs.writeFile(trustedFilePath, "trusted audio");
     await fs.writeFile(spotifyFilePath, "spotify audio");
+    await fs.writeFile(unmatchedSpotifyFilePath, "unmatched spotify audio");
     const scanSettings = settings(libraryPath);
     const first = await scanLibrary(scanSettings);
     const trustedTrack = first.tracks.find((track) => track.relativePath === trustedRelativePath);
     const unresolvedSpotifyTrack = first.tracks.find((track) => track.relativePath === spotifyRelativePath);
+    const unmatchedSpotifyTrack = first.tracks.find((track) => track.relativePath === unmatchedSpotifyRelativePath);
 
     assert.equal(trustedTrack?.metadataConfidence, "path-suggestion");
     assert.ok(trustedTrack);
     assert.ok(unresolvedSpotifyTrack);
+    assert.ok(unmatchedSpotifyTrack);
     await saveMetadataOverridesForTracks([trustedTrack], "trusted-path");
-    await saveMetadataOverridesForTracks([
-      {
-        ...unresolvedSpotifyTrack,
-        artist: "Russ",
-        albumArtist: "Russ",
-        album: "ZOO",
-        albumType: "Album",
-        title: "The Flute Song",
-        trackNumber: 1,
-        trackTotal: 14,
-        discNumber: 1,
-        discTotal: 1,
-        year: 2018,
-        isrc: "USQX91802103"
-      }
-    ], "spotify");
+    await saveMetadataOverridesForTracks(
+      [
+        {
+          ...unresolvedSpotifyTrack,
+          artist: "Russ",
+          albumArtist: "Russ",
+          album: "ZOO",
+          albumType: "Album",
+          title: "The Flute Song",
+          trackNumber: 1,
+          trackTotal: 14,
+          discNumber: 1,
+          discTotal: 1,
+          year: 2018,
+          isrc: "USQX91802103"
+        },
+        {
+          ...unmatchedSpotifyTrack,
+          artist: "Nas",
+          albumArtist: "Nas",
+          album: "Illmatic",
+          albumType: "Album",
+          title: "N.Y. State of Mind",
+          trackNumber: 2,
+          trackTotal: 10,
+          discNumber: 1,
+          discTotal: 1,
+          year: 1994,
+          isrc: "USSM10017344"
+        }
+      ],
+      "spotify"
+    );
 
     globalThis.fetch = navidromeFetchForSongs([
       {
@@ -86,6 +110,7 @@ test("user metadata decisions survive later scans even when Navidrome matches", 
     const second = await scanLibrary(scanSettings);
     const rescannedTrustedTrack = second.tracks.find((track) => track.relativePath === trustedRelativePath);
     const rescannedSpotifyTrack = second.tracks.find((track) => track.relativePath === spotifyRelativePath);
+    const rescannedUnmatchedSpotifyTrack = second.tracks.find((track) => track.relativePath === unmatchedSpotifyRelativePath);
 
     assert.equal(rescannedTrustedTrack?.metadataConfidence, "trusted-path");
     assert.equal(rescannedTrustedTrack?.album, "Real Album");
@@ -98,6 +123,13 @@ test("user metadata decisions survive later scans even when Navidrome matches", 
     assert.equal(rescannedSpotifyTrack?.trackNumber, 1);
     assert.equal(rescannedSpotifyTrack?.year, 2018);
     assert.equal(rescannedSpotifyTrack?.navidromeEnrichment?.code, "matched");
+    assert.equal(rescannedUnmatchedSpotifyTrack?.metadataConfidence, "spotify");
+    assert.equal(rescannedUnmatchedSpotifyTrack?.artist, "Nas");
+    assert.equal(rescannedUnmatchedSpotifyTrack?.album, "Illmatic");
+    assert.equal(rescannedUnmatchedSpotifyTrack?.navidromeEnrichment?.status, "skipped");
+    assert.equal(rescannedUnmatchedSpotifyTrack?.navidromeEnrichment?.code, "spotify-confirmed");
+    assert.equal(listUnindexedFiles(scanSettings, second.tracks).total, 0);
+    assert.ok(second.warnings.some((warning) => warning.includes("retained user-confirmed Spotify metadata")));
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.NAVICLEAN_DATA_DIR;

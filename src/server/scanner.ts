@@ -154,7 +154,9 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
         try {
           return await findNavidromeSearchFallbackForFile(settings, track);
         } catch {
-          searchFallbackFailures += 1;
+          if (track.metadataConfidence !== "spotify") {
+            searchFallbackFailures += 1;
+          }
           return null;
         }
       })
@@ -164,10 +166,15 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
       const navidromeMatch = batchMatches[batchIndex];
 
       if (!navidromeMatch) {
-        if (unmatchedExamples.length < 5) {
+        if (track.metadataConfidence !== "spotify" && unmatchedExamples.length < 5) {
           unmatchedExamples.push(track.relativePath);
         }
-        enrichedTracks[trackIndex] = withNavidromeDiagnostic(track, unmatchedNavidromeDiagnostic(track, navidromeTracks.length));
+        enrichedTracks[trackIndex] = withNavidromeDiagnostic(
+          track,
+          track.metadataConfidence === "spotify"
+            ? spotifyConfirmedDiagnostic(navidromeTracks.length)
+            : unmatchedNavidromeDiagnostic(track, navidromeTracks.length)
+        );
         return;
       }
 
@@ -184,6 +191,7 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
     .filter((diagnostic): diagnostic is NavidromeMetadataEnrichment => Boolean(diagnostic));
   const noApiMatchCount = unmatchedDiagnostics.filter((diagnostic) => diagnostic.code === "no-api-match").length;
   const possibleStaleScanCount = unmatchedDiagnostics.filter((diagnostic) => diagnostic.code === "possible-stale-scan").length;
+  const spotifyConfirmedCount = unmatchedDiagnostics.filter((diagnostic) => diagnostic.code === "spotify-confirmed").length;
 
   warnings.push(
     `Navidrome metadata: ${matched.toLocaleString()} matched / ${tracks.length.toLocaleString()} files (${navidromeTracks.length.toLocaleString()} indexed tracks).`
@@ -198,6 +206,12 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
   if (searchFallbackFailures > 0) {
     warnings.push(
       `Navidrome metadata: search fallback failed for ${searchFallbackFailures.toLocaleString()} unmatched files.`
+    );
+  }
+
+  if (spotifyConfirmedCount > 0) {
+    warnings.push(
+      `Navidrome metadata: ${spotifyConfirmedCount.toLocaleString()} files did not match Navidrome and retained user-confirmed Spotify metadata; no action is required.`
     );
   }
 
@@ -521,6 +535,15 @@ function withNavidromeDiagnostic(track: TrackFile, navidromeEnrichment: Navidrom
   return {
     ...track,
     navidromeEnrichment
+  };
+}
+
+function spotifyConfirmedDiagnostic(indexedTrackCount: number): NavidromeMetadataEnrichment {
+  return {
+    status: "skipped",
+    code: "spotify-confirmed",
+    message: "Navidrome did not match this file, so NaviClean retained the user-confirmed Spotify metadata.",
+    indexedTrackCount
   };
 }
 

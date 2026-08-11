@@ -303,6 +303,7 @@ export type NavidromeMetadataDiagnosticCode =
   | "zero-tracks"
   | "track-no-usable-path"
   | "path-outside-library-root"
+  | "spotify-confirmed"
   | "no-api-match"
   | "possible-stale-scan";
 
