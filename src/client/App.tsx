@@ -98,6 +98,16 @@ type AppTheme = "light" | "dark";
 type UnindexedFilter = "all" | "possible-stale-scan" | "no-api-match";
 type OrganizePreviewFilter = "attention" | "metadata-review" | "navidrome-unmatched" | "skipped" | "ready" | "duplicate-target" | "conflict" | "missing" | "trackkeep" | "same" | "all";
 type OrganizePreviewItem = OrganizePlan["items"][number];
+type ScreenWakeLockSentinelLike = {
+  addEventListener: (type: "release", listener: () => void) => void;
+  release: () => Promise<void>;
+  removeEventListener: (type: "release", listener: () => void) => void;
+};
+type NavigatorWithWakeLock = Navigator & {
+  wakeLock?: {
+    request: (type: "screen") => Promise<ScreenWakeLockSentinelLike>;
+  };
+};
 type SpotifyResolvableItem = Pick<
   TrackFile,
   "id" | "albumArtist" | "album" | "artist" | "title" | "managedBy" | "organizeSkippedAt" | "metadataConfidence" | "metadataSuggestion"
@@ -108,6 +118,7 @@ const unindexedPageSize = 150;
 const organizePreviewPageSize = 150;
 const providerPreviewBatchSize = 6;
 const themeStorageKey = "naviclean-theme";
+const activeCatalogDownloadJobStorageKey = "naviclean-active-catalog-download-job";
 const navicleanIssuesUrl = "https://github.com/thedinz/NaviClean/issues/new";
 const trashAudioExtensions = new Set([
   ".aac",
@@ -4315,6 +4326,8 @@ function DiscoverPage() {
   const [bulkRiskAccepted, setBulkRiskAccepted] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [wakeLockActive, setWakeLockActive] = useState(false);
+  const wakeLockRef = useRef<ScreenWakeLockSentinelLike | null>(null);
 
   const selectedMissingTrackIds = album?.tracks
     .filter((track) => selectedTrackIds[track.id] && !track.present)
@@ -4335,6 +4348,26 @@ function DiscoverPage() {
   );
 
   useEffect(() => {
+    const storedJobId = readActiveCatalogDownloadJobId();
+
+    if (storedJobId) {
+      void loadDownloadJob(storedJobId);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!downloadJob) {
+      return;
+    }
+
+    if (isCatalogDownloadJobActive(downloadJob)) {
+      rememberActiveCatalogDownloadJob(downloadJob.id);
+    } else {
+      forgetActiveCatalogDownloadJob(downloadJob.id);
+    }
+  }, [downloadJob?.id, downloadJob?.status]);
+
+  useEffect(() => {
     if (!downloadJob || !isCatalogDownloadJobActive(downloadJob)) {
       return undefined;
     }
@@ -4344,6 +4377,72 @@ function DiscoverPage() {
     }, 2500);
 
     return () => window.clearInterval(interval);
+  }, [downloadJob?.id, downloadJob?.status]);
+
+  useEffect(() => {
+    if (!downloadJob || !isCatalogDownloadJobActive(downloadJob)) {
+      setWakeLockActive(false);
+      return undefined;
+    }
+
+    const activeJobId = downloadJob.id;
+    let disposed = false;
+    let removeReleaseListener: (() => void) | null = null;
+
+    const acquireWakeLock = async () => {
+      const wakeLock = (navigator as NavigatorWithWakeLock).wakeLock;
+
+      if (disposed || document.visibilityState !== "visible" || wakeLockRef.current || !wakeLock) {
+        return;
+      }
+
+      try {
+        const sentinel = await wakeLock.request("screen");
+
+        if (disposed) {
+          void sentinel.release();
+          return;
+        }
+
+        const handleRelease = () => {
+          if (wakeLockRef.current === sentinel) {
+            wakeLockRef.current = null;
+            setWakeLockActive(false);
+          }
+        };
+
+        wakeLockRef.current = sentinel;
+        setWakeLockActive(true);
+        sentinel.addEventListener("release", handleRelease);
+        removeReleaseListener = () => sentinel.removeEventListener("release", handleRelease);
+      } catch {
+        if (!disposed) {
+          setWakeLockActive(false);
+        }
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void acquireWakeLock();
+        void loadDownloadJob(activeJobId);
+      }
+    };
+
+    void acquireWakeLock();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      disposed = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      removeReleaseListener?.();
+      const sentinel = wakeLockRef.current;
+      wakeLockRef.current = null;
+
+      if (sentinel) {
+        void sentinel.release();
+      }
+    };
   }, [downloadJob?.id, downloadJob?.status]);
 
   const searchArtists = async (event: FormEvent) => {
@@ -4490,6 +4589,7 @@ function DiscoverPage() {
 
       setDownloadPreview(result.preview);
       setDownloadJob(result.job);
+      rememberActiveCatalogDownloadJob(result.job.id);
       setNotice(`Download job started with ${result.job.pendingCount} queued track${result.job.pendingCount === 1 ? "" : "s"}.`);
     } catch (caught) {
       setNotice((caught as Error).message);
@@ -4508,6 +4608,7 @@ function DiscoverPage() {
       setAlbum((currentAlbum) => currentAlbum ? albumWithCompletedDownloads(currentAlbum, result.job) : currentAlbum);
 
       if (isCatalogDownloadJobTerminal(result.job)) {
+        forgetActiveCatalogDownloadJob(result.job.id);
         setNotice(
           `Download job ${result.job.status}: ${result.job.completedCount} completed, ${result.job.failedCount} failed.`
         );
@@ -4521,6 +4622,9 @@ function DiscoverPage() {
         }
       }
     } catch (caught) {
+      if ((caught as Error).message === "Download job not found") {
+        forgetActiveCatalogDownloadJob(jobId);
+      }
       setNotice((caught as Error).message);
     }
   };
@@ -4802,6 +4906,17 @@ function DiscoverPage() {
             <span>{downloadJob.pendingCount} pending</span>
             <span>{downloadJob.failedCount} failed</span>
           </div>
+          {isCatalogDownloadJobActive(downloadJob) && (
+            <div className="notice-bar safety">
+              <strong>Long-running download protection is active</strong>
+              <span>
+                {wakeLockActive
+                  ? "This page is keeping the screen awake while the server works. "
+                  : "The server continues downloading even if the screen sleeps. "}
+                You can refresh or leave Discover and this page will reconnect to the active job when you return.
+              </span>
+            </div>
+          )}
           <div className="table-wrap">
             <table>
               <thead>
@@ -5296,6 +5411,32 @@ function initialTheme(): AppTheme {
   }
 
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function readActiveCatalogDownloadJobId() {
+  try {
+    return window.localStorage.getItem(activeCatalogDownloadJobStorageKey);
+  } catch {
+    return null;
+  }
+}
+
+function rememberActiveCatalogDownloadJob(jobId: string) {
+  try {
+    window.localStorage.setItem(activeCatalogDownloadJobStorageKey, jobId);
+  } catch {
+    // The active page still polls the job when browser storage is unavailable.
+  }
+}
+
+function forgetActiveCatalogDownloadJob(jobId: string) {
+  try {
+    if (window.localStorage.getItem(activeCatalogDownloadJobStorageKey) === jobId) {
+      window.localStorage.removeItem(activeCatalogDownloadJobStorageKey);
+    }
+  } catch {
+    // Browser storage is optional for job recovery.
+  }
 }
 
 function ActionProgress({ label }: { label: string }) {
