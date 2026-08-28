@@ -131,6 +131,9 @@ const minYoutubeSearchResultsPerQuery = 5;
 const maxYoutubeSearchResultsPerQuery = 20;
 const defaultProviderSearchTimeoutMs = 20_000;
 const defaultProviderDownloadTimeoutMs = 600_000;
+const youtubeDownloadSpacingMs = 10_000;
+const youtubeDownloadBatchSize = 5;
+const youtubeDownloadBatchCooldownMs = 120_000;
 const confidentYoutubeCandidateScore = 94;
 const stagingRootSegments = [".naviclean", "tmp", "provider-downloads"];
 const provenanceLogSegments = [".naviclean", "provider-downloads.json"];
@@ -154,6 +157,9 @@ export function providerDownloadProfile(
 }
 const jobs = new Map<string, SpotifyCatalogDownloadJob>();
 let catalogUpdateQueue: Promise<void> = Promise.resolve();
+let youtubeDownloadQueue: Promise<void> = Promise.resolve();
+let youtubeDownloadsSinceCooldown = 0;
+let lastYoutubeDownloadFinishedAt = 0;
 
 export async function previewSpotifyCatalogDownloads(
   settings: PrivateSettings,
@@ -178,7 +184,8 @@ export async function previewSpotifyCatalogDownloads(
     items,
     warnings: [
       ...plan.warnings,
-      "YouTube and JioSaavn searches are rate-limited and can be blocked by their providers. Keep bulk downloads small."
+      "YouTube and JioSaavn searches are rate-limited and can be blocked by their providers. Keep bulk downloads small.",
+      "YouTube downloads are globally queued with at least 10 seconds between tracks and a 2-minute cooldown after every 5 attempts."
     ]
   };
 }
@@ -670,12 +677,15 @@ async function downloadProviderTrackAsFormat(
   await fs.mkdir(targetDirectory, { recursive: true });
 
   try {
-    const stdout = await runYtDlp({
+    const runProviderDownload = () => runYtDlp({
       downloadUrl: source.sourceUrl,
       format,
       outputTemplate,
       quality: profile.quality
     });
+    const stdout = providerId === "youtube"
+      ? await runQueuedYoutubeDownload(runProviderDownload)
+      : await runProviderDownload();
     let stagedPath = await findDownloadedPath({
       beforePaths,
       format,
@@ -1825,6 +1835,54 @@ function isPathInside(child: string, parent: string) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Provider action failed.";
+}
+
+export function youtubeDownloadDelayMs({
+  downloadsSinceCooldown,
+  lastFinishedAt,
+  now
+}: {
+  downloadsSinceCooldown: number;
+  lastFinishedAt: number;
+  now: number;
+}) {
+  if (!lastFinishedAt) {
+    return 0;
+  }
+
+  const requiredDelay = downloadsSinceCooldown >= youtubeDownloadBatchSize
+    ? youtubeDownloadBatchCooldownMs
+    : youtubeDownloadSpacingMs;
+  return Math.max(0, requiredDelay - (now - lastFinishedAt));
+}
+
+async function runQueuedYoutubeDownload<T>(operation: () => Promise<T>) {
+  const queued = youtubeDownloadQueue.then(async () => {
+    const cooldownDue = youtubeDownloadsSinceCooldown >= youtubeDownloadBatchSize;
+    const waitMs = youtubeDownloadDelayMs({
+      downloadsSinceCooldown: youtubeDownloadsSinceCooldown,
+      lastFinishedAt: lastYoutubeDownloadFinishedAt,
+      now: Date.now()
+    });
+
+    if (waitMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+
+    if (cooldownDue) {
+      youtubeDownloadsSinceCooldown = 0;
+    }
+
+    try {
+      return await operation();
+    } finally {
+      youtubeDownloadsSinceCooldown += 1;
+      lastYoutubeDownloadFinishedAt = Date.now();
+    }
+  });
+
+  youtubeDownloadQueue = queued.then(() => undefined, () => undefined);
+  return queued;
 }
 
 async function mapWithConcurrency<T, R>(
