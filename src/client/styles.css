@@ -750,9 +750,9 @@ legend {
   display: grid;
   gap: 12px;
   padding: 12px;
-  border: 1px solid #e4e2d9;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #fbfaf5;
+  background: var(--panel);
 }
 
 .empty-folder-panel .toolbar {
@@ -1472,6 +1472,14 @@ select {
   border-radius: 8px;
   background: #fff;
   color: #17211f;
+}
+
+input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  padding: 0;
+  accent-color: var(--accent);
 }
 
 input:read-only,
