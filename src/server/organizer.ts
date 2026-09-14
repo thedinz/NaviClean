@@ -13,6 +13,7 @@ import type {
   TrackFile
 } from "../shared/types.js";
 import { duplicateKeyForTrack } from "./matching.js";
+import { writeCanonicalTags } from "./canonical-tags.js";
 import { standardNamingFormatDefaults } from "./settings.js";
 import type { PrivateSettings } from "./settings.js";
 import { isTrackKeepManaged, normalizeTrackKeepManagedBy } from "./trackkeep.js";
@@ -72,6 +73,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       organizeSkippedAt: track.organizeSkippedAt,
       metadataConfidence: track.metadataConfidence,
       metadataSuggestion: track.metadataSuggestion,
+      identification: track.identification,
       artist: track.artist,
       albumArtist: track.albumArtist,
       album: track.album,
@@ -135,6 +137,9 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     } else if (target.outsideLibrary) {
       item.status = "outside-library";
       item.message = "Target leaves library root";
+    } else if (trackIdentificationNeedsReview(track, settings)) {
+      item.status = "metadata-review";
+      item.message = track.identification?.message || "Track identity needs confirmation";
     } else if (track.metadataConfidence === "path-suggestion") {
       item.status = "metadata-review";
       item.message = "Path-derived artist or album needs confirmation";
@@ -181,7 +186,7 @@ function navidromePlanWarnings(tracks: TrackFile[]) {
   const matched = diagnostics.filter((diagnostic) => diagnostic?.code === "matched").length;
 
   warnings.push(
-    `Navidrome metadata: ${matched.toLocaleString()} matched / ${tracks.length.toLocaleString()} files in the last scan.`
+    `Navidrome index: ${matched.toLocaleString()} matched / ${tracks.length.toLocaleString()} files in the last scan.`
   );
 
   for (const code of navidromePlanWarningOrder) {
@@ -200,6 +205,7 @@ const navidromePlanWarningOrder: NavidromeMetadataDiagnosticCode[] = [
   "api-request-failed",
   "zero-tracks",
   "spotify-confirmed",
+  "identity-confirmed",
   "no-api-match",
   "possible-stale-scan",
   "track-no-usable-path",
@@ -210,19 +216,23 @@ function navidromePlanWarning(code: NavidromeMetadataDiagnosticCode, count: numb
   const formattedCount = count.toLocaleString();
 
   if (code === "settings-missing") {
-    return `Navidrome metadata: ${formattedCount} files used local metadata because Navidrome credentials/settings were missing.`;
+    return `Navidrome index: ${formattedCount} files were not compared because Navidrome credentials/settings were missing.`;
   }
 
   if (code === "api-request-failed") {
-    return `Navidrome metadata: ${formattedCount} files used local metadata because the Navidrome API request failed.`;
+    return `Navidrome index: ${formattedCount} files were not compared because the Navidrome API request failed.`;
   }
 
   if (code === "zero-tracks") {
-    return `Navidrome metadata: ${formattedCount} files used local metadata because Navidrome returned zero tracks.`;
+    return `Navidrome index: ${formattedCount} files were not compared because Navidrome returned zero tracks.`;
   }
 
   if (code === "spotify-confirmed") {
     return `Navidrome metadata: ${formattedCount} files did not match Navidrome and retained user-confirmed Spotify metadata; no action is required.`;
+  }
+
+  if (code === "identity-confirmed") {
+    return `Navidrome metadata: ${formattedCount} files did not match Navidrome and retained confirmed identity metadata; no action is required.`;
   }
 
   if (code === "possible-stale-scan") {
@@ -363,13 +373,14 @@ function compareCollisionCandidates(left: OrganizeCollisionCandidate, right: Org
   return (right.size ?? 0) - (left.size ?? 0);
 }
 
-export async function applyOrganizePlan(plan: OrganizePlan): Promise<OrganizeMoveResult> {
+export async function applyOrganizePlan(plan: OrganizePlan, tracks: TrackFile[] = []): Promise<OrganizeMoveResult> {
   const result: OrganizeMoveResult = {
     moved: 0,
     skipped: 0,
     errors: [],
     items: []
   };
+  const tracksById = new Map(tracks.map((track) => [track.id, track]));
 
   for (const item of plan.items) {
     if (item.status !== "ready") {
@@ -379,6 +390,10 @@ export async function applyOrganizePlan(plan: OrganizePlan): Promise<OrganizeMov
     }
 
     try {
+      const track = tracksById.get(item.id);
+      if (track) {
+        await writeCanonicalTags(item.sourcePath, track);
+      }
       await fs.mkdir(path.dirname(item.targetPath), { recursive: true });
       await moveFile(item.sourcePath, item.targetPath);
       result.moved += 1;
@@ -486,6 +501,17 @@ export async function trashOrganizeCandidates(
 
 export function trackNeedsMove(track: TrackFile) {
   return !isTrackKeepManaged(track.managedBy) && !track.organizeSkippedAt && path.resolve(track.absolutePath) !== path.resolve(track.targetPath);
+}
+
+function trackIdentificationNeedsReview(track: TrackFile, settings: PrivateSettings) {
+  const status = track.identification?.status;
+  if (!settings.identification || !status || isTrackKeepManaged(track.managedBy)) {
+    return false;
+  }
+  if (status === "user-confirmed" || status === "trackkeep-confirmed") {
+    return false;
+  }
+  return status !== "fingerprint-and-release-confirmed" || settings.identification.requireReviewBeforeFileChanges;
 }
 
 function templateRelativePath(track: TrackFile, settings: PrivateSettings, extension: string) {

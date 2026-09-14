@@ -7,7 +7,7 @@ import { hasTrackKeepIdentityTags, scanLibrary } from "../src/server/scanner.js"
 import { buildOrganizePlan } from "../src/server/organizer.js";
 import { trustPathMetadataForFolder } from "../src/server/metadata-review.js";
 import type { PrivateSettings } from "../src/server/settings.js";
-import { normalizeTrackKeepManagedBy, trackKeepMetadataTagsForSpotifyTrack } from "../src/server/trackkeep.js";
+import { normalizeTrackKeepManagedBy, readTrackKeepIdentity, trackKeepMetadataTagsForSpotifyTrack } from "../src/server/trackkeep.js";
 
 test("scanner recognizes TrackKeep and legacy SpotifyBU identity aliases", () => {
   const keys = ["album_id", "identity_version", "isrc", "track_id", "track_uri"];
@@ -107,6 +107,28 @@ test("TrackKeep metadata helper dual-writes scanner-recognized identity tags", (
       common: Object.fromEntries(tags.map((tag) => [tag.key, tag.value]))
     }),
     true
+  );
+});
+
+test("TrackKeep identity values are available as authoritative IDs", () => {
+  assert.deepEqual(
+    readTrackKeepIdentity({
+      native: {
+        ID3v24: [
+          { id: "TXXX:trackkeep:track_uri", value: "spotify:track:track-123" },
+          { id: "TXXX:trackkeep:album_id", value: "album-456" },
+          { id: "TXXX:trackkeep:isrc", value: "usabc2100001" },
+          { id: "TXXX:trackkeep:identity_version", value: "1" }
+        ]
+      }
+    }),
+    {
+      trackId: "track-123",
+      trackUri: "spotify:track:track-123",
+      albumId: "album-456",
+      isrc: "USABC2100001",
+      identityVersion: "1"
+    }
   );
 });
 
@@ -400,7 +422,7 @@ test("scanner does not block on uncached Spotify lookups", async () => {
   }
 });
 
-test("scanner uses Navidrome indexed metadata for target naming", async () => {
+test("identity-first scanning keeps Navidrome matches diagnostic-only", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-"));
   const originalFetch = globalThis.fetch;
   const sourceRelativePath = "loose/random-file.mp3";
@@ -481,6 +503,22 @@ test("scanner uses Navidrome indexed metadata for target naming", async () => {
       track?.targetRelativePath,
       "Album Artist/Album Artist - Best Of (2020)/Album Artist - Best Of (2020) - 09 - Shared Song.mp3"
     );
+
+    scanSettings.identification = {
+      acoustIdEnabled: false,
+      acoustIdApiKey: "",
+      useEmbeddedTagsAsHints: true,
+      usePathAsHints: true,
+      autoAcceptUniqueFingerprintMatches: true,
+      requireReviewBeforeFileChanges: true
+    };
+    const identityFirst = await scanLibrary(scanSettings);
+    const identityFirstTrack = identityFirst.tracks[0];
+
+    assert.equal(identityFirstTrack?.targetSource, undefined);
+    assert.notEqual(identityFirstTrack?.title, "Shared Song");
+    assert.equal(identityFirstTrack?.navidromeEnrichment?.code, "matched");
+    assert.equal(identityFirstTrack?.identification?.status, "candidate-only");
   } finally {
     globalThis.fetch = originalFetch;
     await fs.rm(root, { force: true, recursive: true });

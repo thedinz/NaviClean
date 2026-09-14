@@ -49,6 +49,7 @@ export async function resolveTrackMetadataFromSpotify(
     updatedTrackIds.push(track.id);
     return trackWithSpotifyMetadata(track, spotifyTrack, {
       album: album.name,
+      albumId: album.id,
       albumArtist: album.artist.name,
       albumType: album.albumType,
       discTotal: albumDiscTotal,
@@ -100,6 +101,7 @@ function trackWithSpotifyMetadata(
   spotifyTrack: SpotifyTrackSummary,
   album: {
     album: string;
+    albumId: string;
     albumArtist: string;
     albumType: string;
     discTotal: number;
@@ -146,7 +148,14 @@ function trackWithSpotifyMetadata(
     organizeSkippedAt: undefined,
     navidromeEnrichment: undefined,
     metadataConfidence: "spotify" as const,
-    targetSource: "spotify" as const
+    targetSource: "spotify" as const,
+    identification: {
+      status: "user-confirmed" as const,
+      source: "spotify" as const,
+      message: "Spotify metadata was explicitly selected by the user.",
+      spotifyTrackId: spotifyTrack.id,
+      spotifyAlbumId: album.albumId
+    }
   } satisfies TrackFile;
   const target = targetForTrack(partialTrack, settings);
 

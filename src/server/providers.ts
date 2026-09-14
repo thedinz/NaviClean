@@ -1155,7 +1155,15 @@ export function providerTrackToTrackFile(settings: PrivateSettings, track: Catal
     trackTotal: track.albumTracksTotal,
     year: track.albumReleaseYear,
     artist: track.artists.join(", ") || track.albumArtist,
-    targetSource: "spotify"
+    targetSource: "spotify",
+    metadataConfidence: "spotify",
+    identification: {
+      status: "user-confirmed",
+      source: "spotify",
+      message: "Spotify metadata was selected for this provider download.",
+      spotifyTrackId: track.id,
+      spotifyAlbumId: track.albumId
+    }
   };
 }
 
@@ -1175,6 +1183,12 @@ function providerDownloadResultToTrackFile(
     container: profile.container,
     extension: profile.extension,
     managedBy: "trackkeep",
+    identification: {
+      ...planned.identification!,
+      status: "trackkeep-confirmed",
+      source: "trackkeep",
+      message: "TrackKeep identity tags are authoritative."
+    },
     mtimeMs: result.mtimeMs,
     qualityScore: profile.qualityScore,
     relativePath: result.relativePath,

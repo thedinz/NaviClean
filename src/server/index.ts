@@ -17,6 +17,7 @@ import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
 import { getActiveAudioConvertJob, getAudioConvertJob, listAudioConvertView, startAudioConvertJob } from "./converter.js";
 import { advancedDiagnosticsEnabled } from "./diagnostics.js";
 import { buildDuplicateGroups, resolveDuplicates, resolveSelectedDuplicates } from "./duplicates.js";
+import { confirmIdentificationCandidate, rememberConfirmedTrackIdentities } from "./identification.js";
 import { moveMetadataOverrides, saveMetadataOverridesForTracks } from "./metadata-overrides.js";
 import { trustPathMetadataForFolder } from "./metadata-review.js";
 import {
@@ -680,7 +681,7 @@ app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
   const settings = await loadSettingsForPlanning();
   const planned = await getOrganizeEvaluation(catalog, settings);
   const plan = planned.plan;
-  const result = await applyOrganizePlan(plan);
+  const result = await applyOrganizePlan(plan, planned.tracks);
   let tracks = planned.tracks;
   let latestCatalog = catalog;
 
@@ -733,6 +734,10 @@ app.post("/api/organize/spotify-match", asyncHandler(async (req, res) => {
     resolution.tracks.filter((track) => resolution.updatedTrackIds.includes(track.id)),
     "spotify"
   );
+  await rememberConfirmedTrackIdentities(
+    resolution.tracks.filter((track) => resolution.updatedTrackIds.includes(track.id)),
+    "spotify"
+  );
   const latestCatalog = await saveCatalog(resolution.tracks);
   invalidateOrganizeEvaluationCache();
   const refreshed = await rebuildOrganizeEvaluation(latestCatalog, settings);
@@ -743,6 +748,22 @@ app.post("/api/organize/spotify-match", asyncHandler(async (req, res) => {
     selected: resolution.selected,
     plan: refreshed.plan
   });
+}));
+
+app.post("/api/organize/identify-match", asyncHandler(async (req, res) => {
+  const localTrackId = String(req.body.localTrackId || "");
+  const candidateId = typeof req.body.candidateId === "string" ? req.body.candidateId : undefined;
+  if (!localTrackId) {
+    res.status(400).json({ error: "localTrackId is required" });
+    return;
+  }
+  const catalog = await loadCatalog();
+  const settings = await loadSettingsForPlanning();
+  const resolution = await confirmIdentificationCandidate(settings, catalog.tracks, localTrackId, candidateId);
+  const latestCatalog = await saveCatalog(resolution.tracks);
+  invalidateOrganizeEvaluationCache();
+  const refreshed = await rebuildOrganizeEvaluation(latestCatalog, settings);
+  res.json({ updatedTrackIds: resolution.updatedTrackIds, plan: refreshed.plan });
 }));
 
 app.post("/api/organize/trust-path", asyncHandler(async (req, res) => {
@@ -757,6 +778,10 @@ app.post("/api/organize/trust-path", asyncHandler(async (req, res) => {
   const settings = await loadSettingsForPlanning();
   const resolution = trustPathMetadataForFolder(settings, catalog.tracks, localTrackId);
   await saveMetadataOverridesForTracks(
+    resolution.tracks.filter((track) => resolution.updatedTrackIds.includes(track.id)),
+    "trusted-path"
+  );
+  await rememberConfirmedTrackIdentities(
     resolution.tracks.filter((track) => resolution.updatedTrackIds.includes(track.id)),
     "trusted-path"
   );
@@ -1127,7 +1152,8 @@ function organizeEvaluationKey(catalog: CatalogSnapshot, settings: PlanningSetti
   return JSON.stringify({
     catalogUpdatedAt: catalog.updatedAt,
     trackCount: catalog.tracks.length,
-    naming: settings.naming
+    naming: settings.naming,
+    identification: settings.identification
   });
 }
 

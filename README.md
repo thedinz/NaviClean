@@ -42,25 +42,25 @@ For Unraid, set `PUID=99` and `PGID=100` so NaviClean can write to `/mnt/user/ap
 
 ## Naming model
 
-NaviClean uses one selected naming mode at a time:
+NaviClean keeps one stable standard naming contract:
 
-- `Standard` is the default for fresh installs:
-  - Artist folder: `{Album Artist Name}`
-  - Standard track: `{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}`
-  - Multi-disc track: `{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}`
-- `Manual` keeps the editable templates for users who want to define their own folder and file layout.
+- Artist folder: `{Album Artist Name}`
+- Standard track: `{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}`
+- Multi-disc track: `{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}`
 
 NaviClean appends the original extension before planning moves. A normal standard target path looks like `Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track`. Missing release years are written as `Unknown Year`. In standard mode, the rendered target path is canonical, so a different year, folder name, or filename is treated as organization work instead of being accepted as close enough.
 
 ## Recommended workflow
 
-Existing library files are organized from the scan catalog, with Navidrome metadata used when Navidrome can match the file. Artist/album identities that depend on folder or filename inference enter a blocking Metadata review state instead of being silently accepted. Each Organize row can search Spotify using the artist and track title, without treating the current folder or album text as authoritative. NaviClean only uses a result after the user chooses the exact release, then updates the selected track and any unambiguous title/track matches in the same source folder. For a known-good folder, **Trust this folder** confirms its complete artist/album suggestion in bulk. Spotify and trusted-path decisions are persisted across scans and file moves. The refreshed target paths are shown for review before Apply. Spotify also supplies metadata and artwork for the Discover/download flow.
+Existing library files are organized only after their identity is confirmed. TrackKeep tags and prior user decisions are authoritative. When enabled, NaviClean calculates a Chromaprint fingerprint with `fpcalc`, asks AcoustID for MusicBrainz recording and release candidates, and requires ambiguous releases to be selected in Organize. Unique fingerprint-and-release matches can be accepted automatically, while the safer default still requires confirmation before file changes. Ordinary embedded tags, filenames, and folders are optional search hints rather than identity authority. Confirmed decisions are stored by audio fingerprint so they survive file moves, retagging, and compatible format changes.
+
+Spotify matching is optional and has an explicit Settings switch. Each Organize row can search Spotify using the available hints; metadata is used only after the user chooses a result. Navidrome is used for index diagnostics, artwork, and scan coordination, but its cached copy of local tags does not replace confirmed NaviClean metadata.
 
 Use this flow when cleaning a mounted Navidrome library:
 
 1. Run a full Navidrome scan/sync first and wait for it to finish.
-2. Run a NaviClean scan. This reads the files and enriches matched tracks from Navidrome.
-3. Preview organization in NaviClean, resolve conflicts/missing files, and apply the moves.
+2. Run a NaviClean scan. This fingerprints unidentified audio when AcoustID/MusicBrainz is enabled and checks Navidrome index status.
+3. Preview organization in NaviClean, resolve conflicts/missing files, and apply. NaviClean stream-copies the audio into a safely retagged file, preserving other embedded tags and artwork, before moving it to the canonical path.
 4. Run a full Navidrome scan/sync again so Navidrome sees the new paths and any new tags.
 5. Run a fresh NaviClean scan before doing another organization or duplicate-cleanup pass.
 
