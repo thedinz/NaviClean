@@ -11,6 +11,14 @@ export type TrackKeepMetadataSource = {
 
 export type TrackKeepManagedBy = "trackkeep";
 
+export type TrackKeepIdentity = {
+  trackId: string | null;
+  trackUri: string | null;
+  albumId: string | null;
+  isrc: string | null;
+  identityVersion: string | null;
+};
+
 const trackKeepIdentityVersion = "1";
 const identityNamespaces = ["trackkeep", "spotifybu"] as const;
 const identityNames = ["track_id", "track_uri", "album_id", "isrc", "identity_version"] as const;
@@ -28,6 +36,51 @@ const identityKeyAliases = new Set(
  */
 export function hasTrackKeepIdentityTags(tags: TrackKeepTagContainer | null | undefined) {
   return hasTrackKeepIdentityCommonTag(tags?.common) || hasTrackKeepIdentityNativeTag(tags?.native);
+}
+
+export function readTrackKeepIdentity(tags: TrackKeepTagContainer | null | undefined): TrackKeepIdentity | null {
+  const values = new Map<(typeof identityNames)[number], string>();
+  const entries: Array<[string, unknown]> = [
+    ...Object.entries(tags?.common ?? {}),
+    ...Object.values(tags?.native ?? {}).flatMap((items) => items.map((item) => [item.id, item.value] as [string, unknown]))
+  ];
+
+  for (const [key, value] of entries) {
+    const identityName = identityNameForKey(key);
+    if (identityName) {
+      const text = firstTextValue(value);
+      if (text) {
+        values.set(identityName, text);
+      }
+    }
+
+    if (tagKeyIsComment(key)) {
+      for (const comment of textValues(value)) {
+        const parsed = parseIdentityComment(comment);
+        for (const [commentKey, commentValue] of Object.entries(parsed ?? {})) {
+          const commentIdentityName = identityNameForKey(commentKey);
+          const text = firstTextValue(commentValue);
+          if (commentIdentityName && text) {
+            values.set(commentIdentityName, text);
+          }
+        }
+      }
+    }
+  }
+
+  if (values.size === 0) {
+    return null;
+  }
+
+  const trackUri = values.get("track_uri") ?? null;
+  const trackId = values.get("track_id") ?? trackUri?.match(/^spotify:track:(.+)$/i)?.[1] ?? null;
+  return {
+    trackId,
+    trackUri,
+    albumId: values.get("album_id") ?? null,
+    isrc: normalizeIsrc(values.get("isrc")) || null,
+    identityVersion: values.get("identity_version") ?? null
+  };
 }
 
 /**
@@ -95,6 +148,18 @@ function identityTagKeyIsRecognized(key: string) {
   return parts.some((_, index) => identityKeyAliases.has(normalizeTagKey(parts.slice(index).join(":"))));
 }
 
+function identityNameForKey(key: string): (typeof identityNames)[number] | null {
+  const normalizedKey = normalizeTagKey(key);
+  for (const namespace of identityNamespaces) {
+    for (const name of identityNames) {
+      if (aliasesForIdentityKey(namespace, name).some((alias) => normalizeTagKey(alias) === normalizedKey)) {
+        return name;
+      }
+    }
+  }
+  return null;
+}
+
 function aliasesForIdentityKey(namespace: (typeof identityNamespaces)[number], name: (typeof identityNames)[number]) {
   const key = `${namespace}:${name}`;
   return [
@@ -156,6 +221,45 @@ function identityCommentJsonHasMarker(value: string) {
   } catch {
     return false;
   }
+}
+
+function parseIdentityComment(value: string): Record<string, unknown> | null {
+  const trimmedValue = value.trim();
+  const prefix = identityCommentPrefixes.find((candidate) =>
+    trimmedValue.toLowerCase().startsWith(candidate.toLowerCase())
+  );
+  if (!prefix) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmedValue.slice(prefix.length));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function firstTextValue(value: unknown) {
+  return textValues(value).map((item) => item.trim()).find(Boolean) ?? "";
+}
+
+function textValues(value: unknown): string[] {
+  if (typeof value === "string" || typeof value === "number") {
+    return [String(value)];
+  }
+  if (value instanceof Uint8Array) {
+    return [new TextDecoder().decode(value)];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap(textValues);
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).flatMap(textValues);
+  }
+  return [];
 }
 
 function normalizeIsrc(value: string | null | undefined) {

@@ -589,7 +589,12 @@ function spotifyCredentials(
   settings: PrivateSettings,
   override: Partial<PrivateSettings["catalog"]["spotify"]> = {}
 ) {
+  if ((override.enabled ?? settings.catalog.spotify.enabled) === false) {
+    throw new Error("Spotify matching is disabled in Settings.");
+  }
+
   return {
+    enabled: true,
     clientId: override.clientId ?? settings.catalog.spotify.clientId,
     clientSecret: override.clientSecret ?? settings.catalog.spotify.clientSecret,
     market: override.market ?? settings.catalog.spotify.market

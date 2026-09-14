@@ -45,3 +45,37 @@ test("provider download settings preserve valid choices and normalize invalid ol
     mp3FallbackQuality: 320
   });
 });
+
+test("identity settings migrate safely and Spotify has an explicit switch", () => {
+  const defaults = normalizeSettings({});
+  assert.equal(defaults.catalog.spotify.enabled, true);
+  assert.deepEqual(defaults.identification, {
+    acoustIdEnabled: false,
+    acoustIdApiKey: "",
+    useEmbeddedTagsAsHints: true,
+    usePathAsHints: true,
+    autoAcceptUniqueFingerprintMatches: true,
+    requireReviewBeforeFileChanges: true
+  });
+
+  const configured = normalizeSettings({
+    catalog: { spotify: { enabled: false } } as never,
+    identification: {
+      acoustIdEnabled: true,
+      acoustIdApiKey: " key ",
+      useEmbeddedTagsAsHints: false,
+      usePathAsHints: false,
+      autoAcceptUniqueFingerprintMatches: false,
+      requireReviewBeforeFileChanges: false
+    }
+  });
+  assert.equal(configured.catalog.spotify.enabled, false);
+  assert.deepEqual(configured.identification, {
+    acoustIdEnabled: true,
+    acoustIdApiKey: "key",
+    useEmbeddedTagsAsHints: false,
+    usePathAsHints: false,
+    autoAcceptUniqueFingerprintMatches: false,
+    requireReviewBeforeFileChanges: false
+  });
+});

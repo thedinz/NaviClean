@@ -14,6 +14,7 @@ import {
   Download,
   ExternalLink,
   FileQuestion,
+  Fingerprint,
   FolderInput,
   FolderX,
   Gauge,
@@ -63,6 +64,7 @@ import type {
   NonMusicTrashResult,
   NonMusicFilesView,
   OrganizeApplyResult,
+  OrganizeIdentificationMatchResult,
   OrganizeCollisionCandidate,
   OrganizePlan,
   OrganizeSkipResult,
@@ -110,7 +112,7 @@ type NavigatorWithWakeLock = Navigator & {
 };
 type SpotifyResolvableItem = Pick<
   TrackFile,
-  "id" | "albumArtist" | "album" | "artist" | "title" | "managedBy" | "organizeSkippedAt" | "metadataConfidence" | "metadataSuggestion"
+  "id" | "albumArtist" | "album" | "artist" | "title" | "managedBy" | "organizeSkippedAt" | "metadataConfidence" | "metadataSuggestion" | "identification"
 >;
 
 const libraryArtistPageSize = 25;
@@ -790,7 +792,7 @@ function InstructionsPage() {
   const workflow = [
     "Run Navidrome Quick Scan for normal changes, or Navidrome Full Scan for major moves and stale-index problems.",
     "Wait for the Navidrome Scan panel to return to Idle.",
-    "Run NaviClean Scan to rebuild NaviClean's catalog from the current files and Navidrome metadata.",
+    "Run NaviClean Scan to fingerprint unidentified audio and compare the current files with Navidrome's index.",
     "Review Organize, Duplicates, Diagnostics, and Trash actions.",
     "After applying moves or deleting files, run Navidrome Full Scan, wait for Idle, then run NaviClean Scan again."
   ];
@@ -3980,6 +3982,10 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
                                 `Spotify metadata selected for ${result.matchedTracks} ${pluralize("track", result.matchedTracks)} from ${result.selected.album}. Review the updated targets, then Apply.`
                               );
                             }}
+                            onIdentified={(result) => {
+                              showMutationPlan(result.plan);
+                              setNotice("MusicBrainz identity confirmed. Review the updated target, then Apply.");
+                            }}
                             onTrusted={(result) => {
                               showMutationPlan(result.plan);
                               setNotice(
@@ -4014,19 +4020,41 @@ function SpotifyMetadataResolver({
   item,
   disabled,
   onResolved,
+  onIdentified,
   onTrusted,
   onSkipped
 }: {
   item: SpotifyResolvableItem;
   disabled: boolean;
   onResolved: (result: OrganizeSpotifyMatchResult) => void;
+  onIdentified?: (result: OrganizeIdentificationMatchResult) => void;
   onTrusted?: (result: OrganizeTrustPathResult) => void;
   onSkipped?: (result: OrganizeSkipResult) => void;
 }) {
   const spotify = useSpotifyMetadataSearch(item, onResolved);
   const [trustBusy, setTrustBusy] = useState(false);
   const [skipBusy, setSkipBusy] = useState(false);
+  const [identifyBusy, setIdentifyBusy] = useState<string | null>(null);
   const organizationSkipped = Boolean(item.organizeSkippedAt);
+
+  const confirmIdentification = async (candidateId: string) => {
+    if (!onIdentified) {
+      return;
+    }
+    setIdentifyBusy(candidateId);
+    spotify.setError(null);
+    try {
+      const result = await api<OrganizeIdentificationMatchResult>("/organize/identify-match", {
+        method: "POST",
+        body: JSON.stringify({ localTrackId: item.id, candidateId })
+      });
+      onIdentified(result);
+    } catch (caught) {
+      spotify.setError((caught as Error).message);
+    } finally {
+      setIdentifyBusy(null);
+    }
+  };
 
   const trustFolder = async () => {
     if (!onTrusted) {
@@ -4081,6 +4109,27 @@ function SpotifyMetadataResolver({
 
   return (
     <div className="spotify-metadata-resolver">
+      {!organizationSkipped && item.identification?.source === "musicbrainz" && Boolean(item.identification.candidates?.length) && (
+        <div className="metadata-review-summary">
+          <span className="status-detail">Identified from the audio fingerprint</span>
+          {item.identification.candidates?.slice(0, 6).map((candidate) => (
+            <button
+              className="secondary-button compact-button identification-candidate"
+              type="button"
+              key={candidate.id}
+              disabled={disabled || Boolean(identifyBusy)}
+              onClick={() => void confirmIdentification(candidate.id)}
+              title={`MusicBrainz recording ${candidate.recordingId}${candidate.releaseId ? ` · release ${candidate.releaseId}` : ""}`}
+            >
+              {identifyBusy === candidate.id ? <Loader2 className="spin" size={16} /> : <Fingerprint size={16} />}
+              <span>
+                {candidate.artist} — {candidate.title} · {candidate.album}
+                {candidate.year ? ` (${candidate.year})` : ""}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
       {!isTrackKeepManaged(item.managedBy) && item.metadataConfidence === "path-suggestion" && !organizationSkipped && (
         <div className="metadata-review-summary">
           <span className="status-detail">Suggested from path — not verified</span>
@@ -4954,6 +5003,7 @@ function SettingsPage({
   const [adminPassword, setAdminPassword] = useState("");
   const [navidromePassword, setNavidromePassword] = useState("");
   const [spotifyClientSecret, setSpotifyClientSecret] = useState("");
+  const [acoustIdApiKey, setAcoustIdApiKey] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [navidromeBusy, setNavidromeBusy] = useState(false);
@@ -4989,12 +5039,21 @@ function SettingsPage({
           },
           catalog: {
             spotify: {
+              enabled: settings.catalog.spotify.enabled,
               clientId: settings.catalog.spotify.clientId,
               clientSecret: spotifyClientSecret,
               market: settings.catalog.spotify.market
             },
             providers: settings.catalog.providers,
             discovery: settings.catalog.discovery
+          },
+          identification: {
+            acoustIdEnabled: settings.identification.acoustIdEnabled,
+            acoustIdApiKey,
+            useEmbeddedTagsAsHints: settings.identification.useEmbeddedTagsAsHints,
+            usePathAsHints: settings.identification.usePathAsHints,
+            autoAcceptUniqueFingerprintMatches: settings.identification.autoAcceptUniqueFingerprintMatches,
+            requireReviewBeforeFileChanges: settings.identification.requireReviewBeforeFileChanges
           },
           naming: {
             mode: "standard",
@@ -5010,6 +5069,7 @@ function SettingsPage({
       setAdminPassword("");
       setNavidromePassword("");
       setSpotifyClientSecret("");
+      setAcoustIdApiKey("");
       onAuthChange({
         advancedDiagnosticsEnabled,
         authEnabled: next.auth.enabled,
@@ -5061,6 +5121,7 @@ function SettingsPage({
       const result = await api<{ ok: boolean; message: string }>("/spotify/test", {
         method: "POST",
         body: JSON.stringify({
+          enabled: settings.catalog.spotify.enabled,
           clientId: settings.catalog.spotify.clientId,
           clientSecret: spotifyClientSecret,
           market: settings.catalog.spotify.market
@@ -5159,9 +5220,24 @@ function SettingsPage({
           <Music2 size={18} />
           Spotify catalog
         </legend>
+        <label className="toggle-row">
+          <span>Enable Spotify matching</span>
+          <input
+            type="checkbox"
+            checked={settings.catalog.spotify.enabled}
+            onChange={(event) => setSettings({
+              ...settings,
+              catalog: {
+                ...settings.catalog,
+                spotify: { ...settings.catalog.spotify, enabled: event.target.checked }
+              }
+            })}
+          />
+        </label>
         <label>
           Client ID
           <input
+            disabled={!settings.catalog.spotify.enabled}
             value={settings.catalog.spotify.clientId}
             onChange={(event) =>
               setSettings({
@@ -5177,6 +5253,7 @@ function SettingsPage({
         <label>
           Client secret
           <input
+            disabled={!settings.catalog.spotify.enabled}
             value={spotifyClientSecret}
             onChange={(event) => setSpotifyClientSecret(event.target.value)}
             type="password"
@@ -5186,6 +5263,7 @@ function SettingsPage({
         <label>
           Market
           <input
+            disabled={!settings.catalog.spotify.enabled}
             value={settings.catalog.spotify.market}
             maxLength={2}
             onChange={(event) =>
@@ -5221,10 +5299,86 @@ function SettingsPage({
             }
           />
         </label>
-        <button className="secondary-button" type="button" onClick={testSpotify} disabled={spotifyBusy}>
+        <button className="secondary-button" type="button" onClick={testSpotify} disabled={spotifyBusy || !settings.catalog.spotify.enabled}>
           {spotifyBusy ? <Loader2 className="spin" size={18} /> : <Activity size={18} />}
           <span>{spotifyBusy ? "Testing" : "Test"}</span>
         </button>
+      </fieldset>
+
+      <fieldset className="panel">
+        <legend>
+          <Fingerprint size={18} />
+          Audio identification
+        </legend>
+        <label className="toggle-row">
+          <span>Enable AcoustID / MusicBrainz</span>
+          <input
+            type="checkbox"
+            checked={settings.identification.acoustIdEnabled}
+            onChange={(event) => setSettings({
+              ...settings,
+              identification: { ...settings.identification, acoustIdEnabled: event.target.checked }
+            })}
+          />
+        </label>
+        <label>
+          AcoustID application API key
+          <input
+            value={acoustIdApiKey}
+            onChange={(event) => setAcoustIdApiKey(event.target.value)}
+            type="password"
+            disabled={!settings.identification.acoustIdEnabled}
+            placeholder={settings.identification.acoustIdApiKeySet ? "Saved" : "Required for fingerprint lookup"}
+          />
+        </label>
+        <label className="toggle-row">
+          <span>Use embedded tags as search hints</span>
+          <input
+            type="checkbox"
+            checked={settings.identification.useEmbeddedTagsAsHints}
+            onChange={(event) => setSettings({
+              ...settings,
+              identification: { ...settings.identification, useEmbeddedTagsAsHints: event.target.checked }
+            })}
+          />
+        </label>
+        <label className="toggle-row">
+          <span>Use filenames and folders as search hints</span>
+          <input
+            type="checkbox"
+            checked={settings.identification.usePathAsHints}
+            onChange={(event) => setSettings({
+              ...settings,
+              identification: { ...settings.identification, usePathAsHints: event.target.checked }
+            })}
+          />
+        </label>
+        <label className="toggle-row">
+          <span>Accept unique fingerprint + release matches</span>
+          <input
+            type="checkbox"
+            checked={settings.identification.autoAcceptUniqueFingerprintMatches}
+            onChange={(event) => setSettings({
+              ...settings,
+              identification: { ...settings.identification, autoAcceptUniqueFingerprintMatches: event.target.checked }
+            })}
+          />
+        </label>
+        <label className="toggle-row">
+          <span>Require confirmation before file changes</span>
+          <input
+            type="checkbox"
+            checked={settings.identification.requireReviewBeforeFileChanges}
+            onChange={(event) => setSettings({
+              ...settings,
+              identification: { ...settings.identification, requireReviewBeforeFileChanges: event.target.checked }
+            })}
+          />
+        </label>
+        <div className="notice-bar safety">
+          <strong>Identity before naming</strong>
+          <span>Ordinary tags and paths are hints only. TrackKeep and confirmed catalog identities remain authoritative.</span>
+        </div>
       </fieldset>
 
       <fieldset className="panel">
@@ -5312,7 +5466,7 @@ function SettingsPage({
         </label>
         <div className="notice-bar safety">
           <strong>NaviClean naming</strong>
-          <span>Uses Spotify album metadata in the standard Artist / Album (Year) layout.</span>
+          <span>Uses confirmed metadata in the existing Artist / Album (Year) layout.</span>
         </div>
         <label className="toggle-row">
           <span>Daily auto scan</span>
@@ -5607,6 +5761,16 @@ function StatusPill({ active, label }: { active: boolean; label: string }) {
 }
 
 function organizeMetadataSourceLabel(item: OrganizePreviewItem) {
+  if (item.identification?.status === "trackkeep-confirmed") {
+    return "TrackKeep identity";
+  }
+
+  if (item.identification?.source === "musicbrainz") {
+    return item.identification.status === "user-confirmed"
+      ? "User-confirmed MusicBrainz metadata"
+      : "AcoustID / MusicBrainz candidate";
+  }
+
   if (item.metadataConfidence === "path-suggestion") {
     return "Path suggestion — confirmation required";
   }
@@ -5619,6 +5783,10 @@ function organizeMetadataSourceLabel(item: OrganizePreviewItem) {
 
   if (item.targetSource === "spotify") {
     return "Spotify metadata";
+  }
+
+  if (item.targetSource === "musicbrainz") {
+    return "MusicBrainz metadata";
   }
 
   if (item.status === "same" && item.sourceRelativePath === item.targetRelativePath) {

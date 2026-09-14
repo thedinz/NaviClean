@@ -16,6 +16,7 @@ export type PrivateSettings = {
   };
   catalog: {
     spotify: {
+      enabled?: boolean;
       clientId: string;
       clientSecret: string;
       market: string;
@@ -29,6 +30,14 @@ export type PrivateSettings = {
     discovery: {
       requestsPerMinute: number;
     };
+  };
+  identification?: {
+    acoustIdEnabled: boolean;
+    acoustIdApiKey: string;
+    useEmbeddedTagsAsHints: boolean;
+    usePathAsHints: boolean;
+    autoAcceptUniqueFingerprintMatches: boolean;
+    requireReviewBeforeFileChanges: boolean;
   };
   naming: {
     mode: NamingMode;
@@ -87,6 +96,7 @@ const defaultNaming = {
 };
 const defaultCatalog = {
   spotify: {
+    enabled: true,
     clientId: process.env.SPOTIFY_CLIENT_ID || "",
     clientSecret: process.env.SPOTIFY_CLIENT_SECRET || "",
     market: process.env.SPOTIFY_MARKET || "US"
@@ -100,6 +110,14 @@ const defaultCatalog = {
   discovery: {
     requestsPerMinute: 40
   }
+};
+const defaultIdentification = {
+  acoustIdEnabled: false,
+  acoustIdApiKey: process.env.ACOUSTID_API_KEY || "",
+  useEmbeddedTagsAsHints: true,
+  usePathAsHints: true,
+  autoAcceptUniqueFingerprintMatches: true,
+  requireReviewBeforeFileChanges: true
 };
 
 const dataDir = process.env.NAVICLEAN_DATA_DIR || path.resolve(process.cwd(), ".data");
@@ -147,12 +165,23 @@ export function toSettingsView(settings: PrivateSettings): SettingsView {
     },
     catalog: {
       spotify: {
+        enabled: settings.catalog.spotify.enabled !== false,
         clientId: settings.catalog.spotify.clientId,
         clientSecretSet: settings.catalog.spotify.clientSecret.length > 0,
         market: settings.catalog.spotify.market
       },
       providers: settings.catalog.providers,
       discovery: settings.catalog.discovery
+    },
+    identification: {
+      acoustIdEnabled: settings.identification?.acoustIdEnabled ?? defaultIdentification.acoustIdEnabled,
+      acoustIdApiKeySet: Boolean(settings.identification?.acoustIdApiKey),
+      useEmbeddedTagsAsHints: settings.identification?.useEmbeddedTagsAsHints ?? defaultIdentification.useEmbeddedTagsAsHints,
+      usePathAsHints: settings.identification?.usePathAsHints ?? defaultIdentification.usePathAsHints,
+      autoAcceptUniqueFingerprintMatches:
+        settings.identification?.autoAcceptUniqueFingerprintMatches ?? defaultIdentification.autoAcceptUniqueFingerprintMatches,
+      requireReviewBeforeFileChanges:
+        settings.identification?.requireReviewBeforeFileChanges ?? defaultIdentification.requireReviewBeforeFileChanges
     },
     naming: {
       mode: settings.naming.mode,
@@ -179,6 +208,7 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
       providers: { ...current.catalog.providers },
       discovery: { ...current.catalog.discovery }
     },
+    identification: { ...(current.identification ?? defaultIdentification) },
     naming: { ...current.naming },
     scan: { ...current.scan, extensions: [...current.scan.extensions] },
     cleanup: { ...current.cleanup, emptyFolderExclusions: [...current.cleanup.emptyFolderExclusions] }
@@ -209,6 +239,9 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
   }
 
   if (update.catalog?.spotify) {
+    if (typeof update.catalog.spotify.enabled === "boolean") {
+      next.catalog.spotify.enabled = update.catalog.spotify.enabled;
+    }
     if (typeof update.catalog.spotify.clientId === "string") {
       next.catalog.spotify.clientId = update.catalog.spotify.clientId.trim();
     }
@@ -218,6 +251,29 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
     if (typeof update.catalog.spotify.market === "string") {
       next.catalog.spotify.market = normalizeSpotifyMarket(update.catalog.spotify.market, next.catalog.spotify.market);
     }
+  }
+
+  if (update.identification) {
+    const identification = next.identification ?? { ...defaultIdentification };
+    if (typeof update.identification.acoustIdEnabled === "boolean") {
+      identification.acoustIdEnabled = update.identification.acoustIdEnabled;
+    }
+    if (typeof update.identification.acoustIdApiKey === "string" && update.identification.acoustIdApiKey.length > 0) {
+      identification.acoustIdApiKey = update.identification.acoustIdApiKey.trim();
+    }
+    if (typeof update.identification.useEmbeddedTagsAsHints === "boolean") {
+      identification.useEmbeddedTagsAsHints = update.identification.useEmbeddedTagsAsHints;
+    }
+    if (typeof update.identification.usePathAsHints === "boolean") {
+      identification.usePathAsHints = update.identification.usePathAsHints;
+    }
+    if (typeof update.identification.autoAcceptUniqueFingerprintMatches === "boolean") {
+      identification.autoAcceptUniqueFingerprintMatches = update.identification.autoAcceptUniqueFingerprintMatches;
+    }
+    if (typeof update.identification.requireReviewBeforeFileChanges === "boolean") {
+      identification.requireReviewBeforeFileChanges = update.identification.requireReviewBeforeFileChanges;
+    }
+    next.identification = identification;
   }
 
   if (update.catalog?.providers) {
@@ -274,6 +330,7 @@ async function createDefaultSettings(): Promise<PrivateSettings> {
       password: ""
     },
     catalog: defaultCatalog,
+    identification: defaultIdentification,
     naming: defaultNaming,
     scan: defaultScan,
     cleanup: defaultCleanup
@@ -292,6 +349,7 @@ export function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSet
       password: ""
     },
     catalog: defaultCatalog,
+    identification: defaultIdentification,
     naming: defaultNaming,
     scan: defaultScan,
     cleanup: defaultCleanup
@@ -309,6 +367,7 @@ export function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSet
       password: partial.navidrome?.password || fallback.navidrome.password
     },
     catalog: normalizeCatalogSettings(partial.catalog),
+    identification: normalizeIdentificationSettings(partial.identification),
     naming: normalizeNamingSettings(fallback.naming, partial.naming),
     scan: normalizeScanSettings(fallback.scan, partial.scan),
     cleanup: normalizeCleanupSettings(fallback.cleanup, partial.cleanup)
@@ -337,6 +396,7 @@ function normalizeCatalogSettings(
 
   return {
     spotify: {
+      enabled: typeof spotify.enabled === "boolean" ? spotify.enabled : defaultCatalog.spotify.enabled,
       clientId:
         typeof spotify.clientId === "string"
           ? spotify.clientId.trim()
@@ -377,6 +437,31 @@ function normalizeCatalogSettings(
         defaultCatalog.discovery.requestsPerMinute
       )
     }
+  };
+}
+
+function normalizeIdentificationSettings(
+  partial: Partial<NonNullable<PrivateSettings["identification"]>> | undefined
+): NonNullable<PrivateSettings["identification"]> {
+  return {
+    acoustIdEnabled:
+      typeof partial?.acoustIdEnabled === "boolean" ? partial.acoustIdEnabled : defaultIdentification.acoustIdEnabled,
+    acoustIdApiKey:
+      typeof partial?.acoustIdApiKey === "string" ? partial.acoustIdApiKey.trim() : defaultIdentification.acoustIdApiKey,
+    useEmbeddedTagsAsHints:
+      typeof partial?.useEmbeddedTagsAsHints === "boolean"
+        ? partial.useEmbeddedTagsAsHints
+        : defaultIdentification.useEmbeddedTagsAsHints,
+    usePathAsHints:
+      typeof partial?.usePathAsHints === "boolean" ? partial.usePathAsHints : defaultIdentification.usePathAsHints,
+    autoAcceptUniqueFingerprintMatches:
+      typeof partial?.autoAcceptUniqueFingerprintMatches === "boolean"
+        ? partial.autoAcceptUniqueFingerprintMatches
+        : defaultIdentification.autoAcceptUniqueFingerprintMatches,
+    requireReviewBeforeFileChanges:
+      typeof partial?.requireReviewBeforeFileChanges === "boolean"
+        ? partial.requireReviewBeforeFileChanges
+        : defaultIdentification.requireReviewBeforeFileChanges
   };
 }
 

@@ -9,6 +9,10 @@ export function trustPathMetadataForFolder(
   tracks: TrackFile[],
   localTrackId: string
 ) {
+  if (settings.identification && !settings.identification.usePathAsHints) {
+    throw new Error("Filename and folder hints are disabled in Settings.");
+  }
+
   const selected = tracks.find((track) => track.id === localTrackId);
 
   if (!selected) {

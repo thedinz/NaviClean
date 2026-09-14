@@ -12,9 +12,19 @@ export type NavidromeSettingsView = {
 };
 
 export type SpotifySettingsView = {
+  enabled: boolean;
   clientId: string;
   clientSecretSet: boolean;
   market: string;
+};
+
+export type IdentificationSettingsView = {
+  acoustIdEnabled: boolean;
+  acoustIdApiKeySet: boolean;
+  useEmbeddedTagsAsHints: boolean;
+  usePathAsHints: boolean;
+  autoAcceptUniqueFingerprintMatches: boolean;
+  requireReviewBeforeFileChanges: boolean;
 };
 
 export type ProviderSettingsView = {
@@ -254,6 +264,7 @@ export type SettingsView = {
   };
   navidrome: NavidromeSettingsView;
   catalog: CatalogSettingsView;
+  identification: IdentificationSettingsView;
   naming: NamingSettings;
   scan: ScanSettings;
   cleanup: CleanupSettings;
@@ -272,12 +283,21 @@ export type SettingsUpdate = {
   };
   catalog?: {
     spotify?: {
+      enabled?: boolean;
       clientId?: string;
       clientSecret?: string;
       market?: string;
     };
     providers?: Partial<ProviderSettingsView>;
     discovery?: Partial<DiscoverySettingsView>;
+  };
+  identification?: {
+    acoustIdEnabled?: boolean;
+    acoustIdApiKey?: string;
+    useEmbeddedTagsAsHints?: boolean;
+    usePathAsHints?: boolean;
+    autoAcceptUniqueFingerprintMatches?: boolean;
+    requireReviewBeforeFileChanges?: boolean;
   };
   naming?: Partial<NamingSettings>;
   scan?: Partial<ScanSettings>;
@@ -304,6 +324,7 @@ export type NavidromeMetadataDiagnosticCode =
   | "track-no-usable-path"
   | "path-outside-library-root"
   | "spotify-confirmed"
+  | "identity-confirmed"
   | "no-api-match"
   | "possible-stale-scan";
 
@@ -317,6 +338,50 @@ export type NavidromeMetadataEnrichment = {
 
 /** `spotifybu` is retained only for persisted/external data from before the TrackKeep rename. */
 export type TrackManager = "trackkeep" | "spotifybu";
+
+export type TrackIdentificationStatus =
+  | "trackkeep-confirmed"
+  | "user-confirmed"
+  | "fingerprint-and-release-confirmed"
+  | "recording-identified-release-ambiguous"
+  | "candidate-only"
+  | "unidentified";
+
+export type TrackMetadataSource = "trackkeep" | "spotify" | "musicbrainz" | "local-tags" | "local-path" | "unknown";
+
+export type TrackIdentificationCandidate = {
+  id: string;
+  score: number;
+  acoustId: string;
+  recordingId: string;
+  releaseId: string | null;
+  releaseGroupId: string | null;
+  artist: string;
+  albumArtist: string;
+  album: string;
+  albumType: string;
+  title: string;
+  trackNumber: number | null;
+  trackTotal: number | null;
+  discNumber: number | null;
+  discTotal: number | null;
+  year: number | null;
+  duration: number | null;
+  isrc: string | null;
+};
+
+export type TrackIdentification = {
+  status: TrackIdentificationStatus;
+  source: TrackMetadataSource;
+  message: string;
+  fingerprint?: string;
+  acoustId?: string;
+  recordingId?: string;
+  releaseId?: string;
+  spotifyTrackId?: string;
+  spotifyAlbumId?: string;
+  candidates?: TrackIdentificationCandidate[];
+};
 
 export type TrackFile = {
   id: string;
@@ -347,9 +412,10 @@ export type TrackFile = {
   qualityScore: number;
   targetPath: string;
   targetRelativePath: string;
-  targetSource?: "naviclean" | "navidrome" | "spotify";
-  metadataConfidence?: "embedded" | "path-suggestion" | "trusted-path" | "navidrome" | "spotify";
+  targetSource?: "naviclean" | "navidrome" | "spotify" | "musicbrainz";
+  metadataConfidence?: "embedded" | "path-suggestion" | "trusted-path" | "navidrome" | "spotify" | "musicbrainz";
   metadataSuggestion?: TrackMetadataSuggestion;
+  identification?: TrackIdentification;
   navidromeEnrichment?: NavidromeMetadataEnrichment;
   managedBy?: TrackManager;
   organizeSkippedAt?: string;
@@ -687,12 +753,13 @@ export type OrganizePlanItem = {
   targetPath: string;
   sourceRelativePath: string;
   targetRelativePath: string;
-  targetSource?: "naviclean" | "navidrome" | "spotify";
+  targetSource?: "naviclean" | "navidrome" | "spotify" | "musicbrainz";
   navidromeEnrichment?: NavidromeMetadataEnrichment;
   managedBy?: TrackManager;
   organizeSkippedAt?: string;
   metadataConfidence?: TrackFile["metadataConfidence"];
   metadataSuggestion?: TrackMetadataSuggestion;
+  identification?: TrackIdentification;
   artist: string;
   albumArtist: string;
   album: string;
@@ -708,6 +775,11 @@ export type OrganizeSpotifyMatchResult = {
   matchedTracks: number;
   updatedTrackIds: string[];
   selected: SpotifyMetadataMatch;
+  plan: OrganizePlan;
+};
+
+export type OrganizeIdentificationMatchResult = {
+  updatedTrackIds: string[];
   plan: OrganizePlan;
 };
 

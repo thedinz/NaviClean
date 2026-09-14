@@ -5,12 +5,13 @@ import path from "node:path";
 import type { NavidromeMetadataEnrichment, NavidromeMetadataMatchMethod, ScanStatus, TrackFile } from "../shared/types.js";
 import { loadCatalog, saveCatalog } from "./catalog.js";
 import { buildDuplicateKey } from "./matching.js";
+import { identifyTracks } from "./identification.js";
 import { loadMetadataOverrides, validMetadataOverride, type MetadataOverride } from "./metadata-overrides.js";
 import { fetchNavidromeLibraryTracks, searchNavidromeLibraryTrackCandidates, type NavidromeLibraryTrack } from "./navidrome.js";
 import { targetForTrack } from "./organizer.js";
 import { preserveOrganizationSkipDecisions } from "./organize-skip.js";
 import type { PrivateSettings } from "./settings.js";
-import { hasTrackKeepIdentityTags } from "./trackkeep.js";
+import { hasTrackKeepIdentityTags, readTrackKeepIdentity } from "./trackkeep.js";
 import {
   cleanDisplayValue,
   normalizeForMatch,
@@ -67,7 +68,9 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
     });
   }
 
-  const navidromeEnriched = await enrichTracksWithNavidromeMetadata(settings, tracks);
+  const identified = await identifyTracks(settings, tracks);
+  warnings.push(...identified.warnings);
+  const navidromeEnriched = await enrichTracksWithNavidromeMetadata(settings, identified.tracks);
 
   for (const warning of navidromeEnriched.warnings) {
     warnings.push(warning);
@@ -88,11 +91,11 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
         withNavidromeDiagnostic(track, {
           status: "skipped",
           code: "settings-missing",
-          message: "Navidrome metadata was not checked because the Navidrome URL, username, or password is missing."
+          message: "The Navidrome index was not checked because its URL, username, or password is missing."
         })
       ),
       warnings: tracks.length
-        ? [`Navidrome metadata: settings missing; skipped enrichment for ${tracks.length.toLocaleString()} files.`]
+        ? [`Navidrome index: settings missing; skipped comparison for ${tracks.length.toLocaleString()} files.`]
         : warnings
     };
   }
@@ -107,10 +110,10 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
         withNavidromeDiagnostic(track, {
           status: "skipped",
           code: "api-request-failed",
-          message: `Navidrome metadata was not checked because the API request failed: ${(error as Error).message}`
+          message: `The Navidrome index was not checked because the API request failed: ${(error as Error).message}`
         })
       ),
-      warnings: [`Navidrome metadata scan skipped: ${(error as Error).message}`]
+      warnings: [`Navidrome index comparison skipped: ${(error as Error).message}`]
     };
   }
 
@@ -120,10 +123,10 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
         withNavidromeDiagnostic(track, {
           status: "skipped",
           code: "zero-tracks",
-          message: "Navidrome returned zero tracks, so NaviClean used local file metadata and path inference."
+          message: "Navidrome returned zero indexed tracks; it was not used as a metadata authority."
         })
       ),
-      warnings: ["Navidrome metadata scan returned no tracks; local file metadata was used."]
+      warnings: ["Navidrome index comparison returned no tracks."]
     };
   }
 
@@ -154,7 +157,7 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
         try {
           return await findNavidromeSearchFallbackForFile(settings, track);
         } catch {
-          if (track.metadataConfidence !== "spotify") {
+          if (!hasConfirmedIdentity(track)) {
             searchFallbackFailures += 1;
           }
           return null;
@@ -166,13 +169,13 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
       const navidromeMatch = batchMatches[batchIndex];
 
       if (!navidromeMatch) {
-        if (track.metadataConfidence !== "spotify" && unmatchedExamples.length < 5) {
+        if (!hasConfirmedIdentity(track) && unmatchedExamples.length < 5) {
           unmatchedExamples.push(track.relativePath);
         }
         enrichedTracks[trackIndex] = withNavidromeDiagnostic(
           track,
-          track.metadataConfidence === "spotify"
-            ? spotifyConfirmedDiagnostic(navidromeTracks.length)
+          hasConfirmedIdentity(track)
+            ? confirmedIdentityDiagnostic(track, navidromeTracks.length)
             : unmatchedNavidromeDiagnostic(track, navidromeTracks.length)
         );
         return;
@@ -194,7 +197,7 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
   const spotifyConfirmedCount = unmatchedDiagnostics.filter((diagnostic) => diagnostic.code === "spotify-confirmed").length;
 
   warnings.push(
-    `Navidrome metadata: ${matched.toLocaleString()} matched / ${tracks.length.toLocaleString()} files (${navidromeTracks.length.toLocaleString()} indexed tracks).`
+    `Navidrome index: ${matched.toLocaleString()} matched / ${tracks.length.toLocaleString()} files (${navidromeTracks.length.toLocaleString()} indexed tracks).`
   );
 
   if (searchFallbackMatched > 0) {
@@ -441,7 +444,13 @@ function trackFileFromNavidromeTrack(
 ): TrackFile {
   const navidromeEnrichment = matchedNavidromeDiagnostic(matchMethod, indexedTrackCount);
 
-  if (track.metadataConfidence === "spotify" || track.metadataConfidence === "trusted-path") {
+  if (
+    settings.identification ||
+    track.metadataConfidence === "spotify" ||
+    track.metadataConfidence === "trusted-path" ||
+    track.identification?.status === "trackkeep-confirmed" ||
+    track.identification?.status === "user-confirmed"
+  ) {
     return withNavidromeDiagnostic(track, navidromeEnrichment);
   }
 
@@ -525,7 +534,7 @@ function matchedNavidromeDiagnostic(
   return {
     status: "matched",
     code: "matched",
-    message: `Matched Navidrome metadata by ${navidromeMatchMethodLabel(matchMethod)}.`,
+    message: `Matched the Navidrome index by ${navidromeMatchMethodLabel(matchMethod)}.`,
     matchMethod,
     indexedTrackCount
   };
@@ -545,6 +554,22 @@ function spotifyConfirmedDiagnostic(indexedTrackCount: number): NavidromeMetadat
     message: "Navidrome did not match this file, so NaviClean retained the user-confirmed Spotify metadata.",
     indexedTrackCount
   };
+}
+
+function confirmedIdentityDiagnostic(track: TrackFile, indexedTrackCount: number): NavidromeMetadataEnrichment {
+  if (track.metadataConfidence === "spotify") {
+    return spotifyConfirmedDiagnostic(indexedTrackCount);
+  }
+  return {
+    status: "skipped",
+    code: "identity-confirmed",
+    message: "Navidrome did not match this file; NaviClean retained its confirmed identity metadata.",
+    indexedTrackCount
+  };
+}
+
+function hasConfirmedIdentity(track: TrackFile) {
+  return track.identification?.status === "trackkeep-confirmed" || track.identification?.status === "user-confirmed";
 }
 
 function unmatchedNavidromeDiagnostic(track: TrackFile, indexedTrackCount: number): NavidromeMetadataEnrichment {
@@ -1087,6 +1112,10 @@ async function readTrack(
   const common = metadata?.common;
   const commonRecord = common as Record<string, unknown> | undefined;
   const format = metadata?.format;
+  const trackKeepIdentity = readTrackKeepIdentity({
+    common: metadata?.common as Record<string, unknown> | undefined,
+    native: metadata?.native
+  });
   const commonArtist = knownMetadataValue(common?.artist) || knownMetadataValue(common?.artists?.[0]);
   const commonAlbumArtist = knownMetadataValue(common?.albumartist);
   const commonAlbum = knownMetadataValue(common?.album);
@@ -1097,7 +1126,7 @@ async function readTrack(
   const hasPlaceholderIdentityTag = [common?.artist, common?.artists?.[0], common?.albumartist, common?.album].some(
     isUnknownMetadataValue
   );
-  const structuredPathIdentityReason = structuredPathIdentityReasonForTags(inferred, {
+  const structuredPathIdentityReason = trackKeepIdentity ? null : structuredPathIdentityReasonForTags(inferred, {
     album: commonAlbum,
     albumArtist: commonAlbumArtist || commonArtist,
     artist: commonArtist,
@@ -1169,10 +1198,7 @@ async function readTrack(
   const codec = cleanNullable(format?.codec);
   const container = cleanNullable(format?.container);
   const lossless = Boolean(format?.lossless || [".flac", ".alac", ".wav", ".aiff", ".aif"].includes(extension));
-  const managedBy = hasTrackKeepIdentityTags({
-    common: metadata?.common as Record<string, unknown> | undefined,
-    native: metadata?.native
-  }) ? "trackkeep" : undefined;
+  const managedBy = trackKeepIdentity ? "trackkeep" : undefined;
 
   if (artist === "Unknown Artist") {
     issues.push("Missing artist");
@@ -1236,6 +1262,21 @@ async function readTrack(
           year: inferred.year ?? null
         }
       : undefined,
+    identification: trackKeepIdentity
+      ? {
+          status: "trackkeep-confirmed" as const,
+          source: "trackkeep" as const,
+          message: "TrackKeep identity tags are authoritative.",
+          spotifyTrackId: trackKeepIdentity.trackId ?? undefined,
+          spotifyAlbumId: trackKeepIdentity.albumId ?? undefined
+        }
+      : metadataOverride
+        ? {
+            status: "user-confirmed" as const,
+            source: metadataOverride.source === "spotify" ? "spotify" as const : "local-path" as const,
+            message: "Restored metadata previously confirmed by the user."
+          }
+        : undefined,
     managedBy,
     issues
   } satisfies TrackFile;
