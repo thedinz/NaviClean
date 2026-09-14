@@ -1,4 +1,6 @@
 FROM node:24-bookworm-slim AS build
+ARG VITE_APP_BRANCH=unknown
+ENV VITE_APP_BRANCH=$VITE_APP_BRANCH
 WORKDIR /app
 
 COPY package*.json ./
