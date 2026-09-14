@@ -109,12 +109,38 @@ button:disabled {
   position: sticky;
   top: 0;
   height: 100vh;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 20px;
   padding: 22px 16px;
   background: #17211f;
   color: #f7f2e8;
+}
+
+@media (max-height: 780px) and (min-width: 641px) {
+  .sidebar {
+    gap: 8px;
+    padding-block: 8px;
+  }
+
+  .brand-mark {
+    width: 34px;
+    height: 34px;
+  }
+
+  .nav-list,
+  .sidebar-actions {
+    gap: 1px;
+  }
+
+  .nav-list button {
+    min-height: 31px;
+  }
+
+  .ghost-button {
+    min-height: 32px;
+  }
 }
 
 .mobile-nav-toggle,

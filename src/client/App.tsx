@@ -507,12 +507,6 @@ function Shell({
           </div>
           <div className="topbar-actions">
             {notice && <span className="notice">{notice}</span>}
-            {page === "dashboard" && (
-              <button className="primary-button" type="button" onClick={startScan} disabled={scanBusy || scan?.running} title="Scan NaviClean catalog">
-                {scanBusy || scan?.running ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
-                <span>{scanBusy || scan?.running ? "Scanning" : "Scan library"}</span>
-              </button>
-            )}
           </div>
         </header>
 
@@ -713,10 +707,7 @@ function Dashboard({
               <ChevronRight size={18} />
             </button>
           ) : (
-            <button className="primary-button workflow-action" type="button" onClick={onScan} disabled={scanBusy || scanRunning}>
-              {scanBusy || scanRunning ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
-              <span>{scanBusy || scanRunning ? "Scanning" : "Scan library"}</span>
-            </button>
+            <p className="supporting-note workflow-action">Run the NaviClean library scan under Index & scans to begin.</p>
           )}
         </article>
 
@@ -727,13 +718,13 @@ function Dashboard({
           </div>
           <div className="scan-summary-row">
             <div className="scan-summary-copy">
-              <strong>NaviClean catalog</strong>
-              <span>{scanRunning ? "Scanning library" : `${(scan?.audioFiles ?? stats?.totalTracks ?? 0).toLocaleString()} audio files · ${(scan?.scannedFiles ?? stats?.totalTracks ?? 0).toLocaleString()} scanned`}</span>
+              <strong>NaviClean library scan</strong>
+              <span>{scanRunning ? "Reading tags and fingerprints" : `${(scan?.audioFiles ?? stats?.totalTracks ?? 0).toLocaleString()} files cataloged from the mounted library`}</span>
             </div>
             <StatusPill active={scanRunning} label={scanRunning ? "Running" : "Ready"} />
             <button className="secondary-button compact-button" type="button" onClick={onScan} disabled={scanBusy || scanRunning}>
               {scanBusy || scanRunning ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-              <span>Scan</span>
+              <span>Run scan</span>
             </button>
           </div>
           <div className="scan-summary-row">
@@ -750,11 +741,11 @@ function Dashboard({
               <div className="compact-action-row">
                 <button className="secondary-button compact-button" type="button" onClick={() => onNavidromeScan(false)} disabled={navidromeControlsDisabled}>
                   {navidromeScanBusy === "quick" ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-                  <span>Quick</span>
+                  <span>Quick scan</span>
                 </button>
                 <button className="secondary-button compact-button" type="button" onClick={() => onNavidromeScan(true)} disabled={navidromeControlsDisabled}>
                   {navidromeScanBusy === "full" ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
-                  <span>Full</span>
+                  <span>Full scan</span>
                 </button>
               </div>
             ) : (
