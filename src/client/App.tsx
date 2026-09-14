@@ -22,6 +22,7 @@ import {
   Loader2,
   LockKeyhole,
   LogOut,
+  Menu,
   Moon,
   Music2,
   Play,
@@ -34,7 +35,8 @@ import {
   Sun,
   Trash2,
   Undo2,
-  UserRound
+  UserRound,
+  X
 } from "lucide-react";
 import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -178,7 +180,7 @@ const navItems: NavItem[] = [
 
 const organizePreviewFilters: Array<{ id: OrganizePreviewFilter; label: string }> = [
   { id: "attention", label: "Needs action" },
-  { id: "metadata-review", label: "Metadata review" },
+  { id: "metadata-review", label: "Identity review" },
   { id: "navidrome-unmatched", label: "Navidrome unmatched" },
   { id: "skipped", label: "Skipped" },
   { id: "ready", label: "Ready" },
@@ -280,6 +282,7 @@ function Shell({
   const [scanBusy, setScanBusy] = useState(false);
   const [navidromeScanBusy, setNavidromeScanBusy] = useState<"quick" | "full" | null>(null);
   const [signOutBusy, setSignOutBusy] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const loadScanStatus = async () => {
     const nextScan = await api<ScanStatus>("/scan/status");
@@ -431,16 +434,26 @@ function Shell({
 
   const active = visibleNavItems.find((item) => item.id === page) || visibleNavItems[0];
   const ThemeIcon = theme === "dark" ? Sun : Moon;
+  const navigate = (nextPage: Page) => {
+    setPage(nextPage);
+    setMobileNavOpen(false);
+  };
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      {mobileNavOpen && (
+        <button className="sidebar-backdrop" type="button" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />
+      )}
+      <aside className={`sidebar ${mobileNavOpen ? "open" : ""}`}>
         <div className="brand">
           <div className="brand-mark">NC</div>
           <div>
             <strong>NaviClean</strong>
             <span>{auth.authEnabled ? auth.username : "Auth off"}</span>
           </div>
+          <button className="mobile-nav-close" type="button" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)}>
+            <X size={20} />
+          </button>
         </div>
 
         <nav className="nav-list">
@@ -451,7 +464,7 @@ function Shell({
                 key={item.id}
                 className={page === item.id ? "active" : ""}
                 type="button"
-                onClick={() => setPage(item.id)}
+                onClick={() => navigate(item.id)}
                 title={item.label}
               >
                 <Icon size={18} />
@@ -481,29 +494,27 @@ function Shell({
 
       <main className="main-panel">
         <header className="topbar">
-          <div>
-            <span className="eyebrow">{active.label}</span>
-            <h1>{active.label === "Dashboard" ? "Library Console" : active.label}</h1>
+          <button className="mobile-nav-toggle" type="button" aria-label="Open navigation" onClick={() => setMobileNavOpen(true)}>
+            <Menu size={20} />
+          </button>
+          <div className="topbar-title">
+            <h1>{page === "dashboard" ? "Library overview" : active.label}</h1>
+            {page === "dashboard" && (
+              <span className="topbar-subtitle">
+                {stats?.lastScanFinishedAt ? `Updated ${formatDate(stats.lastScanFinishedAt)}` : "Ready for your first library scan"}
+              </span>
+            )}
           </div>
           <div className="topbar-actions">
             {notice && <span className="notice">{notice}</span>}
-            <button className="primary-button" type="button" onClick={startScan} disabled={scanBusy || scan?.running} title="Scan NaviClean catalog">
-              {scanBusy || scan?.running ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
-              <span>{scanBusy || scan?.running ? "Scanning" : "NaviClean scan"}</span>
-            </button>
+            {page === "dashboard" && (
+              <button className="primary-button" type="button" onClick={startScan} disabled={scanBusy || scan?.running} title="Scan NaviClean catalog">
+                {scanBusy || scan?.running ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+                <span>{scanBusy || scan?.running ? "Scanning" : "Scan library"}</span>
+              </button>
+            )}
           </div>
         </header>
-
-        <div className="notice-bar safety app-risk-banner" role="note">
-          <CircleAlert size={18} aria-hidden="true" />
-          <div>
-            <strong>Whole-library caution</strong>
-            <span>
-              NaviClean sorting is improving on a near daily basis. Review previews and backups before applying changes
-              across an entire library; use whole-library cleanup at your own risk.
-            </span>
-          </div>
-        </div>
 
         {page === "dashboard" && (
           <Dashboard
@@ -515,16 +526,17 @@ function Shell({
             navidromeScanBusy={navidromeScanBusy}
             onScan={startScan}
             onNavidromeScan={startNavidromeScanAction}
+            onNavigate={navigate}
           />
         )}
         {page === "instructions" && <InstructionsPage />}
         {page === "library" && <LibraryPage onChanged={refreshStats} />}
-        {page === "empty-folders" && <EmptyFoldersPage />}
-        {page === "non-music" && <NonMusicFilesPage />}
+        {page === "empty-folders" && <EmptyFoldersPage onOpenSettings={() => navigate("settings")} />}
+        {page === "non-music" && <NonMusicFilesPage onOpenSettings={() => navigate("settings")} />}
         {auth.advancedDiagnosticsEnabled && page === "unindexed" && (
           <UnindexedPage lastScanFinishedAt={stats?.lastScanFinishedAt ?? null} onChanged={refreshStats} />
         )}
-        {page === "discover" && <DiscoverPage />}
+        {page === "discover" && <DiscoverPage onOpenSettings={() => navigate("settings")} />}
         {page === "duplicates" && (
           <DuplicatesPage stats={stats} onChanged={refreshStats} onOpenOrganize={() => setPage("organize")} />
         )}
@@ -604,7 +616,8 @@ function Dashboard({
   navidromeScan,
   navidromeScanBusy,
   onScan,
-  onNavidromeScan
+  onNavidromeScan,
+  onNavigate
 }: {
   stats: LibraryStats | null;
   statsLoading: boolean;
@@ -614,12 +627,13 @@ function Dashboard({
   navidromeScanBusy: "quick" | "full" | null;
   onScan: () => Promise<void>;
   onNavidromeScan: (fullScan: boolean) => Promise<void>;
+  onNavigate: (page: Page) => void;
 }) {
   const metrics = [
-    { label: "Tracks", value: stats?.totalTracks ?? null, tone: "teal" },
-    { label: "Duplicate groups", value: stats?.duplicateGroups ?? null, tone: "rose" },
-    { label: "Pending moves", value: stats?.pendingMoves ?? null, tone: "amber" },
-    { label: "Metadata flags", value: stats?.missingMetadata ?? null, tone: "ink" }
+    { label: "Tracks", value: stats?.totalTracks ?? null },
+    { label: "Duplicate groups", value: stats?.duplicateGroups ?? null },
+    { label: "Pending moves", value: stats?.pendingMoves ?? null },
+    { label: "Needs review", value: stats?.missingMetadata ?? null }
   ];
   const scanRunning = Boolean(scan?.running);
   const scanRequired = Boolean(stats && !stats.workflow.scanned && !scanRunning);
@@ -636,12 +650,18 @@ function Dashboard({
     : navidromeRunning
     ? "Running"
     : "Idle";
+  const workflowStage = stats?.workflow.stage ?? "scan";
+  const nextAction = workflowStage === "duplicates"
+    ? { label: "Review duplicates", page: "duplicates" as Page }
+    : workflowStage === "organize"
+    ? { label: "Review organization", page: "organize" as Page }
+    : null;
 
   return (
-    <section className="content-grid">
+    <section className="content-grid dashboard-page">
       <div className="metric-grid">
         {metrics.map((metric) => (
-          <article className={`metric-card ${metric.tone}`} key={metric.label}>
+          <article className={`metric-card ${(metric.value ?? 0) > 0 && metric.label !== "Tracks" ? "needs-attention" : ""}`} key={metric.label}>
             <span>{metric.label}</span>
             {metricMode === "loading" ? (
               <strong className="metric-loading">
@@ -661,9 +681,7 @@ function Dashboard({
           </article>
         ))}
       </div>
-      {statsPending && (
-        <ActionProgress label="Loading library totals, duplicate groups, pending moves, and metadata flags" />
-      )}
+      {statsPending && <ActionProgress label="Loading library totals and cleanup status" />}
       {scanRequired && (
         <div className="notice-bar safety fresh-scan-banner" role="status">
           <strong>Fresh scan needed</strong>
@@ -675,101 +693,89 @@ function Dashboard({
         </div>
       )}
 
-      <article className="panel wide">
-        <div className="panel-title">
-          <Activity size={18} />
-          <h2>Scan Status</h2>
-        </div>
-        <div className="status-row">
-          <StatusPill active={Boolean(scan?.running)} label={scan?.running ? "Running" : "Idle"} />
-          <span>{scan?.audioFiles.toLocaleString() || 0} audio files</span>
-          <span>{scan?.scannedFiles.toLocaleString() || 0} scanned files</span>
-          <span>{stats?.lastScanFinishedAt ? formatDate(stats.lastScanFinishedAt) : "No completed scan"}</span>
-        </div>
-        {scan?.running && <ActionProgress label="Scanning library" />}
-        {scan?.warnings.length ? (
-          <div className="notice-bar safety">
-            <strong>Scan notes</strong>
-            {scan.warnings.slice(0, 5).map((item) => (
-              <span key={item}>{item}</span>
-            ))}
-            {scan.warnings.length > 5 && <span>{scan.warnings.length - 5} more notes</span>}
+      <div className="dashboard-main-grid">
+        <article className="panel cleanup-workflow-card">
+          <div className="panel-title">
+            <ListChecks size={18} />
+            <h2>Cleanup workflow</h2>
           </div>
-        ) : null}
-        {scan?.errors.length ? (
-          <div className="error-list">
-            {scan.errors.slice(0, 5).map((item) => (
-              <span key={item}>{item}</span>
-            ))}
+          <div className="workflow-steps">
+            <StagePill label="1 Scan" active={workflowStage === "scan"} complete={Boolean(stats?.workflow.scanned)} />
+            <span aria-hidden="true">→</span>
+            <StagePill label="2 Organize" active={workflowStage === "organize"} complete={workflowStage === "duplicates"} />
+            <span aria-hidden="true">→</span>
+            <StagePill label="3 Duplicates" active={workflowStage === "duplicates"} complete={false} />
           </div>
-        ) : null}
-      </article>
-
-      <article className="panel wide">
-        <div className="panel-title">
-          <Database size={18} />
-          <h2>Navidrome Scan</h2>
-        </div>
-        <div className="scan-control-row">
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => onNavidromeScan(false)}
-            disabled={navidromeControlsDisabled}
-            title="Start a quick Navidrome scan"
-          >
-            {navidromeScanBusy === "quick" ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
-            <span>{navidromeScanBusy === "quick" ? "Starting" : "Quick scan"}</span>
-          </button>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => onNavidromeScan(true)}
-            disabled={navidromeControlsDisabled}
-            title="Start a full Navidrome scan"
-          >
-            {navidromeScanBusy === "full" ? <Loader2 className="spin" size={18} /> : <Search size={18} />}
-            <span>{navidromeScanBusy === "full" ? "Starting" : "Full scan"}</span>
-          </button>
-        </div>
-        <div className="status-row">
-          <StatusPill active={navidromeRunning} label={navidromeStatusLabel} />
-          <span>{navidromeScanTypeLabel(navidromeScan?.scanType)}</span>
-          <span>{(navidromeScan?.folderCount ?? 0).toLocaleString()} folders</span>
-          <span>{(navidromeScan?.count ?? 0).toLocaleString()} files</span>
-          <span>{navidromeScan?.lastScan ? formatScanDate(navidromeScan.lastScan) : "No completed scan"}</span>
-          {typeof navidromeScan?.elapsedSeconds === "number" && (
-            <span>{formatDuration(navidromeScan.elapsedSeconds)} elapsed</span>
+          <p className="stage-message">{stats?.workflow.message || "Scan the library to start cleanup."}</p>
+          {nextAction ? (
+            <button className="primary-button workflow-action" type="button" onClick={() => onNavigate(nextAction.page)}>
+              <span>{nextAction.label}</span>
+              <ChevronRight size={18} />
+            </button>
+          ) : (
+            <button className="primary-button workflow-action" type="button" onClick={onScan} disabled={scanBusy || scanRunning}>
+              {scanBusy || scanRunning ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+              <span>{scanBusy || scanRunning ? "Scanning" : "Scan library"}</span>
+            </button>
           )}
-        </div>
-        {navidromeRunning && (
-          <ActionProgress label={`${navidromeScanActionLabel(navidromeScan?.scanType)} running in Navidrome`} />
-        )}
-        {!navidromeStatusLoading && !navidromeConfigured && (
-          <div className="notice-bar safety">
-            <strong>Navidrome connection needed</strong>
-            <span>Add Navidrome URL, username, and password in Settings to trigger scans from NaviClean.</span>
-          </div>
-        )}
-        {navidromeScan?.error ? (
-          <div className="error-list">
-            <span>{navidromeScan.error}</span>
-          </div>
-        ) : null}
-      </article>
+        </article>
 
-      <article className="panel wide">
-        <div className="panel-title">
-          <ListChecks size={18} />
-          <h2>Cleanup Stages</h2>
-        </div>
-        <div className="stage-row">
-          <StagePill label="1 Scan" active={stats?.workflow.stage === "scan"} complete={Boolean(stats?.workflow.scanned)} />
-          <StagePill label="2 Organize" active={stats?.workflow.stage === "organize"} complete={Boolean(stats?.workflow.duplicateScanReady)} />
-          <StagePill label="3 Duplicates" active={stats?.workflow.stage === "duplicates"} complete={Boolean(stats?.workflow.duplicateScanReady)} />
-        </div>
-        <p className="stage-message">{stats?.workflow.message || "Scan the library to start cleanup."}</p>
-      </article>
+        <article className="panel index-scan-card">
+          <div className="panel-title">
+            <Activity size={18} />
+            <h2>Index & scans</h2>
+          </div>
+          <div className="scan-summary-row">
+            <div className="scan-summary-copy">
+              <strong>NaviClean catalog</strong>
+              <span>{scanRunning ? "Scanning library" : `${(scan?.audioFiles ?? stats?.totalTracks ?? 0).toLocaleString()} audio files · ${(scan?.scannedFiles ?? stats?.totalTracks ?? 0).toLocaleString()} scanned`}</span>
+            </div>
+            <StatusPill active={scanRunning} label={scanRunning ? "Running" : "Ready"} />
+            <button className="secondary-button compact-button" type="button" onClick={onScan} disabled={scanBusy || scanRunning}>
+              {scanBusy || scanRunning ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+              <span>Scan</span>
+            </button>
+          </div>
+          <div className="scan-summary-row">
+            <div className="scan-summary-copy">
+              <strong>Navidrome index</strong>
+              <span>
+                {navidromeConfigured
+                  ? `${(navidromeScan?.count ?? 0).toLocaleString()} files · ${navidromeScan?.lastScan ? formatScanDate(navidromeScan.lastScan) : "not scanned"}`
+                  : "Connection not configured"}
+              </span>
+            </div>
+            <StatusPill active={navidromeRunning} label={navidromeStatusLabel} />
+            {navidromeConfigured ? (
+              <div className="compact-action-row">
+                <button className="secondary-button compact-button" type="button" onClick={() => onNavidromeScan(false)} disabled={navidromeControlsDisabled}>
+                  {navidromeScanBusy === "quick" ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+                  <span>Quick</span>
+                </button>
+                <button className="secondary-button compact-button" type="button" onClick={() => onNavidromeScan(true)} disabled={navidromeControlsDisabled}>
+                  {navidromeScanBusy === "full" ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
+                  <span>Full</span>
+                </button>
+              </div>
+            ) : (
+              <button className="secondary-button compact-button" type="button" onClick={() => onNavigate("settings")}>
+                <Settings size={16} />
+                <span>Settings</span>
+              </button>
+            )}
+          </div>
+          {scanRunning && <ActionProgress label="Scanning library" />}
+          {navidromeRunning && <ActionProgress label={`${navidromeScanActionLabel(navidromeScan?.scanType)} running in Navidrome`} />}
+          {scan?.warnings.length ? <p className="supporting-note">{scan.warnings.length} scan note{scan.warnings.length === 1 ? "" : "s"} available.</p> : null}
+          {scan?.errors.length ? <div className="error-list">{scan.errors.slice(0, 3).map((item) => <span key={item}>{item}</span>)}</div> : null}
+          {navidromeScan?.error ? <div className="error-list"><span>{navidromeScan.error}</span></div> : null}
+        </article>
+      </div>
+
+      <div className="dashboard-safety-reminder" role="note">
+        <Shield size={16} aria-hidden="true" />
+        <span>Preview organization and duplicate changes before applying them. Keep a current backup of your library.</span>
+      </div>
     </section>
   );
 }
@@ -786,7 +792,7 @@ function InstructionsPage() {
     },
     {
       title: "NaviClean Scan",
-      body: "Reads the mounted library into NaviClean's catalog and enriches matches from Navidrome. Run it after the Navidrome scan finishes so organize, diagnostics, and duplicate cleanup use the newest library state."
+      body: "Reads embedded tags and audio fingerprints from the mounted library into NaviClean's catalog, then compares paths with Navidrome when available. Run it after the Navidrome scan finishes so organize, diagnostics, and duplicate cleanup use the newest library state."
     }
   ];
   const workflow = [
@@ -1133,7 +1139,7 @@ function LibraryPage({ onChanged }: { onChanged: () => Promise<void> }) {
   );
 }
 
-function EmptyFoldersPage() {
+function EmptyFoldersPage({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [preview, setPreview] = useState<EmptyFolderPreview | null>(null);
   const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState<"load" | "delete" | "exclude" | null>(null);
@@ -1143,6 +1149,8 @@ function EmptyFoldersPage() {
   const folders = preview?.folders || [];
   const selectedFolders = folders.filter((folder) => selectedIds[folder.id]);
   const allSelected = folders.length > 0 && selectedFolders.length === folders.length;
+  const blockingErrors = [...(error ? [error] : []), ...errors];
+  const hasBlockingError = !busy && folders.length === 0 && blockingErrors.length > 0;
 
   const applyPreview = (next: EmptyFolderPreview) => {
     setPreview(next);
@@ -1245,24 +1253,23 @@ function EmptyFoldersPage() {
   return (
     <section className="panel empty-folder-page">
       <div className="toolbar">
-        <div className="summary-chips">
-          <span>{preview?.total || 0} empty {pluralize("folder", preview?.total || 0)}</span>
-          <span>{selectedFolders.length} selected</span>
-        </div>
+        {hasBlockingError ? <span className="muted">Empty folder cleanup</span> : (
+          <div className="summary-chips">
+            <span>{preview?.total || 0} empty {pluralize("folder", preview?.total || 0)}</span>
+            {selectedFolders.length > 0 && <span>{selectedFolders.length} selected</span>}
+          </div>
+        )}
         <div className="button-row">
           <button className="secondary-button" type="button" onClick={() => load()} disabled={Boolean(busy)}>
             {busy === "load" ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
             <span>{busy === "load" ? "Finding" : "Refresh"}</span>
           </button>
-          <button
-            className="danger-button"
-            type="button"
-            onClick={deleteSelected}
-            disabled={Boolean(busy) || selectedFolders.length === 0}
-          >
-            {busy === "delete" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
-            <span>{busy === "delete" ? "Moving" : "Move selected to trash"}</span>
-          </button>
+          {selectedFolders.length > 0 && (
+            <button className="danger-button" type="button" onClick={deleteSelected} disabled={Boolean(busy)}>
+              {busy === "delete" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+              <span>{busy === "delete" ? "Moving" : `Move ${selectedFolders.length} to trash`}</span>
+            </button>
+          )}
         </div>
       </div>
       {busy && (
@@ -1277,8 +1284,8 @@ function EmptyFoldersPage() {
         />
       )}
       {notice && <div className="notice-bar">{notice}</div>}
-      {error && <p className="form-error">{error}</p>}
-      {errors.length > 0 && (
+      {!hasBlockingError && error && <p className="form-error">{error}</p>}
+      {!hasBlockingError && errors.length > 0 && (
         <div className="error-list">
           {errors.slice(0, 8).map((item) => (
             <span key={item}>{item}</span>
@@ -1286,7 +1293,9 @@ function EmptyFoldersPage() {
           {errors.length > 8 && <span>{errors.length - 8} more errors</span>}
         </div>
       )}
-      {preview ? (
+      {hasBlockingError ? (
+        <LibraryAccessError messages={blockingErrors} onOpenSettings={onOpenSettings} />
+      ) : preview ? (
         <EmptyFoldersPanel
           allSelected={allSelected}
           preview={preview}
@@ -1591,28 +1600,25 @@ function UnindexedPage({
             {busy === "load" ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
             <span>{busy === "load" ? "Refreshing" : "Refresh"}</span>
           </button>
-          <button
-            className="danger-button"
-            type="button"
-            onClick={trashSelected}
-            disabled={Boolean(busy) || selectedTracks.length === 0}
-          >
-            {busy === "trash" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
-            <span>{busy === "trash" ? "Moving" : "Move selected to trash"}</span>
-          </button>
+          {selectedTracks.length > 0 && (
+            <button className="danger-button" type="button" onClick={trashSelected} disabled={Boolean(busy)}>
+              {busy === "trash" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+              <span>{busy === "trash" ? "Moving" : `Move ${selectedTracks.length} to trash`}</span>
+            </button>
+          )}
         </div>
       </div>
-      <div className="notice-bar diagnostics-feedback" role="note">
-        <CircleAlert size={18} aria-hidden="true" />
-        <span>
-          Match issue? Please report it on GitHub with the file path, reason, and Navidrome search details so NaviClean can fix the matcher.
-        </span>
-        <a href={navicleanIssuesUrl} target="_blank" rel="noreferrer">
-          <span>Open issue</span>
-          <ExternalLink size={15} aria-hidden="true" />
-        </a>
-      </div>
-      <div className="organize-preview-tools">
+      {(view?.total ?? 0) > 0 && <div className="notice-bar diagnostics-feedback" role="note">
+          <CircleAlert size={18} aria-hidden="true" />
+          <span>
+            Found a bad match? Report it with the file path, reason, and Navidrome search details.
+          </span>
+          <a href={navicleanIssuesUrl} target="_blank" rel="noreferrer">
+            <span>Open issue</span>
+            <ExternalLink size={15} aria-hidden="true" />
+          </a>
+        </div>}
+      {(view?.total ?? 0) > 0 && <div className="organize-preview-tools">
         <div className="segmented-control organize-filter" role="radiogroup" aria-label="Unindexed reason">
           {unindexedFilters.map((candidate) => (
             <button
@@ -1633,7 +1639,7 @@ function UnindexedPage({
             <Search size={17} />
             <input value={search} onChange={(event) => updateSearch(event.target.value)} placeholder="Search unindexed files" />
           </label>
-          <div className="pagination-controls" aria-label="Unindexed pages">
+          {pageCount > 1 && <div className="pagination-controls" aria-label="Unindexed pages">
             <button
               className="icon-button"
               type="button"
@@ -1671,9 +1677,9 @@ function UnindexedPage({
             >
               <ChevronsRight size={18} />
             </button>
-          </div>
+          </div>}
         </div>
-      </div>
+      </div>}
       {busy && <ActionProgress label={busy === "trash" ? "Moving unindexed files to trash" : "Loading unindexed files"} />}
       {notice && <div className="notice-bar">{notice}</div>}
       {error && <p className="form-error">{error}</p>}
@@ -1905,7 +1911,7 @@ function UnindexedCandidatePanel({ candidate }: { candidate: UnindexedNavidromeC
   );
 }
 
-function NonMusicFilesPage() {
+function NonMusicFilesPage({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [view, setView] = useState<NonMusicFilesView | null>(null);
   const [selectedGroupKeys, setSelectedGroupKeys] = useState<Record<string, boolean>>({});
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Record<string, boolean>>({});
@@ -1921,6 +1927,8 @@ function NonMusicFilesPage() {
   const selectedFileCount = selectedGroups.reduce((total, group) => total + group.count, 0);
   const selectedBytes = selectedGroups.reduce((total, group) => total + group.totalSize, 0);
   const allSelected = groups.length > 0 && selectedGroups.length === groups.length;
+  const hasBlockingError = !loading && groups.length === 0 && (errors.length > 0 || (!view && Boolean(notice)));
+  const blockingErrors = errors.length > 0 ? errors : notice ? [notice] : [];
 
   const applyView = (next: NonMusicFilesView) => {
     setView(next);
@@ -2080,31 +2088,30 @@ function NonMusicFilesPage() {
   return (
     <section className="panel non-music-page">
       <div className="toolbar">
-        <div className="summary-chips">
-          <span>{(view?.nonMusicFiles || 0).toLocaleString()} non-music files</span>
-          <span>{(view?.audioFiles || 0).toLocaleString()} audio files</span>
-          <span>{formatBytes(view?.totalSize || 0)}</span>
-          <span>{selectedGroups.length} selected</span>
-        </div>
+        {hasBlockingError ? <span className="muted">Non-music inventory</span> : <>
+          <div className="summary-chips">
+            <span>{(view?.nonMusicFiles || 0).toLocaleString()} non-music files</span>
+            <span>{formatBytes(view?.totalSize || 0)}</span>
+            {selectedGroups.length > 0 && <span>{selectedGroups.length} selected</span>}
+          </div>
+          <span className="muted">Compared with {(view?.audioFiles || 0).toLocaleString()} indexed audio files</span>
+        </>}
         <div className="button-row">
           <button className="secondary-button" type="button" onClick={() => load()} disabled={loading || Boolean(busy)}>
             {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
             <span>{loading ? "Loading" : "Refresh"}</span>
           </button>
-          <button
-            className="danger-button"
-            type="button"
-            onClick={trashSelected}
-            disabled={loading || Boolean(busy) || selectedGroups.length === 0}
-          >
-            {busy === "trash" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
-            <span>{busy === "trash" ? "Moving" : "Move selected to trash"}</span>
-          </button>
+          {selectedGroups.length > 0 && (
+            <button className="danger-button" type="button" onClick={trashSelected} disabled={loading || Boolean(busy)}>
+              {busy === "trash" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+              <span>{busy === "trash" ? "Moving" : `Move ${selectedFileCount.toLocaleString()} to trash`}</span>
+            </button>
+          )}
         </div>
       </div>
       {(loading || busy) && <ActionProgress label={busy ? "Moving non-music files to trash" : "Scanning non-music files"} />}
-      {notice && <div className="notice-bar">{notice}</div>}
-      {errors.length ? (
+      {!hasBlockingError && notice && <div className="notice-bar">{notice}</div>}
+      {!hasBlockingError && errors.length ? (
         <div className="error-list">
           {errors.slice(0, 8).map((item) => (
             <span key={item}>{item}</span>
@@ -2112,7 +2119,9 @@ function NonMusicFilesPage() {
           {errors.length > 8 && <span>{errors.length - 8} more errors</span>}
         </div>
       ) : null}
-      {!loading && groups.length === 0 ? (
+      {hasBlockingError ? (
+        <LibraryAccessError messages={blockingErrors} onOpenSettings={onOpenSettings} />
+      ) : !loading && groups.length === 0 ? (
         <EmptyState icon={FileQuestion} title="No non-music files" />
       ) : groups.length > 0 ? (
         <div className="table-wrap">
@@ -3160,48 +3169,33 @@ function DuplicatesPage({
 
   if (!workflow?.duplicateScanReady && workflowRefreshing) {
     return (
-      <section className="stack">
+      <section className="panel workflow-gate">
         <ActionProgress label="Checking organization status" />
-        <EmptyState
-          icon={RefreshCw}
-          title="Checking duplicate readiness"
-          description="NaviClean is refreshing the organization preview before deciding whether duplicate cleanup is available."
-        />
+        <span className="muted">Refreshing the workflow before duplicate cleanup is opened.</span>
       </section>
     );
   }
 
   if (!workflow?.duplicateScanReady) {
     return (
-      <section className="stack">
-        <div className="notice-bar safety">
-          <strong>{duplicateGateNoticeTitle(workflow)}</strong>
-          <span>{workflow?.message || "Scan and review organization before duplicate cleanup."}</span>
-          {blockerSummary && <span>{blockerSummary}</span>}
-        </div>
+      <section className="panel setup-state workflow-gate">
+        {duplicateGateIcon === Database ? <Database size={28} /> : <LockKeyhole size={28} />}
+        <strong>{duplicateGateEmptyTitle(workflow)}</strong>
+        <span>{workflow?.message || duplicateGateEmptyDescription(workflow)}</span>
+        {blockerSummary && <span>{blockerSummary}</span>}
         {workflow?.stage === "organize" && (
-          <div className="button-row">
-            <button className="secondary-button" type="button" onClick={onOpenOrganize}>
+            <button className="primary-button" type="button" onClick={onOpenOrganize}>
               <FolderInput size={18} />
               <span>Review organization</span>
             </button>
-          </div>
         )}
-        <EmptyState
-          icon={duplicateGateIcon}
-          title={duplicateGateEmptyTitle(workflow)}
-          description={duplicateGateEmptyDescription(workflow)}
-        />
       </section>
     );
   }
 
   return (
     <section className="stack">
-      <div className="notice-bar safety">
-        <strong>Review before recycling</strong>
-        <span>Only same organized album, disc/track, title/version, and duration matches are shown.</span>
-      </div>
+      <p className="supporting-note">Select copies to recycle and keep at least one file in every group.</p>
       <div className="toolbar">
         <div className="summary-chips">
           <span>{groups.length} groups</span>
@@ -3212,15 +3206,12 @@ function DuplicatesPage({
             {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
             <span>{loading ? "Loading" : "Refresh"}</span>
           </button>
-          <button
-            className="danger-button"
-            type="button"
-            onClick={trashSelected}
-            disabled={loading || Boolean(busyKey) || selectedRemoveIds.length === 0}
-          >
-            {busyKey === "bulk" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
-            <span>{busyKey === "bulk" ? "Moving" : "Trash selected"}</span>
-          </button>
+          {selectedRemoveIds.length > 0 && (
+            <button className="danger-button" type="button" onClick={trashSelected} disabled={loading || Boolean(busyKey)}>
+              {busyKey === "bulk" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+              <span>{busyKey === "bulk" ? "Moving" : `Trash ${selectedRemoveIds.length} selected`}</span>
+            </button>
+          )}
         </div>
       </div>
       {notice && <div className="notice-bar">{notice}</div>}
@@ -3251,15 +3242,12 @@ function DuplicatesPage({
                 <h2>{group.tracks[0].title}</h2>
                 <span>{group.reason}</span>
               </div>
-              <button
-                className="danger-button"
-                type="button"
-                onClick={() => trashGroupSelected(group)}
-                disabled={Boolean(busyKey) || groupSelectedRemoveIds.length === 0}
-              >
-                {busyKey === group.key ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
-                <span>Trash selected</span>
-              </button>
+              {groupSelectedRemoveIds.length > 0 && (
+                <button className="danger-button" type="button" onClick={() => trashGroupSelected(group)} disabled={Boolean(busyKey)}>
+                  {busyKey === group.key ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+                  <span>Trash {groupSelectedRemoveIds.length}</span>
+                </button>
+              )}
             </div>
             <div className="duplicate-list">
               {group.tracks.map((track) => {
@@ -3451,16 +3439,16 @@ function TrashPage() {
 
   return (
     <section className="panel">
-      <div className="notice-bar safety">
-        <strong>Recycle bin</strong>
+      <div className="recycle-bin-context">
+        <Trash2 size={17} />
         <span>{view?.recycleBinPath || "Loading recycle bin path"}</span>
       </div>
-      <div className="toolbar">
+      {items.length > 0 ? <div className="toolbar trash-toolbar">
         <div className="summary-chips">
           <span>{view?.totalFiles || 0} items</span>
           <span>{formatBytes(view?.totalSize || 0)}</span>
           {filtersActive && <span>{filteredItems.length} shown</span>}
-          <span>{selectedItems.length} selected</span>
+          {selectedItems.length > 0 && <span>{selectedItems.length} selected</span>}
         </div>
         <div className="search-box">
           <Search size={17} />
@@ -3486,26 +3474,18 @@ function TrashPage() {
             {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
             <span>{loading ? "Loading" : "Refresh"}</span>
           </button>
+          {selectedItems.length > 0 && <>
+            <button className="secondary-button" type="button" onClick={restoreSelected} disabled={loading || Boolean(busy)}>
+              {busy === "restore" ? <Loader2 className="spin" size={18} /> : <Undo2 size={18} />}
+              <span>{busy === "restore" ? "Restoring" : `Restore ${selectedItems.length}`}</span>
+            </button>
+            <button className="danger-button" type="button" onClick={deleteSelected} disabled={loading || Boolean(busy)}>
+              {busy === "selected" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+              <span>{busy === "selected" ? "Deleting" : `Delete ${selectedItems.length}`}</span>
+            </button>
+          </>}
           <button
-            className="secondary-button"
-            type="button"
-            onClick={restoreSelected}
-            disabled={loading || Boolean(busy) || selectedItems.length === 0}
-          >
-            {busy === "restore" ? <Loader2 className="spin" size={18} /> : <Undo2 size={18} />}
-            <span>{busy === "restore" ? "Restoring" : "Restore selected"}</span>
-          </button>
-          <button
-            className="danger-button"
-            type="button"
-            onClick={deleteSelected}
-            disabled={loading || Boolean(busy) || selectedItems.length === 0}
-          >
-            {busy === "selected" ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
-            <span>{busy === "selected" ? "Deleting" : "Delete selected"}</span>
-          </button>
-          <button
-            className="danger-button"
+            className="secondary-button empty-trash-button"
             type="button"
             onClick={emptyTrash}
             disabled={loading || Boolean(busy) || !view?.totalFiles}
@@ -3514,7 +3494,15 @@ function TrashPage() {
             <span>{busy === "empty" ? "Emptying" : "Empty trash"}</span>
           </button>
         </div>
-      </div>
+      </div> : (
+        <div className="toolbar empty-trash-toolbar">
+          <span className="muted">Items moved by NaviClean can be restored here until they are permanently deleted.</span>
+          <button className="secondary-button" type="button" onClick={() => load()} disabled={loading || Boolean(busy)}>
+            {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+            <span>{loading ? "Loading" : "Refresh"}</span>
+          </button>
+        </div>
+      )}
       {(loading || busy) && (
         <ActionProgress
           label={
@@ -3616,6 +3604,9 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
     }),
     [filterCounts]
   );
+  const primaryOrganizeFilters = visibleOrganizeFilters.filter((filter) => ["attention", "metadata-review", "ready", "all"].includes(filter.id));
+  const secondaryOrganizeFilters = visibleOrganizeFilters.filter((filter) => !primaryOrganizeFilters.includes(filter));
+  const secondaryFilterSelected = secondaryOrganizeFilters.some((filter) => filter.id === organizeFilter);
   const filteredItems = useMemo(
     () => organizeItems.filter((item) => organizePreviewItemMatchesFilter(item, organizeFilter)),
     [organizeFilter, organizeItems]
@@ -3757,55 +3748,25 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
 
   return (
     <section className="panel">
-      <div className="notice-bar safety">
-        <strong>Organization review</strong>
-        <span>Preview moves, conflicts, and missing files. Duplicate cleanup opens automatically once organization is clear.</span>
-      </div>
       <div className="toolbar">
-        <div className="summary-chips">
-          {plan ? (
-            <>
-              <span>{plan.summary.ready} ready</span>
-              <span>{plan.summary.metadataReview} metadata review</span>
-              <span>{plan.summary.skipped} skipped</span>
-              <span>{plan.summary.same} organized</span>
-              {filterCounts.trackkeep > 0 && <span>{filterCounts.trackkeep} TrackKeep</span>}
-              <span>{plan.summary.duplicateTargets} duplicates</span>
-              <span>{plan.summary.conflicts} conflicts</span>
-              <span>{plan.summary.missing} missing</span>
-              <span>{selectedTrashSelections.length} selected</span>
-            </>
-          ) : workflow?.stage === "organize" ? (
-            <>
-              <span>{workflow.pendingMoves} {pluralize("move", workflow.pendingMoves)}</span>
-              <span>{workflow.organizationConflicts} {pluralize("conflict", workflow.organizationConflicts)}</span>
-              <span>{workflow.metadataReview} metadata review</span>
-              <span>{workflow.missingFiles} missing</span>
-              <span>Preview needed</span>
-            </>
-          ) : workflow?.duplicateScanReady ? (
-            <span>Organization clear</span>
-          ) : (
-            <span>{previewBusy ? "Previewing" : "Preview needed"}</span>
-          )}
+        <div className="organize-toolbar-copy">
+          <strong>{plan ? `${filteredItems.length.toLocaleString()} ${organizePreviewFilters.find((item) => item.id === organizeFilter)?.label.toLowerCase()}` : previewBusy ? "Building preview" : "Organization preview"}</strong>
+          <span>{plan ? `${plan.summary.ready} ready to apply · ${plan.summary.metadataReview} need identity review` : workflow?.message || "Review proposed changes before applying them."}</span>
         </div>
         <div className="button-row">
           <button className="secondary-button" type="button" onClick={() => load({ resetPlan: true })} disabled={previewBusy || applyBusy || Boolean(trashBusyKey)}>
             {previewBusy ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
             <span>{previewBusy ? "Previewing" : "Preview"}</span>
           </button>
-          <button
-            className="danger-button"
-            type="button"
-            onClick={trashSelectedCandidates}
-            disabled={previewBusy || applyBusy || Boolean(trashBusyKey) || selectedTrashSelections.length === 0}
-          >
-            {trashBusyKey ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
-            <span>{trashBusyKey ? "Moving" : "Trash selected"}</span>
-          </button>
+          {selectedTrashSelections.length > 0 && (
+            <button className="danger-button" type="button" onClick={trashSelectedCandidates} disabled={previewBusy || applyBusy || Boolean(trashBusyKey)}>
+              {trashBusyKey ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+              <span>{trashBusyKey ? "Moving" : `Trash ${selectedTrashSelections.length}`}</span>
+            </button>
+          )}
           <button className="primary-button" type="button" onClick={apply} disabled={previewBusy || applyBusy || Boolean(trashBusyKey) || !plan?.summary.ready}>
             {applyBusy ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
-            <span>{applyBusy ? "Applying" : "Apply"}</span>
+            <span>{applyBusy ? "Applying" : `Apply ${plan?.summary.ready || 0}`}</span>
           </button>
         </div>
       </div>
@@ -3816,13 +3777,13 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
       )}
       {notice && <div className="notice-bar">{notice}</div>}
       {plan?.warnings?.length ? (
-        <div className="notice-bar safety">
-          <strong>Organizer</strong>
+        <details className="organizer-notes">
+          <summary>{plan.warnings.length} index {pluralize("note", plan.warnings.length)}</summary>
           {plan.warnings.slice(0, 3).map((warning) => (
             <span key={warning}>{warning}</span>
           ))}
           {plan.warnings.length > 3 && <span>{plan.warnings.length - 3} more warnings</span>}
-        </div>
+        </details>
       ) : null}
       {applyErrors.length > 0 && (
         <div className="error-list">
@@ -3842,8 +3803,9 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
       {plan && (
         <>
           <div className="organize-preview-tools">
-            <div className="segmented-control organize-filter" role="radiogroup" aria-label="Preview status">
-              {visibleOrganizeFilters.map((filter) => (
+            <div className="organize-filter-row">
+              <div className="segmented-control organize-filter" role="radiogroup" aria-label="Preview status">
+              {primaryOrganizeFilters.map((filter) => (
                 <button
                   key={filter.id}
                   className={organizeFilter === filter.id ? "active" : ""}
@@ -3859,8 +3821,29 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
                   <strong>{filterCounts[filter.id].toLocaleString()}</strong>
                 </button>
               ))}
+              </div>
+              {secondaryOrganizeFilters.length > 0 && (
+                <label className="filter-select organize-more-filter" title={`${filterCounts.trackkeep} TrackKeep-protected tracks`}>
+                  <SlidersHorizontal size={17} />
+                  <select
+                    aria-label="More preview filters"
+                    value={secondaryFilterSelected ? organizeFilter : ""}
+                    onChange={(event) => {
+                      if (event.target.value) {
+                        setOrganizeFilter(event.target.value as OrganizePreviewFilter);
+                        setPageIndex(0);
+                      }
+                    }}
+                  >
+                    <option value="">More filters</option>
+                    {secondaryOrganizeFilters.map((filter) => (
+                      <option key={filter.id} value={filter.id}>{filter.label} ({filterCounts[filter.id].toLocaleString()})</option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </div>
-            <div className="pagination-controls" aria-label="Preview pages">
+            {pageCount > 1 && <div className="pagination-controls" aria-label="Preview pages">
               <button
                 className="icon-button"
                 type="button"
@@ -3898,7 +3881,7 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
               >
                 <ChevronsRight size={18} />
               </button>
-            </div>
+            </div>}
           </div>
           {filteredItems.length === 0 ? (
             <EmptyState
@@ -3915,9 +3898,8 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
               <table>
                 <thead>
                   <tr>
-                    <th>Change</th>
-                    <th>Source</th>
-                    <th>Target</th>
+                    <th>Status</th>
+                    <th>Current → proposed</th>
                     <th>Resolve</th>
                   </tr>
                 </thead>
@@ -3933,12 +3915,13 @@ function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null; onChan
                           <span className="status-detail">{item.message}</span>
                         )}
                       </td>
-                      <td>
+                      <td className="organize-path-change">
+                        <span className="path-label">Current</span>
                         <PathDiff value={item.sourceRelativePath} compareTo={item.targetRelativePath} />
-                      </td>
-                      <td>
                         {item.targetRelativePath ? (
                           <>
+                            <span className="path-change-arrow" aria-hidden="true">↓</span>
+                            <span className="path-label">Proposed</span>
                             <PathDiff value={item.targetRelativePath} compareTo={item.sourceRelativePath} />
                             <span className="status-detail">{organizeMetadataSourceLabel(item)}</span>
                             {organizeNavidromeDiagnosticLabel(item) && (
@@ -4363,7 +4346,7 @@ function CollisionCandidates({
   );
 }
 
-function DiscoverPage() {
+function DiscoverPage({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [query, setQuery] = useState("");
   const [artists, setArtists] = useState<SpotifyArtistSummary[]>([]);
   const [discography, setDiscography] = useState<SpotifyArtistDiscography | null>(null);
@@ -4376,6 +4359,7 @@ function DiscoverPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [wakeLockActive, setWakeLockActive] = useState(false);
+  const [spotifyAvailability, setSpotifyAvailability] = useState<"loading" | "ready" | "disabled" | "unconfigured">("loading");
   const wakeLockRef = useRef<ScreenWakeLockSentinelLike | null>(null);
 
   const selectedMissingTrackIds = album?.tracks
@@ -4397,6 +4381,13 @@ function DiscoverPage() {
   );
 
   useEffect(() => {
+    api<SettingsView>("/settings")
+      .then((current) => {
+        const spotify = current.catalog.spotify;
+        setSpotifyAvailability(!spotify.enabled ? "disabled" : spotify.clientId && spotify.clientSecretSet ? "ready" : "unconfigured");
+      })
+      .catch(() => setSpotifyAvailability("unconfigured"));
+
     const storedJobId = readActiveCatalogDownloadJobId();
 
     if (storedJobId) {
@@ -4687,7 +4678,23 @@ function DiscoverPage() {
 
   return (
     <section className="panel discover-panel">
-      <form className="toolbar" onSubmit={searchArtists}>
+      {spotifyAvailability === "loading" && <ActionProgress label="Checking Spotify configuration" />}
+      {(spotifyAvailability === "disabled" || spotifyAvailability === "unconfigured") && (
+        <div className="setup-state">
+          <Music2 size={28} />
+          <strong>{spotifyAvailability === "disabled" ? "Spotify matching is turned off" : "Connect Spotify to use Discover"}</strong>
+          <span>
+            {spotifyAvailability === "disabled"
+              ? "Discover stays out of the workflow until you choose to enable it."
+              : "Add a Spotify client ID and secret before searching the catalog."}
+          </span>
+          <button className="primary-button" type="button" onClick={onOpenSettings}>
+            <Settings size={18} />
+            <span>Open Settings</span>
+          </button>
+        </div>
+      )}
+      {spotifyAvailability === "ready" && <form className="discover-search-form" onSubmit={searchArtists}>
         <label className="search-box">
           <Search size={18} />
           <input
@@ -4700,13 +4707,12 @@ function DiscoverPage() {
           {busy === "search" ? <Loader2 className="spin" size={18} /> : <Search size={18} />}
           <span>{busy === "search" ? "Searching" : "Search"}</span>
         </button>
-      </form>
+      </form>}
 
       {notice && <div className="notice-bar">{notice}</div>}
-      <div className="notice-bar safety">
-        <strong>Spotify catalog</strong>
-        <span>Spotify supplies metadata and artwork only. Provider downloads must be content you are authorized to download.</span>
-      </div>
+      {spotifyAvailability === "ready" && (
+        <p className="supporting-note">Spotify supplies metadata and artwork only. Download only content you are authorized to access.</p>
+      )}
 
       {artists.length > 0 && (
         <div className="catalog-grid">
@@ -5008,10 +5014,14 @@ function SettingsPage({
   const [busy, setBusy] = useState(false);
   const [navidromeBusy, setNavidromeBusy] = useState(false);
   const [spotifyBusy, setSpotifyBusy] = useState(false);
+  const [savedSnapshot, setSavedSnapshot] = useState("");
 
   useEffect(() => {
     api<SettingsView>("/settings")
-      .then(setSettings)
+      .then((current) => {
+        setSettings(current);
+        setSavedSnapshot(JSON.stringify(current));
+      })
       .catch((caught) => setNotice((caught as Error).message));
   }, []);
 
@@ -5066,6 +5076,7 @@ function SettingsPage({
       });
 
       setSettings(next);
+      setSavedSnapshot(JSON.stringify(next));
       setAdminPassword("");
       setNavidromePassword("");
       setSpotifyClientSecret("");
@@ -5139,6 +5150,11 @@ function SettingsPage({
     return <MessageScreen title="Settings" message="Loading" />;
   }
 
+  const dirty = JSON.stringify(settings) !== savedSnapshot || Boolean(adminPassword || navidromePassword || spotifyClientSecret || acoustIdApiKey);
+  const navidromeConfigured = Boolean(settings.navidrome.baseUrl && settings.navidrome.username && settings.navidrome.passwordSet);
+  const spotifyConfigured = Boolean(settings.catalog.spotify.enabled && settings.catalog.spotify.clientId && settings.catalog.spotify.clientSecretSet);
+  const identificationConfigured = Boolean(settings.identification.acoustIdEnabled && settings.identification.acoustIdApiKeySet);
+
   return (
     <form className="settings-grid" onSubmit={save}>
       {notice && <div className="notice-bar settings-notice">{notice}</div>}
@@ -5180,6 +5196,9 @@ function SettingsPage({
         <legend>
           <SlidersHorizontal size={18} />
           Navidrome
+          <span className={`connection-status ${navidromeConfigured ? "configured" : ""}`}>
+            {navidromeConfigured ? "Configured" : "Not configured"}
+          </span>
         </legend>
         <label>
           URL
@@ -5219,6 +5238,9 @@ function SettingsPage({
         <legend>
           <Music2 size={18} />
           Spotify catalog
+          <span className={`connection-status ${spotifyConfigured ? "configured" : ""}`}>
+            {!settings.catalog.spotify.enabled ? "Off" : spotifyConfigured ? "Configured" : "Needs credentials"}
+          </span>
         </legend>
         <label className="toggle-row">
           <span>Enable Spotify matching</span>
@@ -5309,6 +5331,9 @@ function SettingsPage({
         <legend>
           <Fingerprint size={18} />
           Audio identification
+          <span className={`connection-status ${identificationConfigured ? "configured" : ""}`}>
+            {!settings.identification.acoustIdEnabled ? "Off" : identificationConfigured ? "Configured" : "Needs API key"}
+          </span>
         </legend>
         <label className="toggle-row">
           <span>Enable AcoustID / MusicBrainz</span>
@@ -5375,7 +5400,7 @@ function SettingsPage({
             })}
           />
         </label>
-        <div className="notice-bar safety">
+        <div className="supporting-note settings-info">
           <strong>Identity before naming</strong>
           <span>Ordinary tags and paths are hints only. TrackKeep and confirmed catalog identities remain authoritative.</span>
         </div>
@@ -5435,7 +5460,7 @@ function SettingsPage({
             <option value={320}>320 kbps (default)</option>
           </select>
         </label>
-        <div className="notice-bar safety">
+        <div className="supporting-note settings-info">
           <strong>Quality values are maximums</strong>
           <span>Provider audio below the selected cap stays at its source bitrate and is not upconverted.</span>
         </div>
@@ -5464,7 +5489,7 @@ function SettingsPage({
             }
           />
         </label>
-        <div className="notice-bar safety">
+        <div className="supporting-note settings-info">
           <strong>NaviClean naming</strong>
           <span>Uses confirmed metadata in the existing Artist / Album (Year) layout.</span>
         </div>
@@ -5527,10 +5552,11 @@ function SettingsPage({
         </div>
       </fieldset>
 
-      <div className="settings-actions">
-        <button className="primary-button" type="submit" disabled={busy}>
+      <div className="settings-actions sticky-save-bar">
+        <span className="muted">{dirty ? "Unsaved changes" : "All changes saved"}</span>
+        <button className="primary-button" type="submit" disabled={busy || !dirty}>
           {busy ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
-          <span>Save</span>
+          <span>{busy ? "Saving" : "Save changes"}</span>
         </button>
       </div>
     </form>
@@ -5712,7 +5738,7 @@ function workflowBlockerSummary(workflow?: LibraryStats["workflow"]) {
   return [
     countWorkflowItem(workflow.pendingMoves, "move"),
     countWorkflowItem(workflow.organizationConflicts, "conflict"),
-    countWorkflowItem(workflow.metadataReview, "metadata review"),
+    countWorkflowItem(workflow.metadataReview, "identity review"),
     countWorkflowItem(workflow.missingFiles, "missing file")
   ].filter(Boolean).join(", ");
 }
@@ -5731,6 +5757,21 @@ function EmptyState({ icon: Icon, title, description }: { icon: typeof Database;
       <Icon size={24} />
       <strong>{title}</strong>
       {description && <span>{description}</span>}
+    </div>
+  );
+}
+
+function LibraryAccessError({ messages, onOpenSettings }: { messages: string[]; onOpenSettings: () => void }) {
+  return (
+    <div className="setup-state error-state" role="alert">
+      <FolderX size={28} />
+      <strong>Library path is unavailable</strong>
+      <span>{messages[0] || "NaviClean could not read the configured library folder."}</span>
+      {messages.length > 1 && <span>{messages.length - 1} additional {pluralize("error", messages.length - 1)}</span>}
+      <button className="primary-button" type="button" onClick={onOpenSettings}>
+        <Settings size={18} />
+        <span>Check library settings</span>
+      </button>
     </div>
   );
 }
@@ -6022,7 +6063,7 @@ function organizeChangeLabel(item: OrganizePlan["items"][number]) {
   }
 
   if (item.status === "metadata-review") {
-    return "Metadata review";
+    return "Identity review";
   }
 
   if (item.status === "skipped") {
