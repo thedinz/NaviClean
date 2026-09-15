@@ -124,7 +124,7 @@ button:disabled {
     padding-block: 8px;
   }
 
-  .brand-mark {
+  .sidebar .brand-mark {
     width: 34px;
     height: 34px;
   }
@@ -157,16 +157,11 @@ button:disabled {
 }
 
 .brand-mark {
-  display: grid;
+  display: block;
   width: 42px;
   height: 42px;
-  place-items: center;
+  object-fit: contain;
   flex: 0 0 auto;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 8px;
-  background: #1c8f84;
-  color: #fff;
-  font-weight: 800;
 }
 
 .brand strong,
