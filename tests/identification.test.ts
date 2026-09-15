@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { TrackFile, TrackIdentificationCandidate } from "../src/shared/types.js";
-import { candidatesFromAcoustId, identificationNeedsReview, resolveReleaseConsensus } from "../src/server/identification.js";
+import { candidatesFromAcoustId, identificationNeedsReview, lookupAcoustId, resolveReleaseConsensus } from "../src/server/identification.js";
 import { buildOrganizePlan } from "../src/server/organizer.js";
 import { normalizeSettings } from "../src/server/settings.js";
 
@@ -67,6 +67,52 @@ test("AcoustID responses become release-specific MusicBrainz candidates", () => 
     duration: 181,
     isrc: "USABC2100001"
   });
+});
+
+test("AcoustID structured and partial release dates do not discard successful matches", () => {
+  for (const [date, expectedYear] of [
+    [{ year: 2021, month: 6, day: 4 }, 2021],
+    [{ year: 1999 }, 1999],
+    [{ month: 6 }, null],
+    [null, null],
+    [undefined, null],
+    ["2020-01-02", 2020]
+  ] as const) {
+    const payload = {
+      status: "ok",
+      results: [{ score: 0.99, recordings: [{
+        id: "recording-1", title: "Track",
+        releases: [{ id: "release-1", title: "Album", date }]
+      }] }]
+    };
+    const candidates = candidatesFromAcoustId(payload as Parameters<typeof candidatesFromAcoustId>[0]);
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0]?.year, expectedYear);
+    assert.equal(candidates[0]?.releaseId, "release-1");
+  }
+});
+
+test("AcoustID lookup handles real dates and distinguishes service failures without exposing secrets", async (t) => {
+  const request = t.mock.method(globalThis, "fetch");
+  const lookup = () => lookupAcoustId("secret-key", { duration: 180, fingerprint: "fingerprint" });
+  request.mock.mockImplementation(async () => new Response(JSON.stringify({
+    status: "ok", results: [{ recordings: [{ id: "r", title: "Track", releases: [
+      { id: "release", title: "Album", date: { year: 2021 } }
+    ] }] }]
+  })));
+  assert.equal((await lookup())[0]?.year, 2021);
+
+  request.mock.mockImplementation(async () => new Response(JSON.stringify({
+    status: "error", error: { code: 4, message: "secret-key" }
+  }), { status: 400 }));
+  await assert.rejects(lookup, (error: Error) => /application API key/.test(error.message) && !error.message.includes("secret-key"));
+
+  request.mock.mockImplementation(async () => new Response("busy", { status: 429 }));
+  await assert.rejects(lookup, /HTTP 429.*Rate limit/);
+  request.mock.mockImplementation(async () => { throw new Error("secret-key"); });
+  await assert.rejects(lookup, /could not be reached or timed out/);
+  request.mock.mockImplementation(async () => new Response("not JSON"));
+  await assert.rejects(lookup, /invalid response/);
 });
 
 test("release consensus uses a shared release but still honors the review gate", async () => {

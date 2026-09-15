@@ -627,7 +627,7 @@ function Dashboard({
     { label: "Tracks", value: stats?.totalTracks ?? null },
     { label: "Duplicate groups", value: stats?.duplicateGroups ?? null },
     { label: "Pending moves", value: stats?.pendingMoves ?? null },
-    { label: "Needs review", value: stats?.workflow.metadataReview ?? null }
+    { label: "Identity review", value: stats?.workflow.metadataReview ?? null }
   ];
   const scanRunning = Boolean(scan?.running);
   const scanRequired = Boolean(stats && !stats.workflow.scanned && !scanRunning);
