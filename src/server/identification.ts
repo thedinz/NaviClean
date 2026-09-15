@@ -49,7 +49,7 @@ type AcoustIdMedium = { position?: number; track_count?: number; tracks?: Acoust
 type AcoustIdRelease = {
   id?: string;
   title?: string;
-  date?: string;
+  date?: string | { year?: number; month?: number; day?: number } | null;
   artists?: AcoustIdArtist[];
   mediums?: AcoustIdMedium[];
   medium_count?: number;
@@ -73,7 +73,7 @@ type AcoustIdRecording = {
 };
 type AcoustIdResponse = {
   status?: string;
-  error?: { message?: string };
+  error?: { code?: number; message?: string };
   results?: Array<{ id?: string; score?: number; recordings?: AcoustIdRecording[] }>;
 };
 
@@ -195,12 +195,14 @@ export async function identifyTracks(settings: PrivateSettings, tracks: TrackFil
         recordingId: uniqueValue(candidates.map((candidate) => candidate.recordingId)) ?? undefined,
         candidates
       });
-    } catch {
+    } catch (error) {
       lookupFailures += 1;
       return withIdentification(track, {
         status: "unidentified",
         source: "unknown",
-        message: "AcoustID lookup failed; no metadata was trusted.",
+        message: error instanceof AcoustIdLookupError
+          ? error.message
+          : "AcoustID response could not be processed. Update NaviClean and run a new library scan; identity remains unconfirmed.",
         fingerprint: fingerprint.fingerprint
       });
     }
@@ -495,7 +497,9 @@ async function fingerprintTrack(track: TrackFile, cache: Map<string, Fingerprint
   return result;
 }
 
-async function lookupAcoustId(apiKey: string, fingerprint: FingerprintResult) {
+class AcoustIdLookupError extends Error {}
+
+export async function lookupAcoustId(apiKey: string, fingerprint: FingerprintResult) {
   const body = new URLSearchParams({
     client: apiKey,
     duration: String(fingerprint.duration),
@@ -509,13 +513,23 @@ async function lookupAcoustId(apiKey: string, fingerprint: FingerprintResult) {
       headers: { "content-type": "application/x-www-form-urlencoded", "user-agent": "NaviClean/0.6" },
       body,
       signal: AbortSignal.timeout(30_000)
+    }).catch(() => {
+      throw new AcoustIdLookupError("AcoustID could not be reached or timed out. Check the server's network connection and retry the library scan; identity remains unconfirmed.");
     });
-    if (!response.ok) {
-      throw new Error(`AcoustID returned HTTP ${response.status}`);
+    const payload = await response.json().catch(() => null) as AcoustIdResponse | null;
+    if (payload?.error?.code === 4) {
+      throw new AcoustIdLookupError("AcoustID rejected the application API key. Check Settings → Audio identification. Identity remains unconfirmed.");
     }
-    const payload = await response.json() as AcoustIdResponse;
+    if (!response.ok) {
+      throw new AcoustIdLookupError(`AcoustID returned HTTP ${response.status}. ${response.status === 429 ? "Rate limit reached; retry the library scan later." : "Check AcoustID availability and your application API key, then retry the library scan."} Identity remains unconfirmed.`);
+    }
+    if (!payload) {
+      throw new AcoustIdLookupError("AcoustID returned an invalid response. Retry the library scan later; identity remains unconfirmed.");
+    }
     if (payload.status !== "ok") {
-      throw new Error(payload.error?.message || "AcoustID rejected the fingerprint");
+      // Use controlled messages rather than exposing an upstream response or credentials.
+      const reason = `AcoustID rejected the lookup${typeof payload.error?.code === "number" ? ` (error ${payload.error.code})` : ""}. Check the application API key and retry the library scan.`;
+      throw new AcoustIdLookupError(`${reason} Identity remains unconfirmed.`);
     }
     return candidatesFromAcoustId(payload);
   });
@@ -619,9 +633,14 @@ function artistCredit(artists: AcoustIdArtist[] | undefined) {
   return (artists ?? []).map((artist) => artist.name?.trim()).filter(Boolean).join(", ");
 }
 
-function releaseYear(value: string | undefined) {
-  const year = value?.match(/^\d{4}/)?.[0];
-  return year ? Number(year) : null;
+function releaseYear(value: AcoustIdRelease["date"]) {
+  // AcoustID returns a structured date, which may omit the year.
+  // Keep support for string dates in older saved responses and fixtures.
+  if (typeof value === "string") {
+    const year = value.match(/^\d{4}/)?.[0];
+    return year ? positiveInteger(year) : null;
+  }
+  return value && typeof value === "object" ? positiveInteger(value.year) : null;
 }
 
 function positiveInteger(value: unknown) {
