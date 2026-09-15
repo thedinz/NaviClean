@@ -446,7 +446,7 @@ function Shell({
       )}
       <aside className={`sidebar ${mobileNavOpen ? "open" : ""}`}>
         <div className="brand">
-          <div className="brand-mark">NC</div>
+          <BrandLogo />
           <div>
             <strong>NaviClean</strong>
             <span>{auth.authEnabled ? auth.username : "Auth off"}</span>
@@ -573,7 +573,7 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthInfo) => void }) {
     <main className="login-layout">
       <form className="login-panel" onSubmit={submit}>
         <div className="brand login-brand">
-          <div className="brand-mark">NC</div>
+          <BrandLogo />
           <div>
             <strong>NaviClean</strong>
             <span>Library Console</span>
@@ -5765,6 +5765,10 @@ function LibraryAccessError({ messages, onOpenSettings }: { messages: string[]; 
       </button>
     </div>
   );
+}
+
+function BrandLogo() {
+  return <img className="brand-mark" src="/naviclean.png" alt="" width={42} height={42} />;
 }
 
 function MessageScreen({ title, message }: { title: string; message: string }) {
