@@ -1013,12 +1013,14 @@ async function runScan() {
   try {
     const settings = await loadSettingsForPlanning();
     const result = await scanLibrary(settings, (update) => {
-      Object.assign(scanStatus, update);
+      Object.assign(scanStatus, update, { progressAt: new Date().toISOString() });
     });
     invalidateOrganizeEvaluationCache();
     scanStatus.errors = result.errors;
     scanStatus.warnings = result.warnings;
+    scanStatus.phase = "complete";
   } catch (error) {
+    scanStatus.phase = "failed";
     scanStatus.errors = [(error as Error).message];
     scanStatus.warnings = [];
   } finally {
@@ -1034,6 +1036,10 @@ function startBackgroundScan() {
 
   Object.assign(scanStatus, {
     running: true,
+    phase: "discovering",
+    processedFiles: 0,
+    totalFiles: 0,
+    progressAt: new Date().toISOString(),
     startedAt: new Date().toISOString(),
     finishedAt: null,
     scannedFiles: 0,

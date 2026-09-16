@@ -44,12 +44,15 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
   const root = path.resolve(settings.naming.libraryPath);
   const extensions = new Set(settings.scan.extensions.map((extension) => extension.toLowerCase()));
   const recycleRoot = path.resolve(settings.naming.recycleBinPath);
+  onProgress?.({ phase: "discovering", processedFiles: 0, totalFiles: 0 });
   const files = await collectAudioFiles(root, extensions, recycleRoot, onProgress);
   const tracks: TrackFile[] = [];
   const errors: string[] = [];
   const warnings: string[] = [];
   const metadataOverrides = await loadMetadataOverrides();
 
+  onProgress?.({ phase: "metadata", processedFiles: 0, totalFiles: files.length });
+  let processedFiles = 0;
   for (const filePath of files) {
     try {
       const track = await readTrack(filePath, root, settings, metadataOverrides);
@@ -63,26 +66,30 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
     }
 
     onProgress?.({
+      processedFiles: ++processedFiles,
       audioFiles: tracks.length,
       errors
     });
   }
 
-  const identified = await identifyTracks(settings, tracks);
+  onProgress?.({ phase: "identifying", processedFiles: 0, totalFiles: tracks.length });
+  const identified = await identifyTracks(settings, tracks, (processedFiles) => onProgress?.({ processedFiles }));
   warnings.push(...identified.warnings);
-  const navidromeEnriched = await enrichTracksWithNavidromeMetadata(settings, identified.tracks);
+  onProgress?.({ phase: "navidrome", processedFiles: 0, totalFiles: tracks.length });
+  const navidromeEnriched = await enrichTracksWithNavidromeMetadata(settings, identified.tracks, onProgress);
 
   for (const warning of navidromeEnriched.warnings) {
     warnings.push(warning);
   }
 
+  onProgress?.({ phase: "saving", processedFiles: tracks.length, totalFiles: tracks.length });
   const latestCatalog = await loadCatalog();
   const nextTracks = preserveOrganizationSkipDecisions(navidromeEnriched.tracks, latestCatalog.tracks);
   await saveCatalog(nextTracks);
   return { tracks: nextTracks, errors, warnings };
 }
 
-async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, tracks: TrackFile[]) {
+async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, tracks: TrackFile[], onProgress?: ProgressHandler) {
   const warnings: string[] = [];
 
   if (!settings.navidrome.baseUrl || !settings.navidrome.username || !settings.navidrome.password) {
@@ -150,6 +157,7 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
     enrichedTracks[trackIndex] = trackFileFromNavidromeTrack(track, navidromeMatch.track, settings, navidromeMatch.method, navidromeTracks.length);
   });
 
+  onProgress?.({ processedFiles: tracks.length - unmatchedTracks.length });
   for (let offset = 0; offset < unmatchedTracks.length; offset += 6) {
     const batch = unmatchedTracks.slice(offset, offset + 6);
     const batchMatches = await Promise.all(
@@ -185,6 +193,7 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
       searchFallbackMatched += 1;
       enrichedTracks[trackIndex] = trackFileFromNavidromeTrack(track, navidromeMatch.track, settings, navidromeMatch.method, navidromeTracks.length);
     });
+    onProgress?.({ processedFiles: tracks.length - unmatchedTracks.length + offset + batch.length });
   }
   const tracksWithUsablePaths = navidromeTracks.filter((track) => track.sourcePathStatus === "usable").length;
   const tracksWithoutPaths = navidromeTracks.filter((track) => track.sourcePathStatus === "missing").length;

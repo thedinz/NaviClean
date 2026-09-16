@@ -1,3 +1,4 @@
+import { scanProgress } from "./scan-progress.js";
 import {
   Activity,
   Album as AlbumIcon,
@@ -274,6 +275,10 @@ function Shell({
   onThemeChange: (theme: AppTheme) => void;
 }) {
   const [page, setPage] = useState<Page>("dashboard");
+  const scanRequestId = useRef(0);
+  const navidromeRequestId = useRef(0);
+  const [scanStatusError, setScanStatusError] = useState<string | null>(null);
+  const [navidromeStatusError, setNavidromeStatusError] = useState<string | null>(null);
   const [scan, setScan] = useState<ScanStatus | null>(null);
   const [navidromeScan, setNavidromeScan] = useState<NavidromeScanStatus | null>(null);
   const [stats, setStats] = useState<LibraryStats | null>(null);
@@ -285,15 +290,33 @@ function Shell({
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const loadScanStatus = async () => {
-    const nextScan = await api<ScanStatus>("/scan/status");
-    setScan(nextScan);
-    return nextScan;
+    const requestId = ++scanRequestId.current;
+    try {
+      const nextScan = await api<ScanStatus>("/scan/status", { signal: AbortSignal.timeout(10_000) });
+      if (requestId === scanRequestId.current) {
+        setScan(nextScan);
+        setScanStatusError(null);
+      }
+      return nextScan;
+    } catch (error) {
+      if (requestId === scanRequestId.current) setScanStatusError((error as Error).message);
+      throw error;
+    }
   };
 
   const loadNavidromeScanStatus = async () => {
-    const nextScan = await api<NavidromeScanStatus>("/navidrome/scan/status");
-    setNavidromeScan(nextScan);
-    return nextScan;
+    const requestId = ++navidromeRequestId.current;
+    try {
+      const nextScan = await api<NavidromeScanStatus>("/navidrome/scan/status", { signal: AbortSignal.timeout(35_000) });
+      if (requestId === navidromeRequestId.current) {
+        setNavidromeScan(nextScan);
+        setNavidromeStatusError(null);
+      }
+      return nextScan;
+    } catch (error) {
+      if (requestId === navidromeRequestId.current) setNavidromeStatusError((error as Error).message);
+      throw error;
+    }
   };
 
   const loadStats = async () => {
@@ -330,46 +353,48 @@ function Shell({
   }, []);
 
   useEffect(() => {
-    if (!scan?.running) {
-      return undefined;
-    }
-
-    const interval = window.setInterval(() => {
-      loadScanStatus()
-        .then((nextScan) => {
-          if (!nextScan.running) {
-            return loadStats();
-          }
-          return null;
-        })
-        .catch((caught) => {
-          setStatsLoading(false);
-          setNotice((caught as Error).message);
-        });
-    }, 1500);
-    return () => window.clearInterval(interval);
+    let cancelled = false;
+    let timer: number;
+    const poll = async () => {
+      let running = false;
+      try {
+        const next = await loadScanStatus();
+        running = next.running;
+        if (!next.running && scan?.running) await loadStats();
+      } catch {
+        // Keep retrying; the scan card shows that its last status is unverified.
+      }
+      if (!cancelled) timer = window.setTimeout(poll, running ? 1500 : 5000);
+    };
+    timer = window.setTimeout(poll, 1500);
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [scan?.running]);
 
   useEffect(() => {
-    if (!navidromeScan?.running) {
-      return undefined;
-    }
-
-    const interval = window.setInterval(() => {
-      loadNavidromeScanStatus().catch((caught) => {
-        setNotice((caught as Error).message);
-      });
-    }, 1500);
-    return () => window.clearInterval(interval);
-  }, [navidromeScan?.running]);
+    let cancelled = false;
+    let timer: number;
+    const poll = async () => {
+      let running = false;
+      try {
+        running = (await loadNavidromeScanStatus()).running;
+      } catch {
+        // Retry idle and failed requests too, including scans started elsewhere.
+      }
+      if (!cancelled) timer = window.setTimeout(poll, running ? 1500 : 5000);
+    };
+    timer = window.setTimeout(poll, 1500);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, []);
 
   const startScan = async () => {
     setNotice(null);
     setScanBusy(true);
 
     try {
-      const next = await api<ScanStatus>("/scan/start", { method: "POST" });
+      const next = await api<ScanStatus>("/scan/start", { method: "POST", signal: AbortSignal.timeout(10_000) });
+      ++scanRequestId.current;
       setScan(next);
+      setScanStatusError(null);
 
       if (!next.running) {
         await loadStats();
@@ -387,10 +412,13 @@ function Shell({
 
     try {
       const next = await api<NavidromeScanStatus>("/navidrome/scan/start", {
+        signal: AbortSignal.timeout(35_000),
         method: "POST",
         body: JSON.stringify({ fullScan })
       });
+      ++navidromeRequestId.current;
       setNavidromeScan(next);
+      setNavidromeStatusError(null);
     } catch (caught) {
       setNotice((caught as Error).message);
     } finally {
@@ -514,6 +542,8 @@ function Shell({
           <Dashboard
             stats={stats}
             statsLoading={statsLoading}
+            scanStatusError={scanStatusError}
+            navidromeStatusError={navidromeStatusError}
             scan={scan}
             scanBusy={scanBusy}
             navidromeScan={navidromeScan}
@@ -603,6 +633,8 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthInfo) => void }) {
 }
 
 function Dashboard({
+  scanStatusError,
+  navidromeStatusError,
   stats,
   statsLoading,
   scan,
@@ -613,6 +645,8 @@ function Dashboard({
   onNavidromeScan,
   onNavigate
 }: {
+  scanStatusError: string | null;
+  navidromeStatusError: string | null;
   stats: LibraryStats | null;
   statsLoading: boolean;
   scan: ScanStatus | null;
@@ -629,6 +663,7 @@ function Dashboard({
     { label: "Pending moves", value: stats?.pendingMoves ?? null },
     { label: "Identity review", value: stats?.workflow.metadataReview ?? null }
   ];
+  const progress = scanProgress(scan, scanStatusError);
   const scanRunning = Boolean(scan?.running);
   const scanRequired = Boolean(stats && !stats.workflow.scanned && !scanRunning);
   const statsPending = !scanRunning && !scanRequired && (statsLoading || !stats);
@@ -637,7 +672,7 @@ function Dashboard({
   const navidromeConfigured = Boolean(navidromeScan?.configured);
   const navidromeRunning = Boolean(navidromeScan?.running);
   const navidromeControlsDisabled = navidromeStatusLoading || !navidromeConfigured || navidromeRunning || Boolean(navidromeScanBusy);
-  const navidromeStatusLabel = navidromeStatusLoading
+  const navidromeStatusLabel = navidromeStatusError ? "Status unavailable" : navidromeScan?.error ? "Unavailable" : navidromeStatusLoading
     ? "Loading"
     : !navidromeConfigured
     ? "Not configured"
@@ -681,7 +716,7 @@ function Dashboard({
           <strong>Fresh scan needed</strong>
           <span>No saved scan data was found. Run a fresh scan to rebuild the Library Console totals.</span>
           <button className="primary-button" type="button" onClick={onScan} disabled={scanBusy || scanRunning}>
-            {scanBusy || scanRunning ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+            {scanBusy || progress.active ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
             <span>{scanBusy || scanRunning ? "Scanning" : "Scan now"}</span>
           </button>
         </div>
@@ -719,14 +754,20 @@ function Dashboard({
           <div className="scan-summary-row">
             <div className="scan-summary-copy">
               <strong>NaviClean library scan</strong>
-              <span>{scanRunning ? "Reading tags and fingerprints" : `${(scan?.audioFiles ?? stats?.totalTracks ?? 0).toLocaleString()} files cataloged from the mounted library`}</span>
+              <span>{scanRunning ? progress.detail : `${(scan?.startedAt ? scan.audioFiles : stats?.totalTracks ?? 0).toLocaleString()} files cataloged from the mounted library`}</span>
             </div>
-            <StatusPill active={scanRunning} label={scanRunning ? "Running" : "Ready"} />
+            <StatusPill active={progress.active} label={progress.label} />
             <button className="secondary-button compact-button" type="button" onClick={onScan} disabled={scanBusy || scanRunning}>
-              {scanBusy || scanRunning ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+              {scanBusy || progress.active ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
               <span>Run scan</span>
             </button>
           </div>
+          {scanRunning && progress.active && (progress.percent === null
+            ? <ActionProgress label={`NaviClean: ${progress.detail}`} />
+            : <DeterminateProgress label={`NaviClean: ${progress.detail}`} value={progress.percent} />)}
+          {scan?.startedAt && <p className="supporting-note">NaviClean started {formatDate(scan.startedAt)}{scan.finishedAt ? ` · Finished ${formatDate(scan.finishedAt)}` : ""}{scan.progressAt ? ` · Last progress ${formatDate(scan.progressAt)}` : ""}</p>}
+          {progress.warning && <div className="error-list" role="status"><span>{progress.warning}</span></div>}
+          <p className="supporting-note">NaviClean scans the mounted files. Navidrome maintains its own separate index.</p>
           <div className="scan-summary-row">
             <div className="scan-summary-copy">
               <strong>Navidrome index</strong>
@@ -736,7 +777,7 @@ function Dashboard({
                   : "Connection not configured"}
               </span>
             </div>
-            <StatusPill active={navidromeRunning} label={navidromeStatusLabel} />
+            <StatusPill active={navidromeRunning && !navidromeStatusError && !navidromeScan?.error} label={navidromeStatusLabel} />
             {navidromeConfigured ? (
               <div className="compact-action-row">
                 <button className="secondary-button compact-button" type="button" onClick={() => onNavidromeScan(false)} disabled={navidromeControlsDisabled}>
@@ -755,10 +796,10 @@ function Dashboard({
               </button>
             )}
           </div>
-          {scanRunning && <ActionProgress label="Scanning library" />}
-          {navidromeRunning && <ActionProgress label={`${navidromeScanActionLabel(navidromeScan?.scanType)} running in Navidrome`} />}
+          {navidromeRunning && !navidromeStatusError && !navidromeScan?.error && <ActionProgress label={`${navidromeScanActionLabel(navidromeScan?.scanType)} running in Navidrome`} />}
           {scan?.warnings.length ? <p className="supporting-note">{scan.warnings.length} scan note{scan.warnings.length === 1 ? "" : "s"} available.</p> : null}
           {scan?.errors.length ? <div className="error-list">{scan.errors.slice(0, 3).map((item) => <span key={item}>{item}</span>)}</div> : null}
+          {navidromeStatusError && <div className="error-list"><span>Cannot verify Navidrome status: {navidromeStatusError}</span></div>}
           {navidromeScan?.error ? <div className="error-list"><span>{navidromeScan.error}</span></div> : null}
         </article>
       </div>

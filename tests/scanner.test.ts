@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { hasTrackKeepIdentityTags, scanLibrary } from "../src/server/scanner.js";
 import { buildOrganizePlan } from "../src/server/organizer.js";
 import { trustPathMetadataForFolder } from "../src/server/metadata-review.js";
+import type { ScanStatus } from "../src/shared/types.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 import { normalizeTrackKeepManagedBy, readTrackKeepIdentity, trackKeepMetadataTagsForSpotifyTrack } from "../src/server/trackkeep.js";
 
@@ -148,7 +149,14 @@ test("scanner infers the release year when the parent artist folder stripped tra
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, "not real audio");
 
-    const result = await scanLibrary(settings(root));
+    const progress: Partial<ScanStatus>[] = [];
+    const result = await scanLibrary(settings(root), (update) => progress.push({ ...update }));
+    assert.deepEqual(progress.filter((update) => update.phase).map((update) => update.phase), [
+      "discovering", "metadata", "identifying", "navidrome", "saving"
+    ]);
+    assert.ok(progress.some((update) => update.scannedFiles === 1));
+    assert.ok(progress.some((update) => update.processedFiles === 1 && update.audioFiles === 1));
+    assert.equal(progress.at(-1)?.totalFiles, 1);
     const track = result.tracks[0];
 
     assert.equal(result.tracks.length, 1);
