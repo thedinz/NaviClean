@@ -454,6 +454,10 @@ export type DuplicateGroup = {
 };
 
 export type ScanStatus = {
+  phase?: "discovering" | "metadata" | "identifying" | "navidrome" | "saving" | "complete" | "failed";
+  progressAt?: string;
+  processedFiles?: number;
+  totalFiles?: number;
   running: boolean;
   startedAt: string | null;
   finishedAt: string | null;

@@ -518,6 +518,7 @@ async function subsonicJson<T extends object>(
 
   try {
     response = await fetch(subsonicUrl(settings.navidrome, endpoint, { ...params, f: "json" }), {
+      signal: AbortSignal.timeout(30_000),
       headers: {
         accept: "application/json"
       }

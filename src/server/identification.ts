@@ -77,7 +77,7 @@ type AcoustIdResponse = {
   results?: Array<{ id?: string; score?: number; recordings?: AcoustIdRecording[] }>;
 };
 
-export async function identifyTracks(settings: PrivateSettings, tracks: TrackFile[]) {
+export async function identifyTracks(settings: PrivateSettings, tracks: TrackFile[], onProgress?: (processedFiles: number) => void) {
   const identification = settings.identification;
   if (!identification) {
     return { tracks, warnings: [] as string[] };
@@ -206,7 +206,7 @@ export async function identifyTracks(settings: PrivateSettings, tracks: TrackFil
         fingerprint: fingerprint.fingerprint
       });
     }
-  });
+  }, onProgress);
 
   const resolved = resolveReleaseConsensus(prepared, settings);
   await saveIdentityStore(identities);
@@ -711,13 +711,15 @@ async function atomicWrite(filePath: string, payload: unknown) {
   await fs.rename(tempPath, filePath);
 }
 
-async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>) {
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>, onProgress?: (completed: number) => void) {
   const results = new Array<R>(items.length);
   let cursor = 0;
+  let completed = 0;
   const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
     while (cursor < items.length) {
       const index = cursor++;
       results[index] = await worker(items[index]);
+      onProgress?.(++completed);
     }
   });
   await Promise.all(runners);
