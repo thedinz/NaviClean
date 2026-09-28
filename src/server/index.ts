@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type {
   AudioConvertQuality,
   AudioConvertTargetFormat,
+  AuthInfo,
   NavidromeScanStatus,
   OrganizePlan,
   OrganizeTrashSelection,
@@ -12,7 +13,19 @@ import type {
   TrackFile,
   WorkflowState
 } from "../shared/types.js";
-import { clearSessionCookie, getAuthInfo, login, logout, requireAuth, setSessionCookie } from "./auth.js";
+import {
+  changePassword,
+  clearSessionCookie,
+  flagDefaultPassword,
+  getAuthInfo,
+  login,
+  LoginThrottledError,
+  logout,
+  PasswordChangeError,
+  pruneExpiredSessions,
+  requireAuth,
+  setSessionCookie
+} from "./auth.js";
 import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
 import { getActiveAudioConvertJob, getAudioConvertJob, listAudioConvertView, startAudioConvertJob } from "./converter.js";
 import { advancedDiagnosticsEnabled } from "./diagnostics.js";
@@ -32,14 +45,14 @@ import {
 import { listNonMusicFileGroup, listNonMusicFiles, trashNonMusicFileGroups, trashNonMusicFiles } from "./non-music.js";
 import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate, trashOrganizeCandidates } from "./organizer.js";
 import { setTrackOrganizationSkipped } from "./organize-skip.js";
-import {
-  getSpotifyCatalogDownloadJob,
-  previewSpotifyCatalogDownloads,
-  startSpotifyCatalogDownloadJob
-} from "./providers.js";
+import { publishEngineStatus, setEngineStatusSettingsLoader, startBackgroundWork } from "./engine/background.js";
+import { initializeDownloadEngine } from "./engine/jobs.js";
+import { publish, subscribe } from "./events.js";
+import { pruneHttpCache } from "./http-cache.js";
+import { registerEngineRoutes } from "./routes/engine.js";
 import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin, restoreRecycleBinItems } from "./recycle-bin.js";
-import { scanLibrary } from "./scanner.js";
-import { loadSettings, toSettingsView, updateSettings } from "./settings.js";
+import { ScanCancelledError, scanLibrary } from "./scanner.js";
+import { loadSettings, SettingsValidationError, toSettingsView, updateSettings } from "./settings.js";
 import { resolveTrackMetadataFromSpotify } from "./spotify-metadata.js";
 import { fetchNavidromeArtwork, getNavidromeScanStatus, startNavidromeScan, testNavidromeConnection } from "./navidrome.js";
 import { findUnindexedNavidromeMatches, listUnindexedFiles, trashUnindexedFiles } from "./unindexed.js";
@@ -79,6 +92,7 @@ const scanStatus: ScanStatus = {
   warnings: []
 };
 let autoScanTimer: NodeJS.Timeout | null = null;
+let scanAbortController: AbortController | null = null;
 let cachedOrganizeEvaluation: OrganizeEvaluation | null = null;
 let organizeEvaluationCacheToken = 0;
 
@@ -89,7 +103,18 @@ app.get("/api/auth/me", asyncHandler(async (req, res) => {
 }));
 
 app.post("/api/auth/login", asyncHandler(async (req, res) => {
-  const token = await login(String(req.body.username || ""), String(req.body.password || ""));
+  let token: string | null;
+
+  try {
+    token = await login(String(req.body.username || ""), String(req.body.password || ""), req.ip ?? "");
+  } catch (error) {
+    if (error instanceof LoginThrottledError) {
+      res.setHeader("Retry-After", String(error.retryAfterSeconds));
+      res.status(429).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
 
   if (!token) {
     res.status(401).json({ error: "Invalid username or password" });
@@ -97,18 +122,34 @@ app.post("/api/auth/login", asyncHandler(async (req, res) => {
   }
 
   setSessionCookie(req, res, token);
+  const settings = await loadSettings();
   res.json({
     advancedDiagnosticsEnabled: advancedDiagnosticsEnabled(),
     authEnabled: true,
     authenticated: true,
+    mustChangePassword: Boolean(settings.auth.mustChangePassword),
     username: String(req.body.username || "")
-  });
+  } satisfies AuthInfo);
 }));
 
 app.post("/api/auth/logout", asyncHandler(async (req, res) => {
   logout(req);
   clearSessionCookie(req, res);
   res.json({ ok: true });
+}));
+
+app.post("/api/auth/password", asyncHandler(async (req, res) => {
+  try {
+    await changePassword(req, String(req.body.currentPassword || ""), String(req.body.newPassword || ""));
+  } catch (error) {
+    if (error instanceof PasswordChangeError) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
+
+  res.json(await getAuthInfo(req));
 }));
 
 app.use("/api", requireAuth);
@@ -122,7 +163,18 @@ app.get("/api/settings", asyncHandler(async (_req, res) => {
 }));
 
 app.put("/api/settings", asyncHandler(async (req, res) => {
-  const next = await updateSettings(req.body as SettingsUpdate);
+  let next: PlanningSettings;
+
+  try {
+    next = await updateSettings(req.body as SettingsUpdate);
+  } catch (error) {
+    if (error instanceof SettingsValidationError) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
+
   scheduleAutoScan(next);
   res.json(toSettingsView(next));
 }));
@@ -229,79 +281,21 @@ app.post("/api/spotify/download-plan", asyncHandler(async (req, res) => {
   });
 }));
 
-app.post("/api/spotify/download-preview", asyncHandler(async (req, res) => {
-  const albumId = String(req.body.spotifyAlbumId || "");
-
-  if (!albumId) {
-    res.status(400).json({ error: "spotifyAlbumId is required" });
-    return;
-  }
-
-  const catalog = await loadCatalog();
-  const settings = await loadSettingsForPlanning();
-
-  res.json({
-    preview: await previewSpotifyCatalogDownloads(
-      settings,
-      catalog.tracks,
-      albumId,
-      Array.isArray(req.body.trackIds) ? req.body.trackIds.map(String) : undefined
-    )
-  });
-}));
-
-app.post("/api/spotify/download-jobs", asyncHandler(async (req, res) => {
-  const albumId = String(req.body.spotifyAlbumId || "");
-
-  if (!albumId) {
-    res.status(400).json({ error: "spotifyAlbumId is required" });
-    return;
-  }
-
-  const catalog = await loadCatalog();
-  const settings = await loadSettingsForPlanning();
-
-  res.json(await startSpotifyCatalogDownloadJob({
-    albumId,
-    bulkRiskAccepted: Boolean(req.body.bulkRiskAccepted),
-    localTracks: catalog.tracks,
-    rightsConfirmed: Boolean(req.body.rightsConfirmed),
-    reviewedCandidates: Array.isArray(req.body.reviewedCandidates)
-      ? req.body.reviewedCandidates
-          .filter((item: unknown) => Boolean(item) && typeof item === "object")
-          .map((item: { candidate?: unknown; trackId?: unknown }) => ({
-            candidate: item.candidate,
-            trackId: String(item.trackId ?? "")
-          })) as Parameters<typeof startSpotifyCatalogDownloadJob>[0]["reviewedCandidates"]
-      : undefined,
-    settings,
-    trackIds: Array.isArray(req.body.trackIds) ? req.body.trackIds.map(String) : undefined
-  }));
-}));
-
-app.get("/api/spotify/download-jobs/:jobId", (req, res) => {
-  const job = getSpotifyCatalogDownloadJob(String(req.params.jobId));
-
-  if (!job) {
-    res.status(404).json({ error: "Download job not found" });
-    return;
-  }
-
-  res.json({ job });
-});
+registerEngineRoutes(app, loadSettingsForPlanning, () => [{ type: "scan", status: scanStatus }]);
 
 app.get("/api/scan/status", (_req, res) => {
   res.json(scanStatus);
 });
 
 app.post("/api/scan/start", asyncHandler(async (_req, res) => {
-  if (!startBackgroundScan()) {
-    res.status(202).json(scanStatus);
-    return;
-  }
-
+  startBackgroundScan();
   res.status(202).json(scanStatus);
 }));
+
+app.post("/api/scan/cancel", (_req, res) => {
+  scanAbortController?.abort();
+  res.status(202).json(scanStatus);
+});
 
 app.get("/api/convert", asyncHandler(async (_req, res) => {
   res.json(await listAudioConvertView(await loadSettingsForPlanning()));
@@ -951,7 +945,45 @@ app.listen(port, () => {
   void loadSettingsForPlanning()
     .then(scheduleAutoScan)
     .catch((error) => console.error("Failed to schedule daily scan:", error));
+  void flagDefaultPassword().catch((error) => console.error("Failed to check the default password:", error));
+  pruneExpiredSessions();
+  pruneHttpCache();
+  initializeDownloadEngine(loadSettingsForPlanning);
+  setEngineStatusSettingsLoader(loadSettingsForPlanning);
+  startBackgroundWork(loadSettingsForPlanning);
 });
+
+// Library changes made by the download engine invalidate the cached organize plan.
+subscribe((event) => {
+  if (event.type === "catalog-changed") {
+    invalidateOrganizeEvaluationCache();
+  }
+  if (event.type === "download-job" && (event.job.status === "review" || event.job.status === "completed" || event.job.status === "partial" || event.job.status === "failed")) {
+    void publishEngineStatus();
+  }
+});
+
+let lastScanPublishAt = 0;
+let trailingScanPublish: NodeJS.Timeout | null = null;
+
+/** Streams scan progress to connected browsers: at most a few times a second, always including the latest state. */
+function publishScanStatus(force = false) {
+  const now = Date.now();
+  const wait = 400 - (now - lastScanPublishAt);
+  if (!force && wait > 0) {
+    trailingScanPublish ??= setTimeout(() => {
+      trailingScanPublish = null;
+      publishScanStatus(true);
+    }, wait);
+    return;
+  }
+  if (trailingScanPublish) {
+    clearTimeout(trailingScanPublish);
+    trailingScanPublish = null;
+  }
+  lastScanPublishAt = now;
+  publish({ type: "scan", status: { ...scanStatus } });
+}
 
 function trustProxySetting() {
   const value = (process.env.NAVICLEAN_TRUST_PROXY || "1").trim().toLowerCase();
@@ -1010,22 +1042,34 @@ function navidromeScanErrorStatus(settings: Awaited<ReturnType<typeof loadSettin
 }
 
 async function runScan() {
+  const controller = new AbortController();
+  scanAbortController = controller;
+
   try {
     const settings = await loadSettingsForPlanning();
     const result = await scanLibrary(settings, (update) => {
       Object.assign(scanStatus, update, { progressAt: new Date().toISOString() });
-    });
+      publishScanStatus(Boolean(update.phase));
+    }, { signal: controller.signal });
     invalidateOrganizeEvaluationCache();
     scanStatus.errors = result.errors;
     scanStatus.warnings = result.warnings;
     scanStatus.phase = "complete";
   } catch (error) {
-    scanStatus.phase = "failed";
-    scanStatus.errors = [(error as Error).message];
-    scanStatus.warnings = [];
+    if (error instanceof ScanCancelledError) {
+      scanStatus.phase = "cancelled";
+      scanStatus.warnings = [error.message];
+    } else {
+      scanStatus.phase = "failed";
+      scanStatus.errors = [(error as Error).message];
+      scanStatus.warnings = [];
+    }
   } finally {
+    scanAbortController = null;
     scanStatus.running = false;
     scanStatus.finishedAt = new Date().toISOString();
+    publishScanStatus(true);
+    publish({ type: "catalog-changed", updatedAt: scanStatus.finishedAt });
   }
 }
 

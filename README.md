@@ -3,7 +3,17 @@
 NaviClean is a Docker-first cleaner and organizer for Navidrome music libraries.
 It scans a mounted music library, browses artists, albums, and tracks, previews clean artist/album/track paths, and only unlocks duplicate cleanup after organization is complete.
 
-## Latest changes on `dev` — September 14, 2026
+## Latest changes on `dev` — September 28, 2026 (0.7.0)
+
+- **Native download engine:** Discover now searches MusicBrainz. Request an album or single tracks and NaviClean searches YouTube and JioSaavn, scores every result (penalising live, remix, cover, karaoke, sped-up, and re-upload versions; favouring official artist and Topic uploads), and downloads at score ≥ 80. Scores of 55–80 wait in a **Review** queue; anything lower goes to **Wanted**.
+- **Verification and quarantine:** every download must meet a per-codec bitrate floor, match the release track's length, and (with AcoustID on) fingerprint as the same song. A failing source is quarantined for that track and the next candidate is tried.
+- **Wanted, Following, Upgrades:** failed tracks are re-searched in the background (1 h, 6 h, 1 day, 3 days, then weekly). Follow artists to be told about new albums, EPs, and singles, optionally downloading them automatically. Upgrades lists lossy files below your quality floor and replaces them with verified better copies; originals go to the recycle bin.
+- **Smarter identification:** files already carrying MusicBrainz IDs (Picard, beets) are trusted without a lookup; files fingerprinting cannot place are searched on MusicBrainz by tags, per album folder, and wait for confirmation. AcoustID answers are cached.
+- **Full MusicBrainz tags:** organizing and downloading write Picard-standard recording, release, release-group, artist, and release-track IDs for FLAC/Ogg/Opus, MP3 (including the UFID recording frame), and M4A.
+- **Faster, safer runtime:** scans reuse cached tags for unchanged files, read in parallel, and can be cancelled. All state lives in SQLite (`/data/naviclean.db`; old JSON files are imported once and kept as `*.migrated`). Download jobs and sign-in sessions survive restarts, failed sign-ins are throttled, and the default `admin`/`admin` password must be changed at first sign-in.
+- **Redesigned UI:** grouped navigation with live badges, a live activity bar driven by server-sent events, and new Discover, Downloads, Following, Upgrades, and sectioned Settings pages.
+
+## Changes on `dev` — September 14, 2026
 
 - **Identity before organization:** optional AcoustID/MusicBrainz fingerprint matching, release selection, reusable confirmed identities, and canonical tag writing before moves. TrackKeep identities and prior user confirmations remain authoritative; Spotify matching can be switched off.
 - **Clearer dashboard and scan controls:** Library overview shows Tracks, Duplicate groups, Pending moves, and Identity review, with a three-step Cleanup workflow. Identity review counts tracks awaiting identity confirmation; Organize's broader **Needs action** filter also includes ready moves, conflicts, and missing files. The **Index & scans** panel separates NaviClean's **Run scan** from Navidrome's **Quick scan** and **Full scan**.
@@ -15,7 +25,7 @@ It scans a mounted music library, browses artists, albums, and tracks, previews 
 ## Current defaults
 
 - Web UI: `http://localhost:8080`
-- Login: `admin` / `admin`
+- First sign-in: `admin` / `admin`, after which NaviClean requires a new password
 - Config volume: `/data`
 - Music volume: `/music`
 - Runtime user: `PUID=1000`, `PGID=1000`
@@ -96,6 +106,10 @@ The Discover page can connect to Spotify with client credentials, search catalog
 Provider downloads default to Ogg Opus with a 192 kbps quality cap. Settings offers 160, 192, and 256 kbps Opus caps. These are maximums: valid provider audio below the selected bitrate is kept at source quality instead of being upconverted, while audio above the cap is normalized with `libopus`. If Opus cannot be written because of an audio-format, encoder, ffmpeg, header, or postprocessing failure, NaviClean retries the same source as MP3 by default. MP3 fallback can be disabled or set to 192, 256, or 320 kbps (320 kbps by default), uses `libmp3lame`, and writes ID3v2.3 metadata.
 
 NaviClean provider downloads use the same standard target-path renderer as the organizer and dual-write TrackKeep Identity Tags v1 in the current `trackkeep:*` namespace and the legacy `spotifybu:*` namespace. The fields are `track_id`, `track_uri`, `album_id`, `isrc`, and `identity_version`. Those tags let later scans recognize files as TrackKeep-managed so NaviClean does not keep re-organizing provider downloads, even after a file is moved or renamed. NaviClean reads either namespace in canonical colon, underscore, Apple/iTunes freeform, and ID3/native forms, case-insensitively. It also recognizes M4A comment JSON beginning with `TrackKeep identity ` or the legacy `SpotifyBU identity ` prefix. The legacy namespace and prefix remain supported solely for compatibility with files and companion releases from before the TrackKeep rename. Opus files use Navidrome-compatible Vorbis comments and embed cover art as `METADATA_BLOCK_PICTURE`; the large picture block is passed to ffmpeg through a temporary ffmetadata file so it does not consume command-line argument space.
+
+## Download engine
+
+Requests come from Discover (MusicBrainz, or Spotify when configured), Following, Wanted, and Upgrades. Each track moves through search → score → download → verify → tag → import, and every step streams to the Downloads page live. Settings → Downloads controls the auto-accept and review scores, verification checks, per-codec bitrate floors, source order, Wanted interval, and follow checks. Only download music you are authorized to access; each request asks you to confirm this.
 
 ## Library artwork
 

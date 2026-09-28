@@ -12,6 +12,7 @@ import type {
   OrganizeTrashSelection,
   TrackFile
 } from "../shared/types.js";
+import { isConfirmedIdentityStatus } from "../shared/identity.js";
 import { duplicateKeyForTrack } from "./matching.js";
 import { writeCanonicalTags } from "./canonical-tags.js";
 import { standardNamingFormatDefaults } from "./settings.js";
@@ -508,7 +509,7 @@ function trackIdentificationNeedsReview(track: TrackFile, settings: PrivateSetti
   if (!settings.identification || !status || isTrackKeepManaged(track.managedBy)) {
     return false;
   }
-  if (status === "user-confirmed" || status === "trackkeep-confirmed") {
+  if (isConfirmedIdentityStatus(status)) {
     return false;
   }
   return status !== "fingerprint-and-release-confirmed" || settings.identification.requireReviewBeforeFileChanges;

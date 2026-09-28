@@ -1,9 +1,10 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { test } from "node:test";
+import { clientSource } from "./helpers/client-source.js";
 
 test("Spotify selection wins over stale organizer previews and verifies its result", async () => {
-  const appSource = await fs.readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+  const appSource = await clientSource();
 
   assert.match(appSource, /const showMutationPlan = \(nextPlan: OrganizePlan\)/);
   assert.match(appSource, /previewRequestId\.current \+= 1/);
@@ -12,7 +13,7 @@ test("Spotify selection wins over stale organizer previews and verifies its resu
 });
 
 test("unmatched Navidrome files have a dedicated organizer filter with Spotify resolution", async () => {
-  const appSource = await fs.readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+  const appSource = await clientSource();
 
   assert.match(appSource, /id: "navidrome-unmatched", label: "Navidrome unmatched"/);
   assert.match(appSource, /item\.navidromeEnrichment\?\.status === "unmatched"/);
@@ -20,7 +21,7 @@ test("unmatched Navidrome files have a dedicated organizer filter with Spotify r
 });
 
 test("Diagnostics exposes Spotify resolution and refreshes unmatched files after selection", async () => {
-  const appSource = await fs.readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+  const appSource = await clientSource();
 
   assert.match(appSource, /function UnindexedTable[\s\S]+<th>Resolve<\/th>/);
   assert.match(appSource, /useSpotifyMetadataSearch\(track, onSpotifyResolved\)/);
@@ -28,7 +29,7 @@ test("Diagnostics exposes Spotify resolution and refreshes unmatched files after
 });
 
 test("Diagnostics keeps Spotify resolution before wide detail columns", async () => {
-  const appSource = await fs.readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+  const appSource = await clientSource();
   const styles = await fs.readFile(new URL("../src/client/styles.css", import.meta.url), "utf8");
 
   assert.match(appSource, /<th>Track<\/th>\s*<th>Resolve<\/th>\s*<th>Current path<\/th>/);
@@ -36,7 +37,7 @@ test("Diagnostics keeps Spotify resolution before wide detail columns", async ()
 });
 
 test("Diagnostics renders open Spotify results in a full-width row", async () => {
-  const appSource = await fs.readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+  const appSource = await clientSource();
   const styles = await fs.readFile(new URL("../src/client/styles.css", import.meta.url), "utf8");
 
   assert.match(appSource, /<tr className="unindexed-spotify-row">\s*<td colSpan=\{7\}>/);
