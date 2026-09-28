@@ -608,9 +608,12 @@ export function formatFfmpegError(
 }
 
 function compactFfmpegDiagnostic(stderr: string, context: { sourcePath?: string; targetPath?: string }) {
-  const hiddenPaths = [context.sourcePath, context.targetPath]
-    .filter((filePath): filePath is string => Boolean(filePath))
-    .map((filePath) => path.resolve(filePath));
+  // Hide both the path as given and as resolved: ffmpeg echoes whichever form it was passed.
+  const hiddenPaths = Array.from(new Set(
+    [context.sourcePath, context.targetPath]
+      .filter((filePath): filePath is string => Boolean(filePath))
+      .flatMap((filePath) => [filePath, path.resolve(filePath)])
+  ));
 
   return stderr
     .split(/\r?\n/)

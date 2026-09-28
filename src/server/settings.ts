@@ -1,13 +1,41 @@
 import bcrypt from "bcryptjs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { NamingMode, SettingsUpdate, SettingsView } from "../shared/types.js";
+import type { CatalogProviderId, NamingMode, QualityCodecFamily, SettingsUpdate, SettingsView } from "../shared/types.js";
+
+export type EngineSettings = {
+  /** Candidates at or above this score (0-100) download without review. */
+  autoAcceptScore: number;
+  /** Candidates between this and the auto-accept score wait in the review queue. */
+  reviewScore: number;
+  verifyDuration: boolean;
+  verifyFingerprint: boolean;
+  sourcePriority: CatalogProviderId[];
+  disabledSources: CatalogProviderId[];
+  wantedEnabled: boolean;
+  wantedIntervalMinutes: number;
+  followCheckHours: number;
+  autoDownloadFollowedReleases: boolean;
+};
+
+export type QualitySettings = {
+  /** Lowest acceptable source bitrate per codec family, in kbps. */
+  minimumBitrateKbps: Record<QualityCodecFamily, number>;
+};
+
+export type MusicBrainzSettings = {
+  /** Text search against MusicBrainz for files that fingerprinting could not identify. */
+  textSearchEnabled: boolean;
+  maxTextLookupsPerScan: number;
+  catalogSource: "musicbrainz" | "spotify";
+};
 
 export type PrivateSettings = {
   auth: {
     enabled: boolean;
     username: string;
     passwordHash: string;
+    mustChangePassword?: boolean;
   };
   navidrome: {
     baseUrl: string;
@@ -57,7 +85,61 @@ export type PrivateSettings = {
   cleanup: {
     emptyFolderExclusions: string[];
   };
+  engine?: EngineSettings;
+  quality?: QualitySettings;
+  musicbrainz?: MusicBrainzSettings;
 };
+
+export const defaultEngineSettings: EngineSettings = {
+  autoAcceptScore: 80,
+  reviewScore: 55,
+  verifyDuration: true,
+  verifyFingerprint: true,
+  sourcePriority: ["youtube", "jiosaavn"],
+  disabledSources: [],
+  wantedEnabled: true,
+  wantedIntervalMinutes: 30,
+  followCheckHours: 24,
+  autoDownloadFollowedReleases: false
+};
+
+export const defaultQualitySettings: QualitySettings = {
+  minimumBitrateKbps: {
+    opus: 96,
+    vorbis: 112,
+    aac: 128,
+    mp3: 160,
+    other: 128
+  }
+};
+
+export const defaultMusicBrainzSettings: MusicBrainzSettings = {
+  textSearchEnabled: true,
+  maxTextLookupsPerScan: 300,
+  catalogSource: "musicbrainz"
+};
+
+export function engineSettings(settings: PrivateSettings): EngineSettings {
+  return normalizeEngineSettings(settings.engine);
+}
+
+export function qualitySettings(settings: PrivateSettings): QualitySettings {
+  return normalizeQualitySettings(settings.quality);
+}
+
+export function musicBrainzSettings(settings: PrivateSettings): MusicBrainzSettings {
+  return normalizeMusicBrainzSettings(settings.musicbrainz);
+}
+
+export function passwordProblem(password: string, username: string) {
+  if (password.length < 8) {
+    return "Use at least 8 characters.";
+  }
+  if (password.toLowerCase() === "admin" || password.toLowerCase() === username.toLowerCase()) {
+    return "Choose a password that is not the default or your username.";
+  }
+  return null;
+}
 
 const defaultExtensions = [
   ".flac",
@@ -194,7 +276,10 @@ export function toSettingsView(settings: PrivateSettings): SettingsView {
       colonReplacementFormat: settings.naming.colonReplacementFormat
     },
     scan: settings.scan,
-    cleanup: settings.cleanup
+    cleanup: settings.cleanup,
+    engine: engineSettings(settings),
+    quality: qualitySettings(settings),
+    musicbrainz: musicBrainzSettings(settings)
   };
 }
 
@@ -211,7 +296,10 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
     identification: { ...(current.identification ?? defaultIdentification) },
     naming: { ...current.naming },
     scan: { ...current.scan, extensions: [...current.scan.extensions] },
-    cleanup: { ...current.cleanup, emptyFolderExclusions: [...current.cleanup.emptyFolderExclusions] }
+    cleanup: { ...current.cleanup, emptyFolderExclusions: [...current.cleanup.emptyFolderExclusions] },
+    engine: engineSettings(current),
+    quality: qualitySettings(current),
+    musicbrainz: musicBrainzSettings(current)
   };
 
   if (update.auth) {
@@ -222,8 +310,27 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
       next.auth.username = update.auth.username.trim();
     }
     if (typeof update.auth.password === "string" && update.auth.password.length > 0) {
+      const problem = passwordProblem(update.auth.password, next.auth.username);
+      if (problem) {
+        throw new SettingsValidationError(problem);
+      }
       next.auth.passwordHash = await bcrypt.hash(update.auth.password, 12);
+      next.auth.mustChangePassword = false;
     }
+  }
+
+  if (update.engine) {
+    next.engine = normalizeEngineSettings({ ...next.engine, ...update.engine } as Partial<EngineSettings>);
+  }
+
+  if (update.quality?.minimumBitrateKbps) {
+    next.quality = normalizeQualitySettings({
+      minimumBitrateKbps: { ...next.quality!.minimumBitrateKbps, ...update.quality.minimumBitrateKbps }
+    });
+  }
+
+  if (update.musicbrainz) {
+    next.musicbrainz = normalizeMusicBrainzSettings({ ...next.musicbrainz, ...update.musicbrainz });
   }
 
   if (update.navidrome) {
@@ -317,12 +424,15 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
   return next;
 }
 
+export class SettingsValidationError extends Error {}
+
 async function createDefaultSettings(): Promise<PrivateSettings> {
   return {
     auth: {
       enabled: true,
       username: "admin",
-      passwordHash: await bcrypt.hash("admin", 12)
+      passwordHash: await bcrypt.hash("admin", 12),
+      mustChangePassword: true
     },
     navidrome: {
       baseUrl: "",
@@ -333,7 +443,10 @@ async function createDefaultSettings(): Promise<PrivateSettings> {
     identification: defaultIdentification,
     naming: defaultNaming,
     scan: defaultScan,
-    cleanup: defaultCleanup
+    cleanup: defaultCleanup,
+    engine: defaultEngineSettings,
+    quality: defaultQualitySettings,
+    musicbrainz: defaultMusicBrainzSettings
   };
 }
 
@@ -359,7 +472,8 @@ export function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSet
     auth: {
       enabled: partial.auth?.enabled ?? fallback.auth.enabled,
       username: partial.auth?.username || fallback.auth.username,
-      passwordHash: partial.auth?.passwordHash || getFallbackPasswordHash()
+      passwordHash: partial.auth?.passwordHash || getFallbackPasswordHash(),
+      mustChangePassword: partial.auth?.passwordHash ? partial.auth.mustChangePassword === true : true
     },
     navidrome: {
       baseUrl: trimTrailingSlash(partial.navidrome?.baseUrl || fallback.navidrome.baseUrl),
@@ -370,7 +484,66 @@ export function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSet
     identification: normalizeIdentificationSettings(partial.identification),
     naming: normalizeNamingSettings(fallback.naming, partial.naming),
     scan: normalizeScanSettings(fallback.scan, partial.scan),
-    cleanup: normalizeCleanupSettings(fallback.cleanup, partial.cleanup)
+    cleanup: normalizeCleanupSettings(fallback.cleanup, partial.cleanup),
+    engine: normalizeEngineSettings(partial.engine),
+    quality: normalizeQualitySettings(partial.quality),
+    musicbrainz: normalizeMusicBrainzSettings(partial.musicbrainz)
+  };
+}
+
+const providerIdChoices: CatalogProviderId[] = ["youtube", "jiosaavn"];
+const qualityCodecFamilies: QualityCodecFamily[] = ["opus", "vorbis", "aac", "mp3", "other"];
+
+function normalizeEngineSettings(partial: Partial<EngineSettings> | undefined): EngineSettings {
+  const autoAcceptScore = clampInteger(partial?.autoAcceptScore, 50, 100, defaultEngineSettings.autoAcceptScore);
+  const priority = Array.isArray(partial?.sourcePriority)
+    ? partial.sourcePriority.filter((value): value is CatalogProviderId => providerIdChoices.includes(value))
+    : [];
+
+  return {
+    autoAcceptScore,
+    // Review must sit below auto-accept, otherwise nothing could ever wait for review.
+    reviewScore: Math.min(autoAcceptScore - 1, clampInteger(partial?.reviewScore, 30, 99, defaultEngineSettings.reviewScore)),
+    verifyDuration: typeof partial?.verifyDuration === "boolean" ? partial.verifyDuration : defaultEngineSettings.verifyDuration,
+    verifyFingerprint:
+      typeof partial?.verifyFingerprint === "boolean" ? partial.verifyFingerprint : defaultEngineSettings.verifyFingerprint,
+    sourcePriority: [...new Set([...priority, ...defaultEngineSettings.sourcePriority])],
+    disabledSources: Array.isArray(partial?.disabledSources)
+      ? [...new Set(partial.disabledSources.filter((value): value is CatalogProviderId => providerIdChoices.includes(value)))]
+      : [],
+    wantedEnabled: typeof partial?.wantedEnabled === "boolean" ? partial.wantedEnabled : defaultEngineSettings.wantedEnabled,
+    wantedIntervalMinutes: clampInteger(partial?.wantedIntervalMinutes, 10, 1440, defaultEngineSettings.wantedIntervalMinutes),
+    followCheckHours: clampInteger(partial?.followCheckHours, 1, 168, defaultEngineSettings.followCheckHours),
+    autoDownloadFollowedReleases:
+      typeof partial?.autoDownloadFollowedReleases === "boolean"
+        ? partial.autoDownloadFollowedReleases
+        : defaultEngineSettings.autoDownloadFollowedReleases
+  };
+}
+
+function normalizeQualitySettings(partial: Partial<QualitySettings> | undefined): QualitySettings {
+  const values = partial?.minimumBitrateKbps ?? ({} as Partial<Record<QualityCodecFamily, number>>);
+  return {
+    minimumBitrateKbps: Object.fromEntries(
+      qualityCodecFamilies.map((family) => [
+        family,
+        clampInteger(values[family], 0, 320, defaultQualitySettings.minimumBitrateKbps[family])
+      ])
+    ) as Record<QualityCodecFamily, number>
+  };
+}
+
+function normalizeMusicBrainzSettings(partial: Partial<MusicBrainzSettings> | undefined): MusicBrainzSettings {
+  return {
+    textSearchEnabled:
+      typeof partial?.textSearchEnabled === "boolean" ? partial.textSearchEnabled : defaultMusicBrainzSettings.textSearchEnabled,
+    maxTextLookupsPerScan: clampInteger(
+      partial?.maxTextLookupsPerScan,
+      0,
+      5000,
+      defaultMusicBrainzSettings.maxTextLookupsPerScan
+    ),
+    catalogSource: partial?.catalogSource === "spotify" ? "spotify" : "musicbrainz"
   };
 }
 
