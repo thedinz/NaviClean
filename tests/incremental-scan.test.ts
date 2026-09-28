@@ -19,7 +19,12 @@ const recordingId = "8f3471b5-7e6a-48da-86a9-c1c07a0f47ae";
 const releaseId = "d2c0b4c5-3ba1-4dc8-a1b6-8f1b8b7d2a11";
 const releaseGroupId = "0b4f3c48-3f7b-4a2f-9df1-3c1b6f1d7a55";
 
+// Keep MusicBrainz text search offline: every lookup finds nothing.
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async () => Response.json({ releases: [], recordings: [] });
+
 test.after(async () => {
+  globalThis.fetch = originalFetch;
   closeDbForTests();
   await fs.rm(root, { recursive: true, force: true });
 });
