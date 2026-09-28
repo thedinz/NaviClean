@@ -56,7 +56,7 @@ export function canonicalMetadataArgs(track: TrackFile, extension = track.extens
  * Picard's tag names per container. Vorbis comments and ID3 TXXX frames can be written by
  * ffmpeg; the ID3 recording ID (a UFID frame) and every MP4 freeform atom need taglib.
  */
-function musicBrainzMetadataPairs(ids: TrackMusicBrainzIds, family: TagFamily): Array<[string, string]> {
+export function musicBrainzMetadataPairs(ids: TrackMusicBrainzIds, family: TagFamily): Array<[string, string]> {
   if (family === "vorbis") {
     return [
       ["MUSICBRAINZ_TRACKID", ids.recordingId ?? ""],
@@ -151,7 +151,7 @@ export function writeTagLibMusicBrainzIds(filePath: string, ids: TrackMusicBrain
   }
 }
 
-function tagFamily(extension: string): TagFamily {
+export function tagFamily(extension: string): TagFamily {
   const normalized = extension.toLowerCase().startsWith(".") ? extension.toLowerCase() : `.${extension.toLowerCase()}`;
   if (vorbisExtensions.has(normalized)) return "vorbis";
   if (normalized === ".mp3") return "id3";

@@ -45,11 +45,11 @@ import {
 import { listNonMusicFileGroup, listNonMusicFiles, trashNonMusicFileGroups, trashNonMusicFiles } from "./non-music.js";
 import { applyOrganizePlan, buildOrganizePlan, trashOrganizeCandidate, trashOrganizeCandidates } from "./organizer.js";
 import { setTrackOrganizationSkipped } from "./organize-skip.js";
-import {
-  getSpotifyCatalogDownloadJob,
-  previewSpotifyCatalogDownloads,
-  startSpotifyCatalogDownloadJob
-} from "./providers.js";
+import { publishEngineStatus, setEngineStatusSettingsLoader, startBackgroundWork } from "./engine/background.js";
+import { initializeDownloadEngine } from "./engine/jobs.js";
+import { publish, subscribe } from "./events.js";
+import { pruneHttpCache } from "./http-cache.js";
+import { registerEngineRoutes } from "./routes/engine.js";
 import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin, restoreRecycleBinItems } from "./recycle-bin.js";
 import { ScanCancelledError, scanLibrary } from "./scanner.js";
 import { loadSettings, SettingsValidationError, toSettingsView, updateSettings } from "./settings.js";
@@ -281,66 +281,7 @@ app.post("/api/spotify/download-plan", asyncHandler(async (req, res) => {
   });
 }));
 
-app.post("/api/spotify/download-preview", asyncHandler(async (req, res) => {
-  const albumId = String(req.body.spotifyAlbumId || "");
-
-  if (!albumId) {
-    res.status(400).json({ error: "spotifyAlbumId is required" });
-    return;
-  }
-
-  const catalog = await loadCatalog();
-  const settings = await loadSettingsForPlanning();
-
-  res.json({
-    preview: await previewSpotifyCatalogDownloads(
-      settings,
-      catalog.tracks,
-      albumId,
-      Array.isArray(req.body.trackIds) ? req.body.trackIds.map(String) : undefined
-    )
-  });
-}));
-
-app.post("/api/spotify/download-jobs", asyncHandler(async (req, res) => {
-  const albumId = String(req.body.spotifyAlbumId || "");
-
-  if (!albumId) {
-    res.status(400).json({ error: "spotifyAlbumId is required" });
-    return;
-  }
-
-  const catalog = await loadCatalog();
-  const settings = await loadSettingsForPlanning();
-
-  res.json(await startSpotifyCatalogDownloadJob({
-    albumId,
-    bulkRiskAccepted: Boolean(req.body.bulkRiskAccepted),
-    localTracks: catalog.tracks,
-    rightsConfirmed: Boolean(req.body.rightsConfirmed),
-    reviewedCandidates: Array.isArray(req.body.reviewedCandidates)
-      ? req.body.reviewedCandidates
-          .filter((item: unknown) => Boolean(item) && typeof item === "object")
-          .map((item: { candidate?: unknown; trackId?: unknown }) => ({
-            candidate: item.candidate,
-            trackId: String(item.trackId ?? "")
-          })) as Parameters<typeof startSpotifyCatalogDownloadJob>[0]["reviewedCandidates"]
-      : undefined,
-    settings,
-    trackIds: Array.isArray(req.body.trackIds) ? req.body.trackIds.map(String) : undefined
-  }));
-}));
-
-app.get("/api/spotify/download-jobs/:jobId", (req, res) => {
-  const job = getSpotifyCatalogDownloadJob(String(req.params.jobId));
-
-  if (!job) {
-    res.status(404).json({ error: "Download job not found" });
-    return;
-  }
-
-  res.json({ job });
-});
+registerEngineRoutes(app, loadSettingsForPlanning, () => [{ type: "scan", status: scanStatus }]);
 
 app.get("/api/scan/status", (_req, res) => {
   res.json(scanStatus);
@@ -1006,7 +947,33 @@ app.listen(port, () => {
     .catch((error) => console.error("Failed to schedule daily scan:", error));
   void flagDefaultPassword().catch((error) => console.error("Failed to check the default password:", error));
   pruneExpiredSessions();
+  pruneHttpCache();
+  initializeDownloadEngine(loadSettingsForPlanning);
+  setEngineStatusSettingsLoader(loadSettingsForPlanning);
+  startBackgroundWork(loadSettingsForPlanning);
 });
+
+// Library changes made by the download engine invalidate the cached organize plan.
+subscribe((event) => {
+  if (event.type === "catalog-changed") {
+    invalidateOrganizeEvaluationCache();
+  }
+  if (event.type === "download-job" && (event.job.status === "review" || event.job.status === "completed" || event.job.status === "partial" || event.job.status === "failed")) {
+    void publishEngineStatus();
+  }
+});
+
+let lastScanPublishAt = 0;
+
+/** Streams scan progress, at most a few times a second, to connected browsers. */
+function publishScanStatus(force = false) {
+  const now = Date.now();
+  if (!force && now - lastScanPublishAt < 400) {
+    return;
+  }
+  lastScanPublishAt = now;
+  publish({ type: "scan", status: { ...scanStatus } });
+}
 
 function trustProxySetting() {
   const value = (process.env.NAVICLEAN_TRUST_PROXY || "1").trim().toLowerCase();
@@ -1072,6 +1039,7 @@ async function runScan() {
     const settings = await loadSettingsForPlanning();
     const result = await scanLibrary(settings, (update) => {
       Object.assign(scanStatus, update, { progressAt: new Date().toISOString() });
+      publishScanStatus(Boolean(update.phase));
     }, { signal: controller.signal });
     invalidateOrganizeEvaluationCache();
     scanStatus.errors = result.errors;
@@ -1090,6 +1058,8 @@ async function runScan() {
     scanAbortController = null;
     scanStatus.running = false;
     scanStatus.finishedAt = new Date().toISOString();
+    publishScanStatus(true);
+    publish({ type: "catalog-changed", updatedAt: scanStatus.finishedAt });
   }
 }
 

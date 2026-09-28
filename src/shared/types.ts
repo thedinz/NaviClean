@@ -204,7 +204,244 @@ export type CatalogProviderCandidate = {
   title: string;
   url: string;
   verified: boolean;
+  /** Scoring notes such as "topic-channel", "isrc-match", or "version:live". */
+  flags?: string[];
+  channel?: string;
 };
+
+/** One track to acquire, independent of whether MusicBrainz or Spotify described it. */
+export type DownloadTrack = {
+  /** Stable identity: "mb:<recordingId>" / "mb:<releaseTrackId>" or "spotify:<trackId>". */
+  key: string;
+  catalog: "musicbrainz" | "spotify";
+  title: string;
+  artists: string[];
+  album: string;
+  albumArtist: string;
+  albumType: string;
+  trackNumber: number;
+  discNumber: number;
+  trackTotal: number | null;
+  discTotal: number | null;
+  releaseDate: string;
+  releaseYear: number | null;
+  durationMs: number;
+  isrc: string | null;
+  coverUrl: string | null;
+  musicbrainz?: TrackMusicBrainzIds;
+  spotify?: { trackId: string; albumId: string; url: string };
+};
+
+export type DownloadJobStatus = "queued" | "running" | "review" | "completed" | "partial" | "failed" | "cancelled";
+
+export type DownloadItemStatus =
+  | "pending"
+  | "searching"
+  | "review"
+  | "downloading"
+  | "verifying"
+  | "completed"
+  | "skipped"
+  | "failed"
+  | "cancelled";
+
+export type DownloadVerification = {
+  durationDeltaSeconds: number | null;
+  sourceBitrateKbps: number | null;
+  sourceCodec: string | null;
+  fingerprint: "match" | "mismatch" | "inconclusive" | "skipped";
+  acoustIdScore: number | null;
+  notes: string[];
+};
+
+export type DownloadAttempt = {
+  candidateId: string;
+  at: string;
+  reason: "duration-mismatch" | "fingerprint-mismatch" | "low-quality" | "download-failed" | "not-better";
+  message: string;
+};
+
+export type DownloadJobItem = {
+  id: string;
+  track: DownloadTrack;
+  status: DownloadItemStatus;
+  candidates: CatalogProviderCandidate[];
+  selectedCandidateId?: string;
+  attempts: DownloadAttempt[];
+  verification?: DownloadVerification;
+  message?: string;
+  error?: string;
+  targetRelativePath: string;
+  relativePath?: string;
+  /** Set when a person approved the selected candidate in the review queue. */
+  approvedByUser?: boolean;
+  /** Library track this download is meant to replace (quality upgrades). */
+  replaceTrackId?: string;
+  startedAt?: string;
+  completedAt?: string;
+};
+
+export type DownloadJob = {
+  id: string;
+  title: string;
+  subtitle: string;
+  origin: "manual" | "wanted" | "follow" | "upgrade";
+  catalog: "musicbrainz" | "spotify";
+  coverUrl: string | null;
+  status: DownloadJobStatus;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  counts: Record<DownloadItemStatus, number> & { total: number };
+  items: DownloadJobItem[];
+};
+
+export type DownloadJobSummary = Omit<DownloadJob, "items">;
+
+export type DownloadReviewItem = {
+  jobId: string;
+  jobTitle: string;
+  item: DownloadJobItem;
+};
+
+export type WantedStatus = "waiting" | "searching" | "paused" | "found";
+
+export type WantedItem = {
+  id: string;
+  track: DownloadTrack;
+  status: WantedStatus;
+  attempts: number;
+  reason: string;
+  lastError: string | null;
+  nextAttemptAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type QuarantineEntry = {
+  candidateId: string;
+  trackKey: string;
+  reason: string;
+  detail: string;
+  createdAt: string;
+};
+
+export type FollowedArtist = {
+  artistId: string;
+  name: string;
+  disambiguation: string;
+  autoDownload: boolean;
+  createdAt: string;
+  lastCheckedAt: string | null;
+  newReleaseCount: number;
+};
+
+export type ArtistRelease = {
+  id: string;
+  artistId: string;
+  artistName: string;
+  title: string;
+  primaryType: string;
+  secondaryTypes: string[];
+  firstReleaseDate: string;
+  status: "new" | "existing" | "dismissed" | "queued";
+  seen: boolean;
+  firstSeenAt: string;
+  inLibrary: boolean;
+};
+
+export type CatalogArtistSummary = {
+  id: string;
+  name: string;
+  disambiguation: string;
+  country: string;
+  type: string;
+  score: number;
+  lifeSpan: string;
+  localTrackCount: number;
+};
+
+export type CatalogReleaseGroup = {
+  id: string;
+  title: string;
+  primaryType: string;
+  secondaryTypes: string[];
+  firstReleaseDate: string;
+  year: number | null;
+  coverUrl: string;
+  artistCredit: string;
+  localTrackCount: number;
+};
+
+export type CatalogArtistView = {
+  artist: CatalogArtistSummary & { genres: string[] };
+  followed: boolean;
+  releaseGroups: CatalogReleaseGroup[];
+};
+
+export type CatalogEdition = {
+  id: string;
+  title: string;
+  date: string;
+  country: string;
+  status: string;
+  formats: string[];
+  trackCount: number;
+  disambiguation: string;
+};
+
+export type CatalogTrack = {
+  /** Release track MBID, used to select tracks for download. */
+  id: string;
+  recordingId: string;
+  title: string;
+  artists: string[];
+  discNumber: number;
+  trackNumber: number;
+  duration: number | null;
+  isrc: string | null;
+  present: boolean;
+  queued: boolean;
+};
+
+export type CatalogReleaseView = {
+  releaseGroup: CatalogReleaseGroup;
+  release: CatalogEdition & { artist: string; artistIds: string[]; coverUrl: string; labels: string[] };
+  preferredReleaseId: string;
+  editions: CatalogEdition[];
+  tracks: CatalogTrack[];
+  localTrackCount: number;
+};
+
+export type UpgradeCandidate = {
+  track: TrackFile;
+  codecFamily: QualityCodecFamily;
+  bitrateKbps: number | null;
+  minimumKbps: number;
+  reason: string;
+};
+
+export type UpgradeView = {
+  totalTracks: number;
+  candidates: UpgradeCandidate[];
+};
+
+export type EngineStatus = {
+  activeJobs: number;
+  reviewCount: number;
+  wantedCount: number;
+  newReleaseCount: number;
+  sources: Array<{ id: CatalogProviderId; label: string; available: boolean; enabled: boolean; message: string }>;
+};
+
+/** Messages streamed to the browser over /api/events. */
+export type ServerEvent =
+  | { type: "scan"; status: ScanStatus }
+  | { type: "download-job"; job: DownloadJobSummary }
+  | { type: "download-item"; jobId: string; item: DownloadJobItem }
+  | { type: "engine"; status: EngineStatus }
+  | { type: "catalog-changed"; updatedAt: string | null }
+  | { type: "convert-job"; job: AudioConvertJob };
 
 export type SpotifyCatalogDownloadPreviewItem = {
   candidates: CatalogProviderCandidate[];
