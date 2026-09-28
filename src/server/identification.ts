@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type {
@@ -8,34 +7,19 @@ import type {
   TrackIdentificationStatus,
   TrackMetadataSource
 } from "../shared/types.js";
+import { FingerprintCache, IdentityStore, type FingerprintResult, type StoredIdentity } from "./identity-store.js";
 import { buildDuplicateKey } from "./matching.js";
 import { targetForTrack } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
-import { getDataDir } from "./settings.js";
 import { isTrackKeepManaged } from "./trackkeep.js";
 import { sha1 } from "./utils.js";
 
 const execFileAsync = promisify(execFile);
-const identityStorePath = path.join(getDataDir(), "track-identities.json");
-const fingerprintCachePath = path.join(getDataDir(), "fingerprint-cache.json");
 const minimumAutomaticScore = 0.95;
 const acoustIdResultLimit = 5;
 const acoustIdMinimumSpacingMs = 350;
 let acoustIdQueue: Promise<void> = Promise.resolve();
 let lastAcoustIdRequestAt = 0;
-
-type FingerprintResult = { duration: number; fingerprint: string };
-type StoredIdentity = {
-  fingerprint: string;
-  source: "trackkeep" | "spotify" | "musicbrainz" | "trusted-path";
-  candidate: TrackIdentificationCandidate;
-  spotifyTrackId?: string;
-  spotifyAlbumId?: string;
-  confirmedAt: string;
-};
-type IdentityStoreFile = { entries: StoredIdentity[] };
-type FingerprintCacheEntry = FingerprintResult & { absolutePath: string; size: number; mtimeMs: number };
-type FingerprintCacheFile = { entries: FingerprintCacheEntry[] };
 
 type AcoustIdArtist = { id?: string; name?: string };
 type AcoustIdTrack = {
@@ -84,8 +68,8 @@ export async function identifyTracks(settings: PrivateSettings, tracks: TrackFil
   }
 
   const warnings: string[] = [];
-  const identities = await loadIdentityStore();
-  const fingerprintCache = await loadFingerprintCache();
+  const identities = IdentityStore.load();
+  const fingerprintCache = new FingerprintCache();
   let fingerprintUnavailable = false;
   let lookupFailures = 0;
 
@@ -209,8 +193,8 @@ export async function identifyTracks(settings: PrivateSettings, tracks: TrackFil
   }, onProgress);
 
   const resolved = resolveReleaseConsensus(prepared, settings);
-  await saveIdentityStore(identities);
-  await saveFingerprintCache(fingerprintCache);
+  identities.flush();
+  fingerprintCache.flush();
 
   if (fingerprintUnavailable) {
     warnings.push("Audio identification: fpcalc is unavailable. Install Chromaprint tools or use the Docker image.");
@@ -287,7 +271,7 @@ export async function confirmIdentificationCandidate(
     throw new Error("This track does not have a reusable audio fingerprint.");
   }
 
-  const identities = await loadIdentityStore();
+  const identities = IdentityStore.load();
   const selectedFolder = path.posix.dirname(track.relativePath.replace(/\\/g, "/"));
   const updatedTrackIds: string[] = [];
   const nextTracks = tracks.map((item) => {
@@ -308,7 +292,7 @@ export async function confirmIdentificationCandidate(
     updatedTrackIds.push(item.id);
     return confirmed;
   });
-  await saveIdentityStore(identities);
+  identities.flush();
   return {
     tracks: nextTracks,
     updatedTrackIds
@@ -316,8 +300,8 @@ export async function confirmIdentificationCandidate(
 }
 
 export async function rememberConfirmedTrackIdentities(tracks: TrackFile[], source: "spotify" | "trusted-path") {
-  const identities = await loadIdentityStore();
-  const cache = await loadFingerprintCache();
+  const identities = IdentityStore.load();
+  const cache = new FingerprintCache();
   for (const track of tracks) {
     try {
       const fingerprint = await fingerprintTrack(track, cache);
@@ -326,8 +310,8 @@ export async function rememberConfirmedTrackIdentities(tracks: TrackFile[], sour
       // Path-based overrides remain available when the optional fingerprint tool cannot read a file.
     }
   }
-  await saveIdentityStore(identities);
-  await saveFingerprintCache(cache);
+  identities.flush();
+  cache.flush();
 }
 
 export function identificationNeedsReview(track: TrackFile, settings: PrivateSettings) {
@@ -477,13 +461,18 @@ function storedIdentityFromCandidate(
   return { fingerprint, source, candidate, confirmedAt: new Date().toISOString() };
 }
 
-async function fingerprintTrack(track: TrackFile, cache: Map<string, FingerprintCacheEntry>) {
-  const cacheKey = fingerprintCacheKey(track.absolutePath, track.size, track.mtimeMs);
-  const cached = cache.get(cacheKey);
+async function fingerprintTrack(track: TrackFile, cache: FingerprintCache) {
+  const cached = cache.lookup(track);
   if (cached) {
-    return { duration: cached.duration, fingerprint: cached.fingerprint };
+    return cached;
   }
-  const { stdout } = await execFileAsync("fpcalc", ["-json", track.absolutePath], {
+  const result = await fingerprintFile(track.absolutePath);
+  cache.store(track, result);
+  return result;
+}
+
+export async function fingerprintFile(filePath: string): Promise<FingerprintResult> {
+  const { stdout } = await execFileAsync("fpcalc", ["-json", filePath], {
     encoding: "utf8",
     maxBuffer: 10 * 1024 * 1024,
     timeout: 120_000
@@ -492,9 +481,7 @@ async function fingerprintTrack(track: TrackFile, cache: Map<string, Fingerprint
   if (!parsed.fingerprint || !Number.isFinite(parsed.duration) || Number(parsed.duration) <= 0) {
     throw new Error("fpcalc did not return a usable fingerprint");
   }
-  const result = { duration: Math.round(Number(parsed.duration)), fingerprint: parsed.fingerprint };
-  cache.set(cacheKey, { ...result, absolutePath: path.resolve(track.absolutePath), size: track.size, mtimeMs: track.mtimeMs });
-  return result;
+  return { duration: Math.round(Number(parsed.duration)), fingerprint: parsed.fingerprint };
 }
 
 class AcoustIdLookupError extends Error {}
@@ -665,50 +652,6 @@ function uniqueValue(values: string[]) {
 
 function withIdentification(track: TrackFile, identification: NonNullable<TrackFile["identification"]>): TrackFile {
   return { ...track, identification };
-}
-
-async function loadIdentityStore() {
-  try {
-    const parsed = JSON.parse(await fs.readFile(identityStorePath, "utf8")) as IdentityStoreFile;
-    return new Map((parsed.entries ?? []).filter((entry) => entry.fingerprint).map((entry) => [entry.fingerprint, entry]));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return new Map<string, StoredIdentity>();
-    }
-    throw error;
-  }
-}
-
-async function saveIdentityStore(entries: Map<string, StoredIdentity>) {
-  await atomicWrite(identityStorePath, { entries: Array.from(entries.values()) } satisfies IdentityStoreFile);
-}
-
-async function loadFingerprintCache() {
-  try {
-    const parsed = JSON.parse(await fs.readFile(fingerprintCachePath, "utf8")) as FingerprintCacheFile;
-    return new Map((parsed.entries ?? []).map((entry) => [fingerprintCacheKey(entry.absolutePath, entry.size, entry.mtimeMs), entry]));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return new Map<string, FingerprintCacheEntry>();
-    }
-    throw error;
-  }
-}
-
-async function saveFingerprintCache(entries: Map<string, FingerprintCacheEntry>) {
-  const newest = Array.from(entries.values()).sort((left, right) => right.mtimeMs - left.mtimeMs).slice(0, 100_000);
-  await atomicWrite(fingerprintCachePath, { entries: newest } satisfies FingerprintCacheFile);
-}
-
-function fingerprintCacheKey(absolutePath: string, size: number, mtimeMs: number) {
-  return `${path.resolve(absolutePath).toLowerCase()}|${size}|${mtimeMs}`;
-}
-
-async function atomicWrite(filePath: string, payload: unknown) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.tmp`;
-  await fs.writeFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-  await fs.rename(tempPath, filePath);
 }
 
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>, onProgress?: (completed: number) => void) {

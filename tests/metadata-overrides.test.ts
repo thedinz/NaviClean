@@ -133,6 +133,8 @@ test("user metadata decisions survive later scans whether Navidrome matches or n
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.NAVICLEAN_DATA_DIR;
+    // Windows cannot remove the temporary database while it is still open.
+    (await import("../src/server/db.js")).closeDbForTests();
     await fs.rm(root, { force: true, recursive: true });
   }
 });

@@ -2,7 +2,34 @@ export type AuthInfo = {
   advancedDiagnosticsEnabled: boolean;
   authEnabled: boolean;
   authenticated: boolean;
+  /** True while the account still uses the shipped default password. */
+  mustChangePassword: boolean;
   username: string | null;
+};
+
+export type QualityCodecFamily = "opus" | "vorbis" | "aac" | "mp3" | "other";
+
+export type EngineSettingsView = {
+  autoAcceptScore: number;
+  reviewScore: number;
+  verifyDuration: boolean;
+  verifyFingerprint: boolean;
+  sourcePriority: CatalogProviderId[];
+  disabledSources: CatalogProviderId[];
+  wantedEnabled: boolean;
+  wantedIntervalMinutes: number;
+  followCheckHours: number;
+  autoDownloadFollowedReleases: boolean;
+};
+
+export type QualitySettingsView = {
+  minimumBitrateKbps: Record<QualityCodecFamily, number>;
+};
+
+export type MusicBrainzSettingsView = {
+  textSearchEnabled: boolean;
+  maxTextLookupsPerScan: number;
+  catalogSource: "musicbrainz" | "spotify";
 };
 
 export type NavidromeSettingsView = {
@@ -268,6 +295,9 @@ export type SettingsView = {
   naming: NamingSettings;
   scan: ScanSettings;
   cleanup: CleanupSettings;
+  engine: EngineSettingsView;
+  quality: QualitySettingsView;
+  musicbrainz: MusicBrainzSettingsView;
 };
 
 export type SettingsUpdate = {
@@ -302,6 +332,9 @@ export type SettingsUpdate = {
   naming?: Partial<NamingSettings>;
   scan?: Partial<ScanSettings>;
   cleanup?: Partial<CleanupSettings>;
+  engine?: Partial<EngineSettingsView>;
+  quality?: { minimumBitrateKbps?: Partial<Record<QualityCodecFamily, number>> };
+  musicbrainz?: Partial<MusicBrainzSettingsView>;
 };
 
 export type NavidromeMetadataMatchMethod =

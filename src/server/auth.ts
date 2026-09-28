@@ -1,46 +1,53 @@
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
+import type { AuthInfo } from "../shared/types.js";
+import { execute, queryOne } from "./db.js";
 import { advancedDiagnosticsEnabled } from "./diagnostics.js";
-import { loadSettings } from "./settings.js";
+import { loadSettings, passwordProblem, saveSettings } from "./settings.js";
 
-type Session = {
-  username: string;
-  expiresAt: number;
-};
-
-const sessions = new Map<string, Session>();
 const cookieName = "naviclean_session";
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 14;
+// Sliding expiry is only persisted once this much of the window has elapsed, to avoid a write per request.
+const sessionRefreshIntervalMs = 1000 * 60 * 60;
+const loginWindowMs = 1000 * 60 * 15;
+const maxLoginFailures = 5;
+const loginFailures = new Map<string, number[]>();
 
-export async function login(username: string, password: string) {
+export class LoginThrottledError extends Error {
+  constructor(readonly retryAfterSeconds: number) {
+    super(`Too many failed sign-in attempts. Try again in ${Math.ceil(retryAfterSeconds / 60)} minute(s).`);
+  }
+}
+
+export async function login(username: string, password: string, clientKey = "") {
+  const throttleKey = `${clientKey}|${username.toLowerCase()}`;
+  const retryAfter = loginRetryAfterSeconds(throttleKey);
+
+  if (retryAfter > 0) {
+    throw new LoginThrottledError(retryAfter);
+  }
+
   const settings = await loadSettings();
+  const valid = username === settings.auth.username && (await bcrypt.compare(password, settings.auth.passwordHash));
 
-  if (username !== settings.auth.username) {
-    return null;
-  }
-
-  const valid = await bcrypt.compare(password, settings.auth.passwordHash);
   if (!valid) {
+    recordLoginFailure(throttleKey);
     return null;
   }
 
-  const token = crypto.randomUUID();
-  sessions.set(token, {
-    username,
-    expiresAt: Date.now() + sessionTtlMs
-  });
-  return token;
+  loginFailures.delete(throttleKey);
+  return createSession(username);
 }
 
 export function logout(req: Request) {
   const token = readSessionCookie(req);
   if (token) {
-    sessions.delete(token);
+    execute("DELETE FROM sessions WHERE token_hash = ?", hashToken(token));
   }
 }
 
-export async function getAuthInfo(req: Request) {
+export async function getAuthInfo(req: Request): Promise<AuthInfo> {
   const settings = await loadSettings();
 
   if (!settings.auth.enabled) {
@@ -48,6 +55,7 @@ export async function getAuthInfo(req: Request) {
       advancedDiagnosticsEnabled: advancedDiagnosticsEnabled(),
       authEnabled: false,
       authenticated: true,
+      mustChangePassword: false,
       username: settings.auth.username
     };
   }
@@ -57,6 +65,7 @@ export async function getAuthInfo(req: Request) {
     advancedDiagnosticsEnabled: advancedDiagnosticsEnabled(),
     authEnabled: true,
     authenticated: Boolean(session),
+    mustChangePassword: Boolean(session && settings.auth.mustChangePassword),
     username: session?.username || null
   };
 }
@@ -64,12 +73,75 @@ export async function getAuthInfo(req: Request) {
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const settings = await loadSettings();
 
-  if (!settings.auth.enabled || readSession(req)) {
+  if (!settings.auth.enabled) {
     next();
     return;
   }
 
-  res.status(401).json({ error: "Authentication required" });
+  if (!readSession(req)) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+
+  if (settings.auth.mustChangePassword) {
+    res.status(403).json({
+      code: "password-change-required",
+      error: "Change the default password before using NaviClean."
+    });
+    return;
+  }
+
+  next();
+}
+
+/** Changes the sign-in password after verifying the current one, and signs out every other session. */
+export async function changePassword(req: Request, currentPassword: string, newPassword: string) {
+  const settings = await loadSettings();
+  const session = settings.auth.enabled ? readSession(req) : null;
+
+  if (settings.auth.enabled && !session) {
+    throw new PasswordChangeError(401, "Authentication required");
+  }
+
+  if (!(await bcrypt.compare(currentPassword, settings.auth.passwordHash))) {
+    throw new PasswordChangeError(400, "The current password is incorrect.");
+  }
+
+  const problem = passwordProblem(newPassword, settings.auth.username);
+  if (problem) {
+    throw new PasswordChangeError(400, problem);
+  }
+
+  settings.auth.passwordHash = await bcrypt.hash(newPassword, 12);
+  settings.auth.mustChangePassword = false;
+  await saveSettings(settings);
+
+  const currentToken = readSessionCookie(req);
+  execute("DELETE FROM sessions WHERE token_hash != ?", currentToken ? hashToken(currentToken) : "");
+}
+
+export class PasswordChangeError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
+}
+
+/** Flags installs still using the shipped admin/admin credentials so the UI can require a change. */
+export async function flagDefaultPassword() {
+  const settings = await loadSettings();
+
+  if (settings.auth.mustChangePassword || !settings.auth.enabled) {
+    return;
+  }
+
+  if (await bcrypt.compare("admin", settings.auth.passwordHash)) {
+    settings.auth.mustChangePassword = true;
+    await saveSettings(settings);
+  }
+}
+
+export function pruneExpiredSessions() {
+  execute("DELETE FROM sessions WHERE expires_at < ?", Date.now());
 }
 
 export function setSessionCookie(req: Request, res: Response, token: string) {
@@ -90,24 +162,67 @@ export function clearSessionCookie(req: Request, res: Response) {
   });
 }
 
+function createSession(username: string) {
+  const token = crypto.randomBytes(32).toString("base64url");
+  const now = Date.now();
+  execute(
+    "INSERT INTO sessions (token_hash, username, created_at, expires_at) VALUES (?, ?, ?, ?)",
+    hashToken(token),
+    username,
+    now,
+    now + sessionTtlMs
+  );
+  return token;
+}
+
 function readSession(req: Request) {
   const token = readSessionCookie(req);
   if (!token) {
     return null;
   }
 
-  const session = sessions.get(token);
+  const tokenHash = hashToken(token);
+  const session = queryOne<{ username: string; expires_at: number }>(
+    "SELECT username, expires_at FROM sessions WHERE token_hash = ?",
+    tokenHash
+  );
   if (!session) {
     return null;
   }
 
-  if (session.expiresAt < Date.now()) {
-    sessions.delete(token);
+  const now = Date.now();
+  if (session.expires_at < now) {
+    execute("DELETE FROM sessions WHERE token_hash = ?", tokenHash);
     return null;
   }
 
-  session.expiresAt = Date.now() + sessionTtlMs;
-  return session;
+  if (session.expires_at - now < sessionTtlMs - sessionRefreshIntervalMs) {
+    execute("UPDATE sessions SET expires_at = ? WHERE token_hash = ?", now + sessionTtlMs, tokenHash);
+  }
+
+  return { username: session.username };
+}
+
+function hashToken(token: string) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function loginRetryAfterSeconds(key: string) {
+  const now = Date.now();
+  const recent = (loginFailures.get(key) ?? []).filter((at) => now - at < loginWindowMs);
+  loginFailures.set(key, recent);
+
+  if (recent.length < maxLoginFailures) {
+    return 0;
+  }
+
+  return Math.max(1, Math.ceil((recent[0] + loginWindowMs - now) / 1000));
+}
+
+function recordLoginFailure(key: string) {
+  const failures = loginFailures.get(key) ?? [];
+  failures.push(Date.now());
+  loginFailures.set(key, failures.slice(-maxLoginFailures));
 }
 
 function readSessionCookie(req: Request) {
@@ -116,14 +231,18 @@ function readSessionCookie(req: Request) {
     return null;
   }
 
-  const cookies = Object.fromEntries(
-    cookie.split(";").map((part) => {
-      const [name, ...rest] = part.trim().split("=");
-      return [decodeURIComponent(name), decodeURIComponent(rest.join("="))];
-    })
-  );
+  for (const part of cookie.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    try {
+      if (decodeURIComponent(name) === cookieName) {
+        return decodeURIComponent(rest.join("=")) || null;
+      }
+    } catch {
+      // Ignore malformed cookies from other applications on the same host.
+    }
+  }
 
-  return cookies[cookieName] || null;
+  return null;
 }
 
 function sameSiteCookieMode() {

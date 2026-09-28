@@ -436,6 +436,7 @@ function Shell({
         advancedDiagnosticsEnabled: auth.advancedDiagnosticsEnabled,
         authEnabled: true,
         authenticated: false,
+        mustChangePassword: false,
         username: null
       });
     } catch (caught) {
@@ -5117,6 +5118,7 @@ function SettingsPage({
         advancedDiagnosticsEnabled,
         authEnabled: next.auth.enabled,
         authenticated: true,
+        mustChangePassword: false,
         username: next.auth.username
       });
       setNotice("Saved");

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type {
   AudioConvertQuality,
   AudioConvertTargetFormat,
+  AuthInfo,
   NavidromeScanStatus,
   OrganizePlan,
   OrganizeTrashSelection,
@@ -12,7 +13,19 @@ import type {
   TrackFile,
   WorkflowState
 } from "../shared/types.js";
-import { clearSessionCookie, getAuthInfo, login, logout, requireAuth, setSessionCookie } from "./auth.js";
+import {
+  changePassword,
+  clearSessionCookie,
+  flagDefaultPassword,
+  getAuthInfo,
+  login,
+  LoginThrottledError,
+  logout,
+  PasswordChangeError,
+  pruneExpiredSessions,
+  requireAuth,
+  setSessionCookie
+} from "./auth.js";
 import { createStats, loadCatalog, saveCatalog } from "./catalog.js";
 import { getActiveAudioConvertJob, getAudioConvertJob, listAudioConvertView, startAudioConvertJob } from "./converter.js";
 import { advancedDiagnosticsEnabled } from "./diagnostics.js";
@@ -39,7 +52,7 @@ import {
 } from "./providers.js";
 import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin, restoreRecycleBinItems } from "./recycle-bin.js";
 import { scanLibrary } from "./scanner.js";
-import { loadSettings, toSettingsView, updateSettings } from "./settings.js";
+import { loadSettings, SettingsValidationError, toSettingsView, updateSettings } from "./settings.js";
 import { resolveTrackMetadataFromSpotify } from "./spotify-metadata.js";
 import { fetchNavidromeArtwork, getNavidromeScanStatus, startNavidromeScan, testNavidromeConnection } from "./navidrome.js";
 import { findUnindexedNavidromeMatches, listUnindexedFiles, trashUnindexedFiles } from "./unindexed.js";
@@ -89,7 +102,18 @@ app.get("/api/auth/me", asyncHandler(async (req, res) => {
 }));
 
 app.post("/api/auth/login", asyncHandler(async (req, res) => {
-  const token = await login(String(req.body.username || ""), String(req.body.password || ""));
+  let token: string | null;
+
+  try {
+    token = await login(String(req.body.username || ""), String(req.body.password || ""), req.ip ?? "");
+  } catch (error) {
+    if (error instanceof LoginThrottledError) {
+      res.setHeader("Retry-After", String(error.retryAfterSeconds));
+      res.status(429).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
 
   if (!token) {
     res.status(401).json({ error: "Invalid username or password" });
@@ -97,18 +121,34 @@ app.post("/api/auth/login", asyncHandler(async (req, res) => {
   }
 
   setSessionCookie(req, res, token);
+  const settings = await loadSettings();
   res.json({
     advancedDiagnosticsEnabled: advancedDiagnosticsEnabled(),
     authEnabled: true,
     authenticated: true,
+    mustChangePassword: Boolean(settings.auth.mustChangePassword),
     username: String(req.body.username || "")
-  });
+  } satisfies AuthInfo);
 }));
 
 app.post("/api/auth/logout", asyncHandler(async (req, res) => {
   logout(req);
   clearSessionCookie(req, res);
   res.json({ ok: true });
+}));
+
+app.post("/api/auth/password", asyncHandler(async (req, res) => {
+  try {
+    await changePassword(req, String(req.body.currentPassword || ""), String(req.body.newPassword || ""));
+  } catch (error) {
+    if (error instanceof PasswordChangeError) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
+
+  res.json(await getAuthInfo(req));
 }));
 
 app.use("/api", requireAuth);
@@ -122,7 +162,18 @@ app.get("/api/settings", asyncHandler(async (_req, res) => {
 }));
 
 app.put("/api/settings", asyncHandler(async (req, res) => {
-  const next = await updateSettings(req.body as SettingsUpdate);
+  let next: PlanningSettings;
+
+  try {
+    next = await updateSettings(req.body as SettingsUpdate);
+  } catch (error) {
+    if (error instanceof SettingsValidationError) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
+
   scheduleAutoScan(next);
   res.json(toSettingsView(next));
 }));
@@ -951,6 +1002,8 @@ app.listen(port, () => {
   void loadSettingsForPlanning()
     .then(scheduleAutoScan)
     .catch((error) => console.error("Failed to schedule daily scan:", error));
+  void flagDefaultPassword().catch((error) => console.error("Failed to check the default password:", error));
+  pruneExpiredSessions();
 });
 
 function trustProxySetting() {
