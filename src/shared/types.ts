@@ -375,6 +375,7 @@ export type TrackManager = "trackkeep" | "spotifybu";
 export type TrackIdentificationStatus =
   | "trackkeep-confirmed"
   | "user-confirmed"
+  | "musicbrainz-tagged"
   | "fingerprint-and-release-confirmed"
   | "recording-identified-release-ambiguous"
   | "candidate-only"
@@ -411,9 +412,22 @@ export type TrackIdentification = {
   acoustId?: string;
   recordingId?: string;
   releaseId?: string;
+  releaseGroupId?: string;
   spotifyTrackId?: string;
   spotifyAlbumId?: string;
   candidates?: TrackIdentificationCandidate[];
+  /** How the candidates were found: audio fingerprint or MusicBrainz text search. */
+  candidateSource?: "acoustid" | "musicbrainz-search";
+};
+
+/** MusicBrainz identifiers carried in a file's tags (Picard conventions). */
+export type TrackMusicBrainzIds = {
+  recordingId?: string;
+  releaseTrackId?: string;
+  releaseId?: string;
+  releaseGroupId?: string;
+  artistIds?: string[];
+  albumArtistIds?: string[];
 };
 
 export type TrackFile = {
@@ -452,6 +466,7 @@ export type TrackFile = {
   navidromeEnrichment?: NavidromeMetadataEnrichment;
   managedBy?: TrackManager;
   organizeSkippedAt?: string;
+  musicbrainz?: TrackMusicBrainzIds;
   issues: string[];
 };
 
@@ -487,7 +502,9 @@ export type DuplicateGroup = {
 };
 
 export type ScanStatus = {
-  phase?: "discovering" | "metadata" | "identifying" | "navidrome" | "saving" | "complete" | "failed";
+  phase?: "discovering" | "metadata" | "identifying" | "navidrome" | "saving" | "complete" | "failed" | "cancelled";
+  /** Files whose tags were reused from the cache because size and mtime were unchanged. */
+  cachedFiles?: number;
   progressAt?: string;
   processedFiles?: number;
   totalFiles?: number;

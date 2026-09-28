@@ -1,8 +1,10 @@
-import { parseFile } from "music-metadata";
+import type { IAudioMetadata } from "music-metadata";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isConfirmedIdentityStatus } from "../shared/identity.js";
 import type { NavidromeMetadataEnrichment, NavidromeMetadataMatchMethod, ScanStatus, TrackFile } from "../shared/types.js";
+import { AudioMetadataCache, musicBrainzIdsFromMetadata, readAudioMetadata, type AudioMetadata } from "./audio-metadata.js";
 import { loadCatalog, saveCatalog } from "./catalog.js";
 import { buildDuplicateKey } from "./matching.js";
 import { identifyTracks } from "./identification.js";
@@ -24,7 +26,7 @@ import {
 export { hasTrackKeepIdentityTags };
 
 type ProgressHandler = (status: Partial<ScanStatus>) => void;
-type ParsedAudioMetadata = Awaited<ReturnType<typeof parseFile>>;
+type ParsedCommonTags = IAudioMetadata["common"];
 type StructuredPathIdentityReason = "missing-tags" | "placeholder-tags" | "conflicting-tags";
 
 const extensionQuality: Record<string, number> = {
@@ -40,43 +42,94 @@ const extensionQuality: Record<string, number> = {
   ".mp3": 550,
   ".wma": 420
 };
-export async function scanLibrary(settings: PrivateSettings, onProgress?: ProgressHandler) {
+export class ScanCancelledError extends Error {
+  constructor() {
+    super("The scan was cancelled. Files read so far are cached, so the next scan resumes quickly.");
+  }
+}
+
+export type ScanOptions = {
+  signal?: AbortSignal;
+};
+
+const metadataReadConcurrency = 8;
+
+export async function scanLibrary(settings: PrivateSettings, onProgress?: ProgressHandler, options: ScanOptions = {}) {
   const root = path.resolve(settings.naming.libraryPath);
   const extensions = new Set(settings.scan.extensions.map((extension) => extension.toLowerCase()));
   const recycleRoot = path.resolve(settings.naming.recycleBinPath);
+  const throwIfCancelled = () => {
+    if (options.signal?.aborted) {
+      throw new ScanCancelledError();
+    }
+  };
   onProgress?.({ phase: "discovering", processedFiles: 0, totalFiles: 0 });
   const files = await collectAudioFiles(root, extensions, recycleRoot, onProgress);
-  const tracks: TrackFile[] = [];
+  throwIfCancelled();
+  const readResults = new Array<TrackFile | null>(files.length).fill(null);
   const errors: string[] = [];
   const warnings: string[] = [];
   const metadataOverrides = await loadMetadataOverrides();
+  const metadataCache = new AudioMetadataCache();
 
-  onProgress?.({ phase: "metadata", processedFiles: 0, totalFiles: files.length });
+  onProgress?.({ phase: "metadata", processedFiles: 0, totalFiles: files.length, cachedFiles: 0 });
   let processedFiles = 0;
-  for (const filePath of files) {
-    try {
-      const track = await readTrack(filePath, root, settings, metadataOverrides);
-      tracks.push(track);
-    } catch (error) {
-      const message = `${toPosixRelative(root, filePath)}: ${(error as Error).message}`;
-      errors.push(message);
-      if (errors.length > 100) {
-        errors.shift();
-      }
-    }
+  let audioFiles = 0;
+  let nextFile = 0;
 
-    onProgress?.({
-      processedFiles: ++processedFiles,
-      audioFiles: tracks.length,
-      errors
-    });
+  const readWorker = async () => {
+    while (nextFile < files.length && !options.signal?.aborted) {
+      const index = nextFile++;
+      const filePath = files[index];
+
+      try {
+        readResults[index] = await readTrack(filePath, root, settings, metadataOverrides, metadataCache);
+        audioFiles += 1;
+      } catch (error) {
+        errors.push(`${toPosixRelative(root, filePath)}: ${(error as Error).message}`);
+        if (errors.length > 100) {
+          errors.shift();
+        }
+      }
+
+      onProgress?.({
+        processedFiles: ++processedFiles,
+        audioFiles,
+        cachedFiles: metadataCache.hits,
+        errors
+      });
+    }
+  };
+
+  try {
+    await Promise.all(
+      Array.from({ length: Math.min(metadataReadConcurrency, Math.max(1, files.length)) }, () => readWorker())
+    );
+  } finally {
+    // Keep whatever was read, even when cancelled, so an interrupted scan resumes from the cache.
+    metadataCache.flush();
+  }
+  throwIfCancelled();
+
+  const tracks = readResults.filter((track): track is TrackFile => Boolean(track));
+  if (metadataCache.hits > 0) {
+    warnings.push(
+      `Library scan: reused cached tags for ${metadataCache.hits.toLocaleString()} unchanged files and read ${metadataCache.misses.toLocaleString()} new or changed files.`
+    );
   }
 
   onProgress?.({ phase: "identifying", processedFiles: 0, totalFiles: tracks.length });
-  const identified = await identifyTracks(settings, tracks, (processedFiles) => onProgress?.({ processedFiles }));
+  const identified = await identifyTracks(
+    settings,
+    tracks,
+    (processedFiles) => onProgress?.({ processedFiles }),
+    options.signal
+  );
+  throwIfCancelled();
   warnings.push(...identified.warnings);
   onProgress?.({ phase: "navidrome", processedFiles: 0, totalFiles: tracks.length });
   const navidromeEnriched = await enrichTracksWithNavidromeMetadata(settings, identified.tracks, onProgress);
+  throwIfCancelled();
 
   for (const warning of navidromeEnriched.warnings) {
     warnings.push(warning);
@@ -457,8 +510,7 @@ function trackFileFromNavidromeTrack(
     settings.identification ||
     track.metadataConfidence === "spotify" ||
     track.metadataConfidence === "trusted-path" ||
-    track.identification?.status === "trackkeep-confirmed" ||
-    track.identification?.status === "user-confirmed"
+    isConfirmedIdentityStatus(track.identification?.status)
   ) {
     return withNavidromeDiagnostic(track, navidromeEnrichment);
   }
@@ -578,7 +630,7 @@ function confirmedIdentityDiagnostic(track: TrackFile, indexedTrackCount: number
 }
 
 function hasConfirmedIdentity(track: TrackFile) {
-  return track.identification?.status === "trackkeep-confirmed" || track.identification?.status === "user-confirmed";
+  return isConfirmedIdentityStatus(track.identification?.status);
 }
 
 function unmatchedNavidromeDiagnostic(track: TrackFile, indexedTrackCount: number): NavidromeMetadataEnrichment {
@@ -1102,7 +1154,8 @@ async function readTrack(
   filePath: string,
   root: string,
   settings: PrivateSettings,
-  metadataOverrides: Map<string, MetadataOverride>
+  metadataOverrides: Map<string, MetadataOverride>,
+  metadataCache?: AudioMetadataCache
 ): Promise<TrackFile> {
   const stat = await fs.stat(filePath);
   const metadataOverride = validMetadataOverride(metadataOverrides, filePath, stat.size);
@@ -1110,16 +1163,17 @@ async function readTrack(
   const relativePath = toPosixRelative(root, filePath);
   const inferred = inferMetadataFromPath(relativePath);
   const issues: string[] = [];
-  let metadata: Awaited<ReturnType<typeof parseFile>> | null = null;
+  let metadata: AudioMetadata | null = null;
 
   try {
-    metadata = await parseFile(filePath, { duration: true });
+    metadata = await readAudioMetadata(filePath, { size: stat.size, mtimeMs: stat.mtimeMs }, metadataCache);
   } catch (error) {
     issues.push(`Metadata read failed: ${(error as Error).message}`);
   }
 
-  const common = metadata?.common;
+  const common = metadata?.common as ParsedCommonTags | undefined;
   const commonRecord = common as Record<string, unknown> | undefined;
+  const musicbrainz = musicBrainzIdsFromMetadata(metadata);
   const format = metadata?.format;
   const trackKeepIdentity = readTrackKeepIdentity({
     common: metadata?.common as Record<string, unknown> | undefined,
@@ -1287,6 +1341,7 @@ async function readTrack(
           }
         : undefined,
     managedBy,
+    musicbrainz,
     issues
   } satisfies TrackFile;
 

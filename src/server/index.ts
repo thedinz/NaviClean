@@ -51,7 +51,7 @@ import {
   startSpotifyCatalogDownloadJob
 } from "./providers.js";
 import { deleteRecycleBinItems, emptyRecycleBin, listRecycleBin, restoreRecycleBinItems } from "./recycle-bin.js";
-import { scanLibrary } from "./scanner.js";
+import { ScanCancelledError, scanLibrary } from "./scanner.js";
 import { loadSettings, SettingsValidationError, toSettingsView, updateSettings } from "./settings.js";
 import { resolveTrackMetadataFromSpotify } from "./spotify-metadata.js";
 import { fetchNavidromeArtwork, getNavidromeScanStatus, startNavidromeScan, testNavidromeConnection } from "./navidrome.js";
@@ -92,6 +92,7 @@ const scanStatus: ScanStatus = {
   warnings: []
 };
 let autoScanTimer: NodeJS.Timeout | null = null;
+let scanAbortController: AbortController | null = null;
 let cachedOrganizeEvaluation: OrganizeEvaluation | null = null;
 let organizeEvaluationCacheToken = 0;
 
@@ -346,13 +347,14 @@ app.get("/api/scan/status", (_req, res) => {
 });
 
 app.post("/api/scan/start", asyncHandler(async (_req, res) => {
-  if (!startBackgroundScan()) {
-    res.status(202).json(scanStatus);
-    return;
-  }
-
+  startBackgroundScan();
   res.status(202).json(scanStatus);
 }));
+
+app.post("/api/scan/cancel", (_req, res) => {
+  scanAbortController?.abort();
+  res.status(202).json(scanStatus);
+});
 
 app.get("/api/convert", asyncHandler(async (_req, res) => {
   res.json(await listAudioConvertView(await loadSettingsForPlanning()));
@@ -1063,20 +1065,29 @@ function navidromeScanErrorStatus(settings: Awaited<ReturnType<typeof loadSettin
 }
 
 async function runScan() {
+  const controller = new AbortController();
+  scanAbortController = controller;
+
   try {
     const settings = await loadSettingsForPlanning();
     const result = await scanLibrary(settings, (update) => {
       Object.assign(scanStatus, update, { progressAt: new Date().toISOString() });
-    });
+    }, { signal: controller.signal });
     invalidateOrganizeEvaluationCache();
     scanStatus.errors = result.errors;
     scanStatus.warnings = result.warnings;
     scanStatus.phase = "complete";
   } catch (error) {
-    scanStatus.phase = "failed";
-    scanStatus.errors = [(error as Error).message];
-    scanStatus.warnings = [];
+    if (error instanceof ScanCancelledError) {
+      scanStatus.phase = "cancelled";
+      scanStatus.warnings = [error.message];
+    } else {
+      scanStatus.phase = "failed";
+      scanStatus.errors = [(error as Error).message];
+      scanStatus.warnings = [];
+    }
   } finally {
+    scanAbortController = null;
     scanStatus.running = false;
     scanStatus.finishedAt = new Date().toISOString();
   }
