@@ -7,6 +7,8 @@ import type {
   TrackIdentificationStatus,
   TrackMetadataSource
 } from "../shared/types.js";
+import { isConfirmedIdentityStatus } from "../shared/identity.js";
+import { httpCacheGet, httpCacheSet } from "./http-cache.js";
 import { FingerprintCache, IdentityStore, type FingerprintResult, type StoredIdentity } from "./identity-store.js";
 import { buildDuplicateKey } from "./matching.js";
 import { targetForTrack } from "./organizer.js";
@@ -61,7 +63,12 @@ type AcoustIdResponse = {
   results?: Array<{ id?: string; score?: number; recordings?: AcoustIdRecording[] }>;
 };
 
-export async function identifyTracks(settings: PrivateSettings, tracks: TrackFile[], onProgress?: (processedFiles: number) => void) {
+export async function identifyTracks(
+  settings: PrivateSettings,
+  tracks: TrackFile[],
+  onProgress?: (processedFiles: number) => void,
+  signal?: AbortSignal
+) {
   const identification = settings.identification;
   if (!identification) {
     return { tracks, warnings: [] as string[] };
@@ -72,8 +79,25 @@ export async function identifyTracks(settings: PrivateSettings, tracks: TrackFil
   const fingerprintCache = new FingerprintCache();
   let fingerprintUnavailable = false;
   let lookupFailures = 0;
+  let musicBrainzTagged = 0;
 
   const prepared = await mapWithConcurrency(tracks, 2, async (track) => {
+    if (signal?.aborted) {
+      return track;
+    }
+
+    const taggedIdentity = !isTrackKeepManaged(track.managedBy) &&
+      track.metadataConfidence !== "spotify" &&
+      track.metadataConfidence !== "trusted-path"
+      ? musicBrainzTaggedIdentity(track)
+      : null;
+
+    if (taggedIdentity) {
+      // Tier 1: Picard-style MusicBrainz tags already identify the recording and release.
+      musicBrainzTagged += 1;
+      return taggedIdentity;
+    }
+
     const shouldFingerprint =
       isTrackKeepManaged(track.managedBy) ||
       track.metadataConfidence === "spotify" ||
@@ -157,7 +181,7 @@ export async function identifyTracks(settings: PrivateSettings, tracks: TrackFil
     }
 
     try {
-      const candidates = await lookupAcoustId(identification.acoustIdApiKey, fingerprint);
+      const candidates = await cachedAcoustIdLookup(identification.acoustIdApiKey, fingerprint);
       if (candidates.length === 0) {
         return withIdentification(track, {
           status: "unidentified",
@@ -177,7 +201,8 @@ export async function identifyTracks(settings: PrivateSettings, tracks: TrackFil
         fingerprint: fingerprint.fingerprint,
         acoustId: candidates[0]?.acoustId,
         recordingId: uniqueValue(candidates.map((candidate) => candidate.recordingId)) ?? undefined,
-        candidates
+        candidates,
+        candidateSource: "acoustid"
       });
     } catch (error) {
       lookupFailures += 1;
@@ -196,6 +221,11 @@ export async function identifyTracks(settings: PrivateSettings, tracks: TrackFil
   identities.flush();
   fingerprintCache.flush();
 
+  if (musicBrainzTagged > 0) {
+    warnings.push(
+      `Audio identification: ${musicBrainzTagged.toLocaleString()} tracks already carry MusicBrainz recording and release IDs and were trusted without a lookup.`
+    );
+  }
   if (fingerprintUnavailable) {
     warnings.push("Audio identification: fpcalc is unavailable. Install Chromaprint tools or use the Docker image.");
   }
@@ -319,13 +349,51 @@ export function identificationNeedsReview(track: TrackFile, settings: PrivateSet
   if (!settings.identification || !status || isTrackKeepManaged(track.managedBy)) {
     return false;
   }
-  if (status === "user-confirmed" || status === "trackkeep-confirmed") {
+  if (isConfirmedIdentityStatus(status)) {
     return false;
   }
   if (status === "fingerprint-and-release-confirmed") {
     return settings.identification.requireReviewBeforeFileChanges;
   }
   return true;
+}
+
+/** Tier 1: a file tagged with both a MusicBrainz recording and release ID is trusted as-is. */
+function musicBrainzTaggedIdentity(track: TrackFile): TrackFile | null {
+  const ids = track.musicbrainz;
+  if (!ids?.recordingId || !ids.releaseId) {
+    return null;
+  }
+
+  return {
+    ...track,
+    metadataConfidence: "musicbrainz",
+    targetSource: "musicbrainz",
+    identification: {
+      status: "musicbrainz-tagged",
+      source: "musicbrainz",
+      message: "MusicBrainz recording and release IDs in the file's tags are trusted.",
+      recordingId: ids.recordingId,
+      releaseId: ids.releaseId,
+      releaseGroupId: ids.releaseGroupId
+    }
+  };
+}
+
+const acoustIdCacheTtlMs = 1000 * 60 * 60 * 24 * 30;
+const acoustIdEmptyCacheTtlMs = 1000 * 60 * 60 * 24 * 7;
+
+/** AcoustID answers are stable, so scans reuse them instead of re-querying unconfirmed tracks every time. */
+async function cachedAcoustIdLookup(apiKey: string, fingerprint: FingerprintResult) {
+  const key = `acoustid:${sha1(`${fingerprint.duration}:${fingerprint.fingerprint}`)}`;
+  const cached = httpCacheGet<TrackIdentificationCandidate[]>(key);
+  if (cached) {
+    return cached;
+  }
+
+  const candidates = await lookupAcoustId(apiKey, fingerprint);
+  httpCacheSet(key, candidates, candidates.length > 0 ? acoustIdCacheTtlMs : acoustIdEmptyCacheTtlMs);
+  return candidates;
 }
 
 function localCandidateTrack(track: TrackFile, settings: NonNullable<PrivateSettings["identification"]>) {
