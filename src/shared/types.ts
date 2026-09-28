@@ -742,7 +742,7 @@ export type DuplicateGroup = {
 };
 
 export type ScanStatus = {
-  phase?: "discovering" | "metadata" | "identifying" | "navidrome" | "saving" | "complete" | "failed" | "cancelled";
+  phase?: "discovering" | "metadata" | "identifying" | "searching" | "navidrome" | "saving" | "complete" | "failed" | "cancelled";
   /** Files whose tags were reused from the cache because size and mtime were unchanged. */
   cachedFiles?: number;
   progressAt?: string;
