@@ -402,6 +402,9 @@ export type TrackIdentificationCandidate = {
   year: number | null;
   duration: number | null;
   isrc: string | null;
+  releaseTrackId?: string;
+  artistIds?: string[];
+  albumArtistIds?: string[];
 };
 
 export type TrackIdentification = {

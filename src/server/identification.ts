@@ -5,12 +5,15 @@ import type {
   TrackFile,
   TrackIdentificationCandidate,
   TrackIdentificationStatus,
-  TrackMetadataSource
+  TrackMetadataSource,
+  TrackMusicBrainzIds
 } from "../shared/types.js";
 import { isConfirmedIdentityStatus } from "../shared/identity.js";
 import { httpCacheGet, httpCacheSet } from "./http-cache.js";
 import { FingerprintCache, IdentityStore, type FingerprintResult, type StoredIdentity } from "./identity-store.js";
 import { buildDuplicateKey } from "./matching.js";
+import { identifyByMusicBrainzText } from "./mb-identify.js";
+import { saveMetadataOverridesForTracks } from "./metadata-overrides.js";
 import { targetForTrack } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
 import { isTrackKeepManaged } from "./trackkeep.js";
@@ -151,6 +154,15 @@ export async function identifyTracks(
       return next;
     }
 
+    if (track.metadataConfidence === "musicbrainz" && track.identification?.status === "user-confirmed") {
+      // A MusicBrainz release the user confirmed earlier, restored from the saved override.
+      const next = withIdentification(track, { ...track.identification, fingerprint: fingerprint?.fingerprint });
+      if (fingerprint) {
+        identities.set(fingerprint.fingerprint, storedIdentityFromTrack(next, fingerprint.fingerprint, "musicbrainz"));
+      }
+      return next;
+    }
+
     if (fingerprint) {
       const stored = identities.get(fingerprint.fingerprint);
       if (stored) {
@@ -217,7 +229,10 @@ export async function identifyTracks(
     }
   }, onProgress);
 
-  const resolved = resolveReleaseConsensus(prepared, settings);
+  // Tier 2: text search for whatever the fingerprint tier could not place.
+  const searched = await identifyByMusicBrainzText(settings, prepared, undefined, signal);
+  warnings.push(...searched.warnings);
+  const resolved = resolveReleaseConsensus(searched.tracks, settings);
   identities.flush();
   fingerprintCache.flush();
 
@@ -297,13 +312,11 @@ export async function confirmIdentificationCandidate(
   if (!candidate) {
     throw new Error("The selected MusicBrainz candidate is no longer available. Run a new scan.");
   }
-  if (!track.identification?.fingerprint) {
-    throw new Error("This track does not have a reusable audio fingerprint.");
-  }
 
   const identities = IdentityStore.load();
   const selectedFolder = path.posix.dirname(track.relativePath.replace(/\\/g, "/"));
   const updatedTrackIds: string[] = [];
+  const confirmedWithoutFingerprint: TrackFile[] = [];
   const nextTracks = tracks.map((item) => {
     const sameFolder = path.posix.dirname(item.relativePath.replace(/\\/g, "/")) === selectedFolder;
     const matchingCandidate = item.id === track.id
@@ -311,18 +324,24 @@ export async function confirmIdentificationCandidate(
       : sameFolder && candidate.releaseId
         ? item.identification?.candidates?.find((entry) => entry.releaseId === candidate.releaseId)
         : undefined;
-    if (!matchingCandidate || !item.identification?.fingerprint) {
+    if (!matchingCandidate || isTrackKeepManaged(item.managedBy)) {
       return item;
     }
     const confirmed = applyCandidate(item, matchingCandidate, settings, "user-confirmed");
-    identities.set(
-      item.identification.fingerprint,
-      storedIdentityFromCandidate(matchingCandidate, item.identification.fingerprint, "musicbrainz")
-    );
+    const fingerprint = item.identification?.fingerprint;
+    if (fingerprint) {
+      identities.set(fingerprint, storedIdentityFromCandidate(matchingCandidate, fingerprint, "musicbrainz"));
+    } else {
+      // Text-search matches may have no fingerprint; remember them by path and size instead.
+      confirmedWithoutFingerprint.push(confirmed);
+    }
     updatedTrackIds.push(item.id);
     return confirmed;
   });
   identities.flush();
+  if (confirmedWithoutFingerprint.length > 0) {
+    await saveMetadataOverridesForTracks(confirmedWithoutFingerprint, "musicbrainz");
+  }
   return {
     tracks: nextTracks,
     updatedTrackIds
@@ -444,6 +463,7 @@ function applyCandidate(
     }),
     metadataConfidence: "musicbrainz" as TrackFile["metadataConfidence"],
     targetSource: "musicbrainz" as TrackFile["targetSource"],
+    musicbrainz: musicBrainzIdsFromCandidate(candidate, track.musicbrainz),
     identification: {
       status,
       source: "musicbrainz" as const,
@@ -454,11 +474,32 @@ function applyCandidate(
       acoustId: candidate.acoustId,
       recordingId: candidate.recordingId,
       releaseId: candidate.releaseId ?? undefined,
-      candidates: track.identification?.candidates
+      releaseGroupId: candidate.releaseGroupId ?? undefined,
+      candidates: track.identification?.candidates,
+      candidateSource: track.identification?.candidateSource
     }
   } satisfies TrackFile;
   const target = targetForTrack(partial, settings);
   return { ...partial, targetPath: target.targetPath, targetRelativePath: target.targetRelativePath };
+}
+
+function musicBrainzIdsFromCandidate(
+  candidate: TrackIdentificationCandidate,
+  existing: TrackMusicBrainzIds | undefined
+): TrackMusicBrainzIds | undefined {
+  if (!candidate.recordingId && !candidate.releaseId) {
+    return existing;
+  }
+  // A different release invalidates the old release-level IDs; keep nothing from it.
+  const sameRelease = existing?.releaseId && existing.releaseId === candidate.releaseId;
+  return {
+    recordingId: candidate.recordingId || undefined,
+    releaseId: candidate.releaseId ?? undefined,
+    releaseGroupId: candidate.releaseGroupId ?? (sameRelease ? existing?.releaseGroupId : undefined),
+    releaseTrackId: candidate.releaseTrackId ?? (sameRelease ? existing?.releaseTrackId : undefined),
+    artistIds: candidate.artistIds?.length ? candidate.artistIds : sameRelease ? existing?.artistIds : undefined,
+    albumArtistIds: candidate.albumArtistIds?.length ? candidate.albumArtistIds : sameRelease ? existing?.albumArtistIds : undefined
+  };
 }
 
 function trackFromStoredIdentity(track: TrackFile, stored: StoredIdentity, settings: PrivateSettings) {
@@ -495,9 +536,12 @@ function storedIdentityFromTrack(
     id: sha1(`${source}:${track.id}:${track.title}`),
     score: 1,
     acoustId: track.identification?.acoustId ?? "",
-    recordingId: track.identification?.recordingId ?? "",
-    releaseId: track.identification?.releaseId ?? null,
-    releaseGroupId: null,
+    recordingId: track.identification?.recordingId ?? track.musicbrainz?.recordingId ?? "",
+    releaseId: track.identification?.releaseId ?? track.musicbrainz?.releaseId ?? null,
+    releaseGroupId: track.identification?.releaseGroupId ?? track.musicbrainz?.releaseGroupId ?? null,
+    releaseTrackId: track.musicbrainz?.releaseTrackId,
+    artistIds: track.musicbrainz?.artistIds,
+    albumArtistIds: track.musicbrainz?.albumArtistIds,
     artist: track.artist,
     albumArtist: track.albumArtist,
     album: track.album,
@@ -652,6 +696,12 @@ export function candidatesFromAcoustId(payload: AcoustIdResponse): TrackIdentifi
             duration: recording.duration ? Math.round(recording.duration) : null,
             isrc: recording.isrcs?.[0]?.toUpperCase() ?? null
           };
+          const releaseTrackId = slot?.releaseTrackId;
+          const artistIds = artistCreditIds(slot?.artistRefs ?? recording.artists);
+          const albumArtistIds = artistCreditIds(release?.artists ?? releaseGroup.artists);
+          if (releaseTrackId) candidate.releaseTrackId = releaseTrackId;
+          if (artistIds.length) candidate.artistIds = artistIds;
+          if (albumArtistIds.length) candidate.albumArtistIds = albumArtistIds;
           candidates.push(candidate);
         }
       }
@@ -674,6 +724,8 @@ function recordingSlot(release: AcoustIdRelease, recordingId: string) {
       }
       return {
         artist: artistCredit(track.artists),
+        artistRefs: track.artists,
+        releaseTrackId: track.id,
         title: track.title,
         trackNumber: positiveInteger(track.position),
         trackTotal: positiveInteger(medium.track_count) ?? medium.tracks?.length ?? null,
@@ -686,6 +738,10 @@ function recordingSlot(release: AcoustIdRelease, recordingId: string) {
 
 function artistCredit(artists: AcoustIdArtist[] | undefined) {
   return (artists ?? []).map((artist) => artist.name?.trim()).filter(Boolean).join(", ");
+}
+
+function artistCreditIds(artists: AcoustIdArtist[] | undefined) {
+  return (artists ?? []).map((artist) => artist.id?.trim()).filter((id): id is string => Boolean(id));
 }
 
 function releaseYear(value: AcoustIdRelease["date"]) {

@@ -1,13 +1,14 @@
 import path from "node:path";
-import type { TrackFile } from "../shared/types.js";
+import type { TrackFile, TrackMusicBrainzIds } from "../shared/types.js";
 import { getDb, parseJson, pathKey, queryAll, transaction } from "./db.js";
 
-export type MetadataOverrideSource = "spotify" | "trusted-path";
+export type MetadataOverrideSource = "spotify" | "trusted-path" | "musicbrainz";
 
 export type MetadataOverride = {
   absolutePath: string;
   size: number;
   source: MetadataOverrideSource;
+  musicbrainz?: TrackMusicBrainzIds;
   metadata: Pick<
     TrackFile,
     | "artist"
@@ -81,6 +82,7 @@ function overrideFromTrack(track: TrackFile, source: MetadataOverrideSource): Me
     absolutePath: path.resolve(track.absolutePath),
     size: track.size,
     source,
+    ...(source === "musicbrainz" && track.musicbrainz ? { musicbrainz: track.musicbrainz } : {}),
     metadata: {
       artist: track.artist,
       albumArtist: track.albumArtist,

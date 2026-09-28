@@ -1173,7 +1173,9 @@ async function readTrack(
 
   const common = metadata?.common as ParsedCommonTags | undefined;
   const commonRecord = common as Record<string, unknown> | undefined;
-  const musicbrainz = musicBrainzIdsFromMetadata(metadata);
+  const musicbrainz = metadataOverride?.source === "musicbrainz"
+    ? metadataOverride.musicbrainz ?? musicBrainzIdsFromMetadata(metadata)
+    : musicBrainzIdsFromMetadata(metadata);
   const format = metadata?.format;
   const trackKeepIdentity = readTrackKeepIdentity({
     common: metadata?.common as Record<string, unknown> | undefined,
@@ -1312,7 +1314,9 @@ async function readTrack(
     qualityScore: qualityScore(extension, bitrate, bitsPerSample, lossless),
     targetPath: "",
     targetRelativePath: "",
-    targetSource: metadataOverride?.source === "spotify" ? "spotify" : undefined,
+    targetSource: metadataOverride?.source === "spotify" || metadataOverride?.source === "musicbrainz"
+      ? metadataOverride.source
+      : undefined,
     metadataConfidence: metadataOverride?.source ?? (pathIdentityNeedsReview ? "path-suggestion" : "embedded"),
     metadataSuggestion: pathIdentityNeedsReview
       ? {
@@ -1336,8 +1340,15 @@ async function readTrack(
       : metadataOverride
         ? {
             status: "user-confirmed" as const,
-            source: metadataOverride.source === "spotify" ? "spotify" as const : "local-path" as const,
-            message: "Restored metadata previously confirmed by the user."
+            source: metadataOverride.source === "spotify"
+              ? "spotify" as const
+              : metadataOverride.source === "musicbrainz"
+                ? "musicbrainz" as const
+                : "local-path" as const,
+            message: "Restored metadata previously confirmed by the user.",
+            recordingId: metadataOverride.musicbrainz?.recordingId,
+            releaseId: metadataOverride.musicbrainz?.releaseId,
+            releaseGroupId: metadataOverride.musicbrainz?.releaseGroupId
           }
         : undefined,
     managedBy,
