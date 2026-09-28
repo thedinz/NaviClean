@@ -964,12 +964,22 @@ subscribe((event) => {
 });
 
 let lastScanPublishAt = 0;
+let trailingScanPublish: NodeJS.Timeout | null = null;
 
-/** Streams scan progress, at most a few times a second, to connected browsers. */
+/** Streams scan progress to connected browsers: at most a few times a second, always including the latest state. */
 function publishScanStatus(force = false) {
   const now = Date.now();
-  if (!force && now - lastScanPublishAt < 400) {
+  const wait = 400 - (now - lastScanPublishAt);
+  if (!force && wait > 0) {
+    trailingScanPublish ??= setTimeout(() => {
+      trailingScanPublish = null;
+      publishScanStatus(true);
+    }, wait);
     return;
+  }
+  if (trailingScanPublish) {
+    clearTimeout(trailingScanPublish);
+    trailingScanPublish = null;
   }
   lastScanPublishAt = now;
   publish({ type: "scan", status: { ...scanStatus } });

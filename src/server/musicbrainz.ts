@@ -270,13 +270,21 @@ export async function searchMusicBrainzReleases(
 }
 
 export async function searchMusicBrainzRecordings(
-  hints: { artist?: string; title: string; album?: string },
+  hints: { artist?: string; title: string; album?: string; durationSeconds?: number | null },
   limit = 8
 ): Promise<{ recordings: MbRecording[]; cached: boolean }> {
+  // Popular songs have hundreds of same-named DJ-mix and compilation recordings; a length
+  // window around the file's real duration is what surfaces the original release.
+  const durationWindow = hints.durationSeconds && hints.durationSeconds > 20
+    ? Math.max(4, hints.durationSeconds * 0.02)
+    : null;
   const query = [
     `recording:(${luceneTerm(hints.title)})`,
     hints.artist ? `artist:(${luceneTerm(hints.artist)})` : "",
-    hints.album ? `release:(${luceneTerm(hints.album)})` : ""
+    hints.album ? `release:(${luceneTerm(hints.album)})` : "",
+    durationWindow && hints.durationSeconds
+      ? `dur:[${Math.round((hints.durationSeconds - durationWindow) * 1000)} TO ${Math.round((hints.durationSeconds + durationWindow) * 1000)}]`
+      : ""
   ].filter(Boolean).join(" AND ");
   const { data, cached } = await musicBrainzGet<{ recordings?: MbRecording[] }>(
     "recording",

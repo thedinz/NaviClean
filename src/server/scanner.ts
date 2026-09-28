@@ -123,7 +123,8 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
     settings,
     tracks,
     (processedFiles) => onProgress?.({ processedFiles }),
-    options.signal
+    options.signal,
+    (phase, totalFiles) => onProgress?.({ phase, processedFiles: 0, totalFiles })
   );
   throwIfCancelled();
   warnings.push(...identified.warnings);

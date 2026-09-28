@@ -7,6 +7,7 @@ export function scanProgress(scan: ScanStatus | null, statusError: string | null
     discovering: "Discovering library files",
     metadata: "Reading audio tags",
     identifying: "Fingerprinting and identifying audio",
+    searching: "Searching MusicBrainz by tags",
     navidrome: "Comparing with the Navidrome index",
     saving: "Saving NaviClean catalog",
     complete: "Scan completed",
@@ -22,7 +23,7 @@ export function scanProgress(scan: ScanStatus | null, statusError: string | null
     label: statusError ? "Status unavailable" : stalled ? "No recent progress" : !scan ? "Loading" : scan.running ? "Running" : scan.phase === "failed" ? "Failed" : scan.phase === "cancelled" ? "Cancelled" : scan.finishedAt ? "Finished" : "Ready",
     detail: `${phase} · ${count}`,
     warning: statusError ? `Cannot verify NaviClean scan status: ${statusError}` : stalled ? "No scan progress reported for over 2 minutes. The scan may be waiting or stuck; animation is paused until progress resumes." : null,
-    percent: scan?.totalFiles && (scan.phase === "metadata" || scan.phase === "identifying")
+    percent: scan?.totalFiles && (scan.phase === "metadata" || scan.phase === "identifying" || scan.phase === "searching")
       ? (scan.processedFiles ?? 0) / scan.totalFiles * 100
       : null
   };

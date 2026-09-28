@@ -70,7 +70,8 @@ export async function identifyTracks(
   settings: PrivateSettings,
   tracks: TrackFile[],
   onProgress?: (processedFiles: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onPhase?: (phase: "searching", totalFiles: number) => void
 ) {
   const identification = settings.identification;
   if (!identification) {
@@ -230,7 +231,7 @@ export async function identifyTracks(
   }, onProgress);
 
   // Tier 2: text search for whatever the fingerprint tier could not place.
-  const searched = await identifyByMusicBrainzText(settings, prepared, undefined, signal);
+  const searched = await identifyByMusicBrainzText(settings, prepared, onProgress, signal, (total) => onPhase?.("searching", total));
   warnings.push(...searched.warnings);
   const resolved = resolveReleaseConsensus(searched.tracks, settings);
   identities.flush();

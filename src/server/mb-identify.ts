@@ -34,7 +34,8 @@ export async function identifyByMusicBrainzText(
   settings: PrivateSettings,
   tracks: TrackFile[],
   onProgress?: (processed: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onStart?: (total: number) => void
 ) {
   const options = musicBrainzSettings(settings);
   const warnings: string[] = [];
@@ -48,6 +49,8 @@ export async function identifyByMusicBrainzText(
     return { tracks, warnings, identified: 0 };
   }
 
+  onStart?.(eligible.length);
+  onProgress?.(0);
   const startRequests = musicBrainzRequestCount();
   const budgetExhausted = () => musicBrainzRequestCount() - startRequests >= options.maxTextLookupsPerScan;
   const byFolder = new Map<string, TrackFile[]>();
@@ -193,11 +196,16 @@ async function releaseCandidatesForFolder(
 
 async function recordingCandidatesForTrack(track: TrackFile) {
   const artist = usableHint(track.artist) || usableHint(track.albumArtist) || undefined;
-  const { recordings } = await searchMusicBrainzRecordings({
-    artist,
-    title: track.title,
-    album: usableHint(track.album) ?? undefined
-  });
+  // The album hint only affects scoring: path-derived album names ("misc", "Downloads")
+  // would otherwise filter out every real recording.
+  let { recordings } = await searchMusicBrainzRecordings(
+    { artist, title: track.title, durationSeconds: track.duration },
+    recordingSearchLimit
+  );
+  if (recordings.length === 0 && track.duration) {
+    // Nothing within the length window (a live cut, a bad rip): fall back to title and artist.
+    ({ recordings } = await searchMusicBrainzRecordings({ artist, title: track.title }, recordingSearchLimit));
+  }
 
   const candidates: TrackIdentificationCandidate[] = [];
   for (const recording of recordings) {
@@ -209,9 +217,9 @@ async function recordingCandidatesForTrack(track: TrackFile) {
       continue;
     }
 
-    for (const release of (recording.releases ?? []).slice(0, 3)) {
+    for (const release of rankReleasesForRecording(recording.releases ?? []).slice(0, 4)) {
       const albumScore = usableHint(track.album) ? textSimilarity(track.album, release.title) : 0.5;
-      const score = Math.min(maxTextCandidateScore, base * 0.8 + albumScore * 0.2);
+      const score = Math.min(maxTextCandidateScore, base * 0.8 + albumScore * 0.2 + releasePreference(release));
       const candidate = candidateFromRecordingRelease(recording, release, score);
       if (candidate) {
         candidates.push(candidate);
@@ -219,8 +227,18 @@ async function recordingCandidatesForTrack(track: TrackFile) {
     }
   }
 
-  return dedupeCandidates(candidates).slice(0, 8);
+  // One candidate per album: editions of the same release group are the same choice to a person.
+  const perGroup = new Map<string, TrackIdentificationCandidate>();
+  for (const candidate of dedupeCandidates(candidates)) {
+    const key = candidate.releaseGroupId ?? candidate.releaseId ?? candidate.id;
+    if (!perGroup.has(key)) {
+      perGroup.set(key, candidate);
+    }
+  }
+  return [...perGroup.values()].slice(0, 6);
 }
+
+export const recordingSearchLimit = 12;
 
 function bestReleaseTrack(track: TrackFile, release: MbRelease) {
   let best: { mediumIndex: number; trackIndex: number; score: number } | null = null;
@@ -322,6 +340,34 @@ function candidateFromRecordingRelease(
     duration: recording.length ? Math.round(recording.length / 1000) : null,
     isrc: recording.isrcs?.[0]?.toUpperCase() ?? null
   };
+}
+
+/** Nudges the original studio release above compilations that happen to contain the same recording. */
+function releasePreference(release: MbRelease) {
+  const group = release["release-group"];
+  const secondary = group?.["secondary-types"] ?? [];
+  if (release.status && release.status !== "Official") return -0.08;
+  if (secondary.includes("Compilation") || secondary.includes("DJ-mix")) return -0.06;
+  if (secondary.length > 0) return -0.03;
+  if (group?.["primary-type"] === "Album") return 0.06;
+  if (group?.["primary-type"] === "EP" || group?.["primary-type"] === "Single") return 0.03;
+  return 0;
+}
+
+/** Official studio albums first, then EPs and singles, then compilations; earliest date breaks ties. */
+function rankReleasesForRecording(releases: MbRelease[]) {
+  const rank = (release: MbRelease) => {
+    const group = release["release-group"];
+    const studio = (group?.["secondary-types"] ?? []).length === 0;
+    const primary = group?.["primary-type"];
+    let score = release.status === "Official" ? 0 : 10;
+    score += studio ? 0 : 5;
+    score += primary === "Album" ? 0 : primary === "EP" ? 1 : primary === "Single" ? 2 : 3;
+    return score;
+  };
+  return [...releases].sort(
+    (left, right) => rank(left) - rank(right) || (left.date || "9999").localeCompare(right.date || "9999")
+  );
 }
 
 function dedupeCandidates(candidates: TrackIdentificationCandidate[]) {
