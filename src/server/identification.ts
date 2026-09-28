@@ -403,7 +403,7 @@ const acoustIdCacheTtlMs = 1000 * 60 * 60 * 24 * 30;
 const acoustIdEmptyCacheTtlMs = 1000 * 60 * 60 * 24 * 7;
 
 /** AcoustID answers are stable, so scans reuse them instead of re-querying unconfirmed tracks every time. */
-async function cachedAcoustIdLookup(apiKey: string, fingerprint: FingerprintResult) {
+export async function cachedAcoustIdLookup(apiKey: string, fingerprint: FingerprintResult) {
   const key = `acoustid:${sha1(`${fingerprint.duration}:${fingerprint.fingerprint}`)}`;
   const cached = httpCacheGet<TrackIdentificationCandidate[]>(key);
   if (cached) {
