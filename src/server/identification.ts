@@ -1,41 +1,30 @@
 import { execFile } from "node:child_process";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type {
   TrackFile,
   TrackIdentificationCandidate,
   TrackIdentificationStatus,
-  TrackMetadataSource
+  TrackMetadataSource,
+  TrackMusicBrainzIds
 } from "../shared/types.js";
+import { isConfirmedIdentityStatus } from "../shared/identity.js";
+import { httpCacheGet, httpCacheSet } from "./http-cache.js";
+import { FingerprintCache, IdentityStore, type FingerprintResult, type StoredIdentity } from "./identity-store.js";
 import { buildDuplicateKey } from "./matching.js";
+import { identifyByMusicBrainzText } from "./mb-identify.js";
+import { saveMetadataOverridesForTracks } from "./metadata-overrides.js";
 import { targetForTrack } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
-import { getDataDir } from "./settings.js";
 import { isTrackKeepManaged } from "./trackkeep.js";
 import { sha1 } from "./utils.js";
 
 const execFileAsync = promisify(execFile);
-const identityStorePath = path.join(getDataDir(), "track-identities.json");
-const fingerprintCachePath = path.join(getDataDir(), "fingerprint-cache.json");
 const minimumAutomaticScore = 0.95;
 const acoustIdResultLimit = 5;
 const acoustIdMinimumSpacingMs = 350;
 let acoustIdQueue: Promise<void> = Promise.resolve();
 let lastAcoustIdRequestAt = 0;
-
-type FingerprintResult = { duration: number; fingerprint: string };
-type StoredIdentity = {
-  fingerprint: string;
-  source: "trackkeep" | "spotify" | "musicbrainz" | "trusted-path";
-  candidate: TrackIdentificationCandidate;
-  spotifyTrackId?: string;
-  spotifyAlbumId?: string;
-  confirmedAt: string;
-};
-type IdentityStoreFile = { entries: StoredIdentity[] };
-type FingerprintCacheEntry = FingerprintResult & { absolutePath: string; size: number; mtimeMs: number };
-type FingerprintCacheFile = { entries: FingerprintCacheEntry[] };
 
 type AcoustIdArtist = { id?: string; name?: string };
 type AcoustIdTrack = {
@@ -77,19 +66,42 @@ type AcoustIdResponse = {
   results?: Array<{ id?: string; score?: number; recordings?: AcoustIdRecording[] }>;
 };
 
-export async function identifyTracks(settings: PrivateSettings, tracks: TrackFile[], onProgress?: (processedFiles: number) => void) {
+export async function identifyTracks(
+  settings: PrivateSettings,
+  tracks: TrackFile[],
+  onProgress?: (processedFiles: number) => void,
+  signal?: AbortSignal,
+  onPhase?: (phase: "searching", totalFiles: number) => void
+) {
   const identification = settings.identification;
   if (!identification) {
     return { tracks, warnings: [] as string[] };
   }
 
   const warnings: string[] = [];
-  const identities = await loadIdentityStore();
-  const fingerprintCache = await loadFingerprintCache();
+  const identities = IdentityStore.load();
+  const fingerprintCache = new FingerprintCache();
   let fingerprintUnavailable = false;
   let lookupFailures = 0;
+  let musicBrainzTagged = 0;
 
   const prepared = await mapWithConcurrency(tracks, 2, async (track) => {
+    if (signal?.aborted) {
+      return track;
+    }
+
+    const taggedIdentity = !isTrackKeepManaged(track.managedBy) &&
+      track.metadataConfidence !== "spotify" &&
+      track.metadataConfidence !== "trusted-path"
+      ? musicBrainzTaggedIdentity(track)
+      : null;
+
+    if (taggedIdentity) {
+      // Tier 1: Picard-style MusicBrainz tags already identify the recording and release.
+      musicBrainzTagged += 1;
+      return taggedIdentity;
+    }
+
     const shouldFingerprint =
       isTrackKeepManaged(track.managedBy) ||
       track.metadataConfidence === "spotify" ||
@@ -143,6 +155,15 @@ export async function identifyTracks(settings: PrivateSettings, tracks: TrackFil
       return next;
     }
 
+    if (track.metadataConfidence === "musicbrainz" && track.identification?.status === "user-confirmed") {
+      // A MusicBrainz release the user confirmed earlier, restored from the saved override.
+      const next = withIdentification(track, { ...track.identification, fingerprint: fingerprint?.fingerprint });
+      if (fingerprint) {
+        identities.set(fingerprint.fingerprint, storedIdentityFromTrack(next, fingerprint.fingerprint, "musicbrainz"));
+      }
+      return next;
+    }
+
     if (fingerprint) {
       const stored = identities.get(fingerprint.fingerprint);
       if (stored) {
@@ -173,7 +194,7 @@ export async function identifyTracks(settings: PrivateSettings, tracks: TrackFil
     }
 
     try {
-      const candidates = await lookupAcoustId(identification.acoustIdApiKey, fingerprint);
+      const candidates = await cachedAcoustIdLookup(identification.acoustIdApiKey, fingerprint);
       if (candidates.length === 0) {
         return withIdentification(track, {
           status: "unidentified",
@@ -193,7 +214,8 @@ export async function identifyTracks(settings: PrivateSettings, tracks: TrackFil
         fingerprint: fingerprint.fingerprint,
         acoustId: candidates[0]?.acoustId,
         recordingId: uniqueValue(candidates.map((candidate) => candidate.recordingId)) ?? undefined,
-        candidates
+        candidates,
+        candidateSource: "acoustid"
       });
     } catch (error) {
       lookupFailures += 1;
@@ -208,10 +230,18 @@ export async function identifyTracks(settings: PrivateSettings, tracks: TrackFil
     }
   }, onProgress);
 
-  const resolved = resolveReleaseConsensus(prepared, settings);
-  await saveIdentityStore(identities);
-  await saveFingerprintCache(fingerprintCache);
+  // Tier 2: text search for whatever the fingerprint tier could not place.
+  const searched = await identifyByMusicBrainzText(settings, prepared, onProgress, signal, (total) => onPhase?.("searching", total));
+  warnings.push(...searched.warnings);
+  const resolved = resolveReleaseConsensus(searched.tracks, settings);
+  identities.flush();
+  fingerprintCache.flush();
 
+  if (musicBrainzTagged > 0) {
+    warnings.push(
+      `Audio identification: ${musicBrainzTagged.toLocaleString()} tracks already carry MusicBrainz recording and release IDs and were trusted without a lookup.`
+    );
+  }
   if (fingerprintUnavailable) {
     warnings.push("Audio identification: fpcalc is unavailable. Install Chromaprint tools or use the Docker image.");
   }
@@ -283,13 +313,11 @@ export async function confirmIdentificationCandidate(
   if (!candidate) {
     throw new Error("The selected MusicBrainz candidate is no longer available. Run a new scan.");
   }
-  if (!track.identification?.fingerprint) {
-    throw new Error("This track does not have a reusable audio fingerprint.");
-  }
 
-  const identities = await loadIdentityStore();
+  const identities = IdentityStore.load();
   const selectedFolder = path.posix.dirname(track.relativePath.replace(/\\/g, "/"));
   const updatedTrackIds: string[] = [];
+  const confirmedWithoutFingerprint: TrackFile[] = [];
   const nextTracks = tracks.map((item) => {
     const sameFolder = path.posix.dirname(item.relativePath.replace(/\\/g, "/")) === selectedFolder;
     const matchingCandidate = item.id === track.id
@@ -297,18 +325,24 @@ export async function confirmIdentificationCandidate(
       : sameFolder && candidate.releaseId
         ? item.identification?.candidates?.find((entry) => entry.releaseId === candidate.releaseId)
         : undefined;
-    if (!matchingCandidate || !item.identification?.fingerprint) {
+    if (!matchingCandidate || isTrackKeepManaged(item.managedBy)) {
       return item;
     }
     const confirmed = applyCandidate(item, matchingCandidate, settings, "user-confirmed");
-    identities.set(
-      item.identification.fingerprint,
-      storedIdentityFromCandidate(matchingCandidate, item.identification.fingerprint, "musicbrainz")
-    );
+    const fingerprint = item.identification?.fingerprint;
+    if (fingerprint) {
+      identities.set(fingerprint, storedIdentityFromCandidate(matchingCandidate, fingerprint, "musicbrainz"));
+    } else {
+      // Text-search matches may have no fingerprint; remember them by path and size instead.
+      confirmedWithoutFingerprint.push(confirmed);
+    }
     updatedTrackIds.push(item.id);
     return confirmed;
   });
-  await saveIdentityStore(identities);
+  identities.flush();
+  if (confirmedWithoutFingerprint.length > 0) {
+    await saveMetadataOverridesForTracks(confirmedWithoutFingerprint, "musicbrainz");
+  }
   return {
     tracks: nextTracks,
     updatedTrackIds
@@ -316,8 +350,8 @@ export async function confirmIdentificationCandidate(
 }
 
 export async function rememberConfirmedTrackIdentities(tracks: TrackFile[], source: "spotify" | "trusted-path") {
-  const identities = await loadIdentityStore();
-  const cache = await loadFingerprintCache();
+  const identities = IdentityStore.load();
+  const cache = new FingerprintCache();
   for (const track of tracks) {
     try {
       const fingerprint = await fingerprintTrack(track, cache);
@@ -326,8 +360,8 @@ export async function rememberConfirmedTrackIdentities(tracks: TrackFile[], sour
       // Path-based overrides remain available when the optional fingerprint tool cannot read a file.
     }
   }
-  await saveIdentityStore(identities);
-  await saveFingerprintCache(cache);
+  identities.flush();
+  cache.flush();
 }
 
 export function identificationNeedsReview(track: TrackFile, settings: PrivateSettings) {
@@ -335,13 +369,51 @@ export function identificationNeedsReview(track: TrackFile, settings: PrivateSet
   if (!settings.identification || !status || isTrackKeepManaged(track.managedBy)) {
     return false;
   }
-  if (status === "user-confirmed" || status === "trackkeep-confirmed") {
+  if (isConfirmedIdentityStatus(status)) {
     return false;
   }
   if (status === "fingerprint-and-release-confirmed") {
     return settings.identification.requireReviewBeforeFileChanges;
   }
   return true;
+}
+
+/** Tier 1: a file tagged with both a MusicBrainz recording and release ID is trusted as-is. */
+function musicBrainzTaggedIdentity(track: TrackFile): TrackFile | null {
+  const ids = track.musicbrainz;
+  if (!ids?.recordingId || !ids.releaseId) {
+    return null;
+  }
+
+  return {
+    ...track,
+    metadataConfidence: "musicbrainz",
+    targetSource: "musicbrainz",
+    identification: {
+      status: "musicbrainz-tagged",
+      source: "musicbrainz",
+      message: "MusicBrainz recording and release IDs in the file's tags are trusted.",
+      recordingId: ids.recordingId,
+      releaseId: ids.releaseId,
+      releaseGroupId: ids.releaseGroupId
+    }
+  };
+}
+
+const acoustIdCacheTtlMs = 1000 * 60 * 60 * 24 * 30;
+const acoustIdEmptyCacheTtlMs = 1000 * 60 * 60 * 24 * 7;
+
+/** AcoustID answers are stable, so scans reuse them instead of re-querying unconfirmed tracks every time. */
+export async function cachedAcoustIdLookup(apiKey: string, fingerprint: FingerprintResult) {
+  const key = `acoustid:${sha1(`${fingerprint.duration}:${fingerprint.fingerprint}`)}`;
+  const cached = httpCacheGet<TrackIdentificationCandidate[]>(key);
+  if (cached) {
+    return cached;
+  }
+
+  const candidates = await lookupAcoustId(apiKey, fingerprint);
+  httpCacheSet(key, candidates, candidates.length > 0 ? acoustIdCacheTtlMs : acoustIdEmptyCacheTtlMs);
+  return candidates;
 }
 
 function localCandidateTrack(track: TrackFile, settings: NonNullable<PrivateSettings["identification"]>) {
@@ -392,6 +464,7 @@ function applyCandidate(
     }),
     metadataConfidence: "musicbrainz" as TrackFile["metadataConfidence"],
     targetSource: "musicbrainz" as TrackFile["targetSource"],
+    musicbrainz: musicBrainzIdsFromCandidate(candidate, track.musicbrainz),
     identification: {
       status,
       source: "musicbrainz" as const,
@@ -402,11 +475,32 @@ function applyCandidate(
       acoustId: candidate.acoustId,
       recordingId: candidate.recordingId,
       releaseId: candidate.releaseId ?? undefined,
-      candidates: track.identification?.candidates
+      releaseGroupId: candidate.releaseGroupId ?? undefined,
+      candidates: track.identification?.candidates,
+      candidateSource: track.identification?.candidateSource
     }
   } satisfies TrackFile;
   const target = targetForTrack(partial, settings);
   return { ...partial, targetPath: target.targetPath, targetRelativePath: target.targetRelativePath };
+}
+
+function musicBrainzIdsFromCandidate(
+  candidate: TrackIdentificationCandidate,
+  existing: TrackMusicBrainzIds | undefined
+): TrackMusicBrainzIds | undefined {
+  if (!candidate.recordingId && !candidate.releaseId) {
+    return existing;
+  }
+  // A different release invalidates the old release-level IDs; keep nothing from it.
+  const sameRelease = existing?.releaseId && existing.releaseId === candidate.releaseId;
+  return {
+    recordingId: candidate.recordingId || undefined,
+    releaseId: candidate.releaseId ?? undefined,
+    releaseGroupId: candidate.releaseGroupId ?? (sameRelease ? existing?.releaseGroupId : undefined),
+    releaseTrackId: candidate.releaseTrackId ?? (sameRelease ? existing?.releaseTrackId : undefined),
+    artistIds: candidate.artistIds?.length ? candidate.artistIds : sameRelease ? existing?.artistIds : undefined,
+    albumArtistIds: candidate.albumArtistIds?.length ? candidate.albumArtistIds : sameRelease ? existing?.albumArtistIds : undefined
+  };
 }
 
 function trackFromStoredIdentity(track: TrackFile, stored: StoredIdentity, settings: PrivateSettings) {
@@ -443,9 +537,12 @@ function storedIdentityFromTrack(
     id: sha1(`${source}:${track.id}:${track.title}`),
     score: 1,
     acoustId: track.identification?.acoustId ?? "",
-    recordingId: track.identification?.recordingId ?? "",
-    releaseId: track.identification?.releaseId ?? null,
-    releaseGroupId: null,
+    recordingId: track.identification?.recordingId ?? track.musicbrainz?.recordingId ?? "",
+    releaseId: track.identification?.releaseId ?? track.musicbrainz?.releaseId ?? null,
+    releaseGroupId: track.identification?.releaseGroupId ?? track.musicbrainz?.releaseGroupId ?? null,
+    releaseTrackId: track.musicbrainz?.releaseTrackId,
+    artistIds: track.musicbrainz?.artistIds,
+    albumArtistIds: track.musicbrainz?.albumArtistIds,
     artist: track.artist,
     albumArtist: track.albumArtist,
     album: track.album,
@@ -477,13 +574,18 @@ function storedIdentityFromCandidate(
   return { fingerprint, source, candidate, confirmedAt: new Date().toISOString() };
 }
 
-async function fingerprintTrack(track: TrackFile, cache: Map<string, FingerprintCacheEntry>) {
-  const cacheKey = fingerprintCacheKey(track.absolutePath, track.size, track.mtimeMs);
-  const cached = cache.get(cacheKey);
+async function fingerprintTrack(track: TrackFile, cache: FingerprintCache) {
+  const cached = cache.lookup(track);
   if (cached) {
-    return { duration: cached.duration, fingerprint: cached.fingerprint };
+    return cached;
   }
-  const { stdout } = await execFileAsync("fpcalc", ["-json", track.absolutePath], {
+  const result = await fingerprintFile(track.absolutePath);
+  cache.store(track, result);
+  return result;
+}
+
+export async function fingerprintFile(filePath: string): Promise<FingerprintResult> {
+  const { stdout } = await execFileAsync("fpcalc", ["-json", filePath], {
     encoding: "utf8",
     maxBuffer: 10 * 1024 * 1024,
     timeout: 120_000
@@ -492,9 +594,7 @@ async function fingerprintTrack(track: TrackFile, cache: Map<string, Fingerprint
   if (!parsed.fingerprint || !Number.isFinite(parsed.duration) || Number(parsed.duration) <= 0) {
     throw new Error("fpcalc did not return a usable fingerprint");
   }
-  const result = { duration: Math.round(Number(parsed.duration)), fingerprint: parsed.fingerprint };
-  cache.set(cacheKey, { ...result, absolutePath: path.resolve(track.absolutePath), size: track.size, mtimeMs: track.mtimeMs });
-  return result;
+  return { duration: Math.round(Number(parsed.duration)), fingerprint: parsed.fingerprint };
 }
 
 class AcoustIdLookupError extends Error {}
@@ -597,6 +697,12 @@ export function candidatesFromAcoustId(payload: AcoustIdResponse): TrackIdentifi
             duration: recording.duration ? Math.round(recording.duration) : null,
             isrc: recording.isrcs?.[0]?.toUpperCase() ?? null
           };
+          const releaseTrackId = slot?.releaseTrackId;
+          const artistIds = artistCreditIds(slot?.artistRefs ?? recording.artists);
+          const albumArtistIds = artistCreditIds(release?.artists ?? releaseGroup.artists);
+          if (releaseTrackId) candidate.releaseTrackId = releaseTrackId;
+          if (artistIds.length) candidate.artistIds = artistIds;
+          if (albumArtistIds.length) candidate.albumArtistIds = albumArtistIds;
           candidates.push(candidate);
         }
       }
@@ -619,6 +725,8 @@ function recordingSlot(release: AcoustIdRelease, recordingId: string) {
       }
       return {
         artist: artistCredit(track.artists),
+        artistRefs: track.artists,
+        releaseTrackId: track.id,
         title: track.title,
         trackNumber: positiveInteger(track.position),
         trackTotal: positiveInteger(medium.track_count) ?? medium.tracks?.length ?? null,
@@ -631,6 +739,10 @@ function recordingSlot(release: AcoustIdRelease, recordingId: string) {
 
 function artistCredit(artists: AcoustIdArtist[] | undefined) {
   return (artists ?? []).map((artist) => artist.name?.trim()).filter(Boolean).join(", ");
+}
+
+function artistCreditIds(artists: AcoustIdArtist[] | undefined) {
+  return (artists ?? []).map((artist) => artist.id?.trim()).filter((id): id is string => Boolean(id));
 }
 
 function releaseYear(value: AcoustIdRelease["date"]) {
@@ -665,50 +777,6 @@ function uniqueValue(values: string[]) {
 
 function withIdentification(track: TrackFile, identification: NonNullable<TrackFile["identification"]>): TrackFile {
   return { ...track, identification };
-}
-
-async function loadIdentityStore() {
-  try {
-    const parsed = JSON.parse(await fs.readFile(identityStorePath, "utf8")) as IdentityStoreFile;
-    return new Map((parsed.entries ?? []).filter((entry) => entry.fingerprint).map((entry) => [entry.fingerprint, entry]));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return new Map<string, StoredIdentity>();
-    }
-    throw error;
-  }
-}
-
-async function saveIdentityStore(entries: Map<string, StoredIdentity>) {
-  await atomicWrite(identityStorePath, { entries: Array.from(entries.values()) } satisfies IdentityStoreFile);
-}
-
-async function loadFingerprintCache() {
-  try {
-    const parsed = JSON.parse(await fs.readFile(fingerprintCachePath, "utf8")) as FingerprintCacheFile;
-    return new Map((parsed.entries ?? []).map((entry) => [fingerprintCacheKey(entry.absolutePath, entry.size, entry.mtimeMs), entry]));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return new Map<string, FingerprintCacheEntry>();
-    }
-    throw error;
-  }
-}
-
-async function saveFingerprintCache(entries: Map<string, FingerprintCacheEntry>) {
-  const newest = Array.from(entries.values()).sort((left, right) => right.mtimeMs - left.mtimeMs).slice(0, 100_000);
-  await atomicWrite(fingerprintCachePath, { entries: newest } satisfies FingerprintCacheFile);
-}
-
-function fingerprintCacheKey(absolutePath: string, size: number, mtimeMs: number) {
-  return `${path.resolve(absolutePath).toLowerCase()}|${size}|${mtimeMs}`;
-}
-
-async function atomicWrite(filePath: string, payload: unknown) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.tmp`;
-  await fs.writeFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-  await fs.rename(tempPath, filePath);
 }
 
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>, onProgress?: (completed: number) => void) {

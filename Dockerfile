@@ -45,4 +45,4 @@ RUN mkdir -p /data /music \
 EXPOSE 8080
 VOLUME ["/data", "/music"]
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["node", "dist/server/server/index.js"]
+CMD ["node", "--disable-warning=ExperimentalWarning", "dist/server/server/index.js"]

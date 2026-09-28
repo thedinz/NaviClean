@@ -1,6 +1,6 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import test from "node:test";
-import { albumWithCompletedDownloads, chunkItems, mergeProviderPreviews, missingTrackSelection } from "../src/client/App.js";
+import { albumWithCompletedDownloads, chunkItems, mergeProviderPreviews, missingTrackSelection } from "../src/client/lib/discover-helpers.js";
 import type { SpotifyAlbumDetail, SpotifyCatalogDownloadJob, SpotifyCatalogDownloadPreviewResult, SpotifyTrackSummary } from "../src/shared/types.js";
 
 test("provider preview batches keep every selected album track", () => {
