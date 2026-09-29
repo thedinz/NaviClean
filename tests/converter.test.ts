@@ -152,14 +152,8 @@ function settings(libraryPath: string): PrivateSettings {
       emptyFolderExclusions: []
     },
     naming: {
-      artistFolderFormat: "",
-      colonReplacementFormat: 4,
       libraryPath,
-      mode: "standard",
-      multiDiscTrackFormat: "",
       recycleBinPath: `${libraryPath}/.naviclean-trash`,
-      replaceIllegalCharacters: true,
-      standardTrackFormat: ""
     },
     navidrome: {
       baseUrl: "",

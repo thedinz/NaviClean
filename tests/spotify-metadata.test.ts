@@ -202,14 +202,8 @@ function settings(): PrivateSettings {
       discovery: { requestsPerMinute: 1000 }
     },
     naming: {
-      mode: "standard",
       libraryPath: "/music",
       recycleBinPath: "/music/.naviclean-trash",
-      artistFolderFormat: "{Album Artist Name}",
-      standardTrackFormat: "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}",
-      multiDiscTrackFormat: "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}",
-      replaceIllegalCharacters: true,
-      colonReplacementFormat: 4
     },
     scan: { autoScanEnabled: true, autoScanTime: "02:00", extensions: [".m4a"] },
     cleanup: { emptyFolderExclusions: [] }

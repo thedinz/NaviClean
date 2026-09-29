@@ -79,3 +79,19 @@ test("identity settings migrate safely and Spotify has an explicit switch", () =
     requireReviewBeforeFileChanges: false
   });
 });
+
+test("naming settings keep only the library and recycle paths from older settings files", () => {
+  const settings = normalizeSettings({
+    naming: {
+      libraryPath: " /mnt/music ",
+      recycleBinPath: "",
+      mode: "manual",
+      standardTrackFormat: "{Track Title}",
+      colonReplacementFormat: 1
+    } as unknown as Parameters<typeof normalizeSettings>[0]["naming"]
+  });
+
+  assert.equal(settings.naming.libraryPath, "/mnt/music");
+  assert.ok(settings.naming.recycleBinPath.endsWith(".naviclean-trash"));
+  assert.deepEqual(Object.keys(settings.naming).sort(), ["libraryPath", "recycleBinPath"]);
+});

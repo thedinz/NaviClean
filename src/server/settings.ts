@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { CatalogProviderId, NamingMode, QualityCodecFamily, SettingsUpdate, SettingsView } from "../shared/types.js";
+import type { CatalogProviderId, NamingSettings, QualityCodecFamily, SettingsUpdate, SettingsView } from "../shared/types.js";
 import { writeJsonAtomic } from "./file-ops.js";
 
 export type EngineSettings = {
@@ -68,16 +68,7 @@ export type PrivateSettings = {
     autoAcceptUniqueFingerprintMatches: boolean;
     requireReviewBeforeFileChanges: boolean;
   };
-  naming: {
-    mode: NamingMode;
-    libraryPath: string;
-    recycleBinPath: string;
-    artistFolderFormat: string;
-    standardTrackFormat: string;
-    multiDiscTrackFormat: string;
-    replaceIllegalCharacters: boolean;
-    colonReplacementFormat: number;
-  };
+  naming: NamingSettings;
   scan: {
     extensions: string[];
     autoScanEnabled: boolean;
@@ -164,18 +155,9 @@ const defaultCleanup = {
   // Keep the pre-rebrand .spotifybu path excluded so existing TrackKeep installs remain safe.
   emptyFolderExclusions: ["provider-downloads", ".spotifybu/tmp/provider-downloads"]
 };
-export const standardNamingFormatDefaults = {
-  artistFolderFormat: "{Album Artist Name}",
-  standardTrackFormat: "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}",
-  multiDiscTrackFormat: "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}",
-  replaceIllegalCharacters: true,
-  colonReplacementFormat: 4
-} as const;
-const defaultNaming = {
-  mode: "standard" as const,
+const defaultNaming: NamingSettings = {
   libraryPath: process.env.NAVICLEAN_MUSIC_DIR || "/music",
-  recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash"),
-  ...standardNamingFormatDefaults
+  recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash")
 };
 const defaultCatalog = {
   spotify: {
@@ -264,14 +246,8 @@ export function toSettingsView(settings: PrivateSettings): SettingsView {
         settings.identification?.requireReviewBeforeFileChanges ?? defaultIdentification.requireReviewBeforeFileChanges
     },
     naming: {
-      mode: settings.naming.mode,
       libraryPath: settings.naming.libraryPath,
-      recycleBinPath: settings.naming.recycleBinPath,
-      artistFolderFormat: settings.naming.artistFolderFormat,
-      standardTrackFormat: settings.naming.standardTrackFormat,
-      multiDiscTrackFormat: settings.naming.multiDiscTrackFormat,
-      replaceIllegalCharacters: settings.naming.replaceIllegalCharacters,
-      colonReplacementFormat: settings.naming.colonReplacementFormat
+      recycleBinPath: settings.naming.recycleBinPath
     },
     scan: settings.scan,
     cleanup: settings.cleanup,
@@ -546,16 +522,18 @@ function normalizeMusicBrainzSettings(partial: Partial<MusicBrainzSettings> | un
 }
 
 function normalizeNamingSettings(
-  fallback: PrivateSettings["naming"],
-  partial: Partial<PrivateSettings["naming"]> | undefined
-): PrivateSettings["naming"] {
-  const compacted = compactStringValues(partial ?? {});
+  fallback: NamingSettings,
+  partial: Partial<NamingSettings> | undefined
+): NamingSettings {
+  // Older settings files may still carry the removed template fields; only the paths are kept.
   return {
-    ...fallback,
-    ...compacted,
-    mode: "standard" as const,
-    ...standardNamingFormatDefaults
+    libraryPath: nonEmptyString(partial?.libraryPath) ?? fallback.libraryPath,
+    recycleBinPath: nonEmptyString(partial?.recycleBinPath) ?? fallback.recycleBinPath
   };
+}
+
+function nonEmptyString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeCatalogSettings(
@@ -705,17 +683,6 @@ function normalizeRelativeFolderExclusions(paths: unknown) {
     .filter((value) => !value.split("/").some((segment) => segment === ".."));
 
   return Array.from(new Set(normalized));
-}
-
-function compactStringValues<T extends Record<string, unknown>>(values: T): Partial<T> {
-  return Object.fromEntries(
-    Object.entries(values).filter(([, value]) => {
-      if (typeof value !== "string") {
-        return typeof value !== "undefined";
-      }
-      return value.trim().length > 0;
-    })
-  ) as Partial<T>;
 }
 
 function trimTrailingSlash(value: string) {
