@@ -248,6 +248,39 @@ test("trusting an ordinary folder never trusts managed tracks in that folder", (
   assert.equal(result.tracks[2]?.metadataConfidence, "path-suggestion");
 });
 
+test("trusting a folder confirms its identity immediately, without waiting for a rescan", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const sourceRelativePath = "Artist/Album Name/03 - Track.mp3";
+    const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "audio");
+    const testSettings = settings({ libraryPath: root });
+    const pathTrack = track({
+      id: "path-only",
+      absolutePath: sourcePath,
+      relativePath: sourceRelativePath,
+      metadataConfidence: "path-suggestion",
+      metadataSuggestion: { artist: "Artist", albumArtist: "Artist", album: "Album Name", title: "Track", trackNumber: 3, discNumber: 1, year: 2026 },
+      identification: { status: "candidate-only", source: "local-path", message: "Path hints only." },
+      issues: ["Path-derived artist or album requires metadata review"]
+    });
+
+    const before = await buildOrganizePlan([pathTrack], testSettings);
+    assert.equal(before.items[0]?.status, "metadata-review");
+
+    const trusted = trustPathMetadataForFolder(testSettings, [pathTrack], "path-only");
+    const after = await buildOrganizePlan(trusted.tracks, testSettings);
+
+    assert.equal(trusted.tracks[0]?.identification?.status, "user-confirmed");
+    assert.deepEqual(trusted.tracks[0]?.issues, []);
+    assert.equal(after.items[0]?.status, "ready");
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("normal file without TrackKeep identity keeps existing organization behavior", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
 
