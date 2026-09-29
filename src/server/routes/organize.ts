@@ -1,10 +1,10 @@
 import { Router } from "express";
+import fs from "node:fs/promises";
 import type { OrganizeTrashSelection, TrackFile } from "../../shared/types.js";
 import { loadCatalog, saveCatalog, type Catalog } from "../catalog.js";
 import { buildDuplicateGroups, resolveDuplicates, resolveSelectedDuplicates } from "../duplicates.js";
 import { HttpError, mutation, requireList, requireString, route, stringList } from "../http.js";
 import { confirmIdentificationCandidate, rememberConfirmedTrackIdentities } from "../identification.js";
-import { moveMetadataOverrides, saveMetadataOverridesForTracks } from "../metadata-overrides.js";
 import { trustPathMetadataForFolder } from "../metadata-review.js";
 import {
   buildWorkflowState,
@@ -16,6 +16,7 @@ import { setTrackOrganizationSkipped } from "../organize-skip.js";
 import { applyOrganizePlan, trashOrganizeCandidates } from "../organizer.js";
 import { loadSettings, type PrivateSettings } from "../settings.js";
 import { resolveTrackMetadataFromSpotify } from "../spotify-metadata.js";
+import { moveTrackDecisions, saveMetadataOverridesForTracks, saveSkipDecision } from "../track-decisions.js";
 
 export const organizeRouter = Router();
 
@@ -56,18 +57,28 @@ organizeRouter.post("/organize/apply", mutation(async (req, res) => {
   let latestCatalog = catalog;
 
   if (result.moved > 0) {
-    const applied = result.items.filter((item) => item.applied);
-    await moveMetadataOverrides(applied.map((item) => ({ sourcePath: item.sourcePath, targetPath: item.targetPath })));
-    const movedById = new Map(applied.map((item) => [item.id, item]));
+    // Canonical retagging rewrites files before they move, so record their new size and mtime;
+    // decisions and the catalog would otherwise describe the pre-retag file.
+    const moved = await Promise.all(
+      result.items
+        .filter((item) => item.applied)
+        .map(async (item) => ({ item, stat: await fs.stat(item.targetPath) }))
+    );
+    await moveTrackDecisions(
+      moved.map(({ item, stat }) => ({ sourcePath: item.sourcePath, targetPath: item.targetPath, size: stat.size }))
+    );
+    const movedById = new Map(moved.map((entry) => [entry.item.id, entry]));
     tracks = planned.tracks.map((track) => {
-      const moved = movedById.get(track.id);
-      return moved
+      const entry = movedById.get(track.id);
+      return entry
         ? {
             ...track,
-            absolutePath: moved.targetPath,
-            relativePath: moved.targetRelativePath,
-            targetPath: moved.targetPath,
-            targetRelativePath: moved.targetRelativePath
+            absolutePath: entry.item.targetPath,
+            relativePath: entry.item.targetRelativePath,
+            targetPath: entry.item.targetPath,
+            targetRelativePath: entry.item.targetRelativePath,
+            size: entry.stat.size,
+            mtimeMs: entry.stat.mtimeMs
           }
         : track;
     });
@@ -132,6 +143,10 @@ organizeRouter.post("/organize/skip", mutation(async (req, res) => {
 
   const catalog = await loadCatalog();
   const resolution = setTrackOrganizationSkipped(catalog.tracks, localTrackId, skipped);
+  const updated = resolution.tracks.find((track) => track.id === localTrackId);
+  if (updated) {
+    saveSkipDecision(updated);
+  }
   const plan = await saveAndReplan(resolution.tracks, await loadSettings());
 
   res.json({

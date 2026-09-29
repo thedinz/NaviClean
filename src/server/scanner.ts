@@ -5,14 +5,20 @@ import path from "node:path";
 import { isConfirmedIdentityStatus } from "../shared/identity.js";
 import type { NavidromeMetadataEnrichment, NavidromeMetadataMatchMethod, ScanStatus, TrackFile } from "../shared/types.js";
 import { AudioMetadataCache, musicBrainzIdsFromMetadata, readAudioMetadata, type AudioMetadata } from "./audio-metadata.js";
-import { loadCatalog, saveCatalog } from "./catalog.js";
+import { saveCatalog } from "./catalog.js";
 import { buildDuplicateKey } from "./matching.js";
 import { identifyTracks } from "./identification.js";
 import { pathReviewIssue, withIdentity } from "./identity.js";
-import { loadMetadataOverrides, validMetadataOverride, type MetadataOverride } from "./metadata-overrides.js";
+import {
+  loadMetadataOverrides,
+  loadSkipDecisions,
+  pruneTrackDecisions,
+  skipDecisionFor,
+  validMetadataOverride,
+  type MetadataOverride
+} from "./track-decisions.js";
 import { fetchNavidromeLibraryTracks, searchNavidromeLibraryTrackCandidates, type NavidromeLibraryTrack } from "./navidrome.js";
 import { targetForTrack } from "./organizer.js";
-import { preserveOrganizationSkipDecisions } from "./organize-skip.js";
 import type { PrivateSettings } from "./settings.js";
 import { hasTrackKeepIdentityTags, readTrackKeepIdentity } from "./trackkeep.js";
 import {
@@ -70,7 +76,7 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
   const readResults = new Array<TrackFile | null>(files.length).fill(null);
   const errors: string[] = [];
   const warnings: string[] = [];
-  const metadataOverrides = await loadMetadataOverrides();
+  const decisions = { overrides: await loadMetadataOverrides(), skips: loadSkipDecisions() };
   const metadataCache = new AudioMetadataCache();
 
   onProgress?.({ phase: "metadata", processedFiles: 0, totalFiles: files.length, cachedFiles: 0 });
@@ -84,7 +90,7 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
       const filePath = files[index];
 
       try {
-        readResults[index] = await readTrack(filePath, root, settings, metadataOverrides, metadataCache);
+        readResults[index] = await readTrack(filePath, root, settings, decisions, metadataCache);
         audioFiles += 1;
       } catch (error) {
         errors.push(`${toPosixRelative(root, filePath)}: ${(error as Error).message}`);
@@ -138,10 +144,9 @@ export async function scanLibrary(settings: PrivateSettings, onProgress?: Progre
   }
 
   onProgress?.({ phase: "saving", processedFiles: tracks.length, totalFiles: tracks.length });
-  const latestCatalog = await loadCatalog();
-  const nextTracks = preserveOrganizationSkipDecisions(navidromeEnriched.tracks, latestCatalog.tracks);
-  await saveCatalog(nextTracks);
-  return { tracks: nextTracks, errors, warnings };
+  await saveCatalog(navidromeEnriched.tracks);
+  pruneTrackDecisions(files);
+  return { tracks: navidromeEnriched.tracks, errors, warnings };
 }
 
 async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, tracks: TrackFile[], onProgress?: ProgressHandler) {
@@ -1156,11 +1161,11 @@ async function readTrack(
   filePath: string,
   root: string,
   settings: PrivateSettings,
-  metadataOverrides: Map<string, MetadataOverride>,
+  decisions: { overrides: Map<string, MetadataOverride>; skips: Map<string, string> },
   metadataCache?: AudioMetadataCache
 ): Promise<TrackFile> {
   const stat = await fs.stat(filePath);
-  const metadataOverride = validMetadataOverride(metadataOverrides, filePath, stat.size);
+  const metadataOverride = validMetadataOverride(decisions.overrides, filePath, stat.size);
   const extension = path.extname(filePath).toLowerCase();
   const relativePath = toPosixRelative(root, filePath);
   const inferred = inferMetadataFromPath(relativePath);
@@ -1345,6 +1350,7 @@ async function readTrack(
         : undefined,
     managedBy,
     musicbrainz,
+    organizeSkippedAt: skipDecisionFor(decisions.skips, filePath),
     issues
   } satisfies TrackFile;
 
