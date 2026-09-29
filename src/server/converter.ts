@@ -13,8 +13,11 @@ import type {
   TrackFile
 } from "../shared/types.js";
 import { loadCatalog } from "./catalog.js";
+import { moveFileNoOverwrite, TargetExistsError } from "./file-ops.js";
+import { withLibraryLock } from "./library-lock.js";
 import { scanAndWait } from "./scan-service.js";
 import type { PrivateSettings } from "./settings.js";
+import { moveTrackDecisions } from "./track-decisions.js";
 import { isInsidePath, toPosixRelative } from "./utils.js";
 
 type StoredAudioConvertJobItem = AudioConvertJobItem & {
@@ -309,11 +312,14 @@ async function runAudioConvertJobItem(
       throw new Error("ffmpeg produced an empty output file.");
     }
 
-    if (await canAccess(item.targetPath, constants.F_OK)) {
-      throw new Error(`Target already exists: ${item.targetRelativePath}`);
+    try {
+      await moveFileNoOverwrite(tempPath, item.targetPath);
+    } catch (error) {
+      if (error instanceof TargetExistsError) {
+        throw new Error(`Target already exists: ${item.targetRelativePath}`);
+      }
+      throw error;
     }
-
-    await fs.rename(tempPath, item.targetPath);
     await fs.utimes(item.targetPath, new Date(), new Date(item.sourceMtimeMs)).catch(() => undefined);
 
     try {
@@ -322,6 +328,11 @@ async function runAudioConvertJobItem(
       await fs.rm(item.targetPath, { force: true }).catch(() => undefined);
       throw new Error(`Converted output was created, but the original could not be deleted: ${errorMessage(error)}`);
     }
+
+    // The converted file is the same recording, so the user's metadata and skip decisions follow it.
+    await withLibraryLock(() =>
+      moveTrackDecisions([{ sourcePath: item.sourcePath, targetPath: item.targetPath, size: outputStats.size }])
+    );
 
     item.completedAt = new Date().toISOString();
     item.outputSize = outputStats.size;

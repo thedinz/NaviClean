@@ -13,7 +13,7 @@ import { httpCacheGet, httpCacheSet } from "./http-cache.js";
 import { FingerprintCache, IdentityStore, type FingerprintResult, type StoredIdentity } from "./identity-store.js";
 import { withIdentity } from "./identity.js";
 import { identifyByMusicBrainzText } from "./mb-identify.js";
-import { saveMetadataOverridesForTracks } from "./metadata-overrides.js";
+import { saveMetadataOverridesForTracks } from "./track-decisions.js";
 import type { PrivateSettings } from "./settings.js";
 import { isTrackKeepManaged } from "./trackkeep.js";
 import { mapWithConcurrency, sha1 } from "./utils.js";

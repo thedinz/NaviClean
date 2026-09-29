@@ -111,6 +111,26 @@ const migrations: Migration[] = [
         CREATE INDEX releases_artist ON releases(artist_id);
       `);
     }
+  },
+  {
+    // Organize skips used to live only on catalog rows and were lost whenever a file changed path.
+    version: 2,
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE organize_skips (
+          path_key TEXT PRIMARY KEY,
+          absolute_path TEXT NOT NULL,
+          skipped_at TEXT NOT NULL
+        );
+      `);
+      const insert = db.prepare("INSERT OR REPLACE INTO organize_skips (path_key, absolute_path, skipped_at) VALUES (?, ?, ?)");
+      for (const row of db.prepare("SELECT data FROM tracks").all() as Array<{ data: string }>) {
+        const track = parseJson<{ absolutePath?: string; organizeSkippedAt?: string }>(row.data);
+        if (track?.absolutePath && typeof track.organizeSkippedAt === "string" && track.organizeSkippedAt) {
+          insert.run(pathKey(track.absolutePath), path.resolve(track.absolutePath), track.organizeSkippedAt);
+        }
+      }
+    }
   }
 ];
 
@@ -232,7 +252,7 @@ function runMigrations(db: DatabaseSync) {
   }
 }
 
-type LegacyTrack = { id?: string; absolutePath?: string };
+type LegacyTrack = { id?: string; absolutePath?: string; organizeSkippedAt?: string };
 
 /**
  * Moves the pre-SQLite JSON stores into the database once. The originals are renamed
@@ -245,9 +265,15 @@ function importLegacyJsonStores(db: DatabaseSync, dataDir: string) {
       load: (payload) => {
         const catalog = payload as { updatedAt?: string | null; tracks?: LegacyTrack[] };
         const insert = db.prepare("INSERT OR REPLACE INTO tracks (id, path_key, data) VALUES (?, ?, ?)");
+        const insertSkip = db.prepare(
+          "INSERT OR REPLACE INTO organize_skips (path_key, absolute_path, skipped_at) VALUES (?, ?, ?)"
+        );
         for (const track of Array.isArray(catalog.tracks) ? catalog.tracks : []) {
           if (track?.id && track.absolutePath) {
             insert.run(track.id, pathKey(track.absolutePath), JSON.stringify(track));
+          }
+          if (track?.absolutePath && typeof track.organizeSkippedAt === "string" && track.organizeSkippedAt) {
+            insertSkip.run(pathKey(track.absolutePath), path.resolve(track.absolutePath), track.organizeSkippedAt);
           }
         }
         db.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES ('catalog.updatedAt', ?)").run(

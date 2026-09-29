@@ -10,7 +10,7 @@ test("user metadata decisions survive later scans whether Navidrome matches or n
   const dataDir = path.join(root, "data");
   process.env.NAVICLEAN_DATA_DIR = dataDir;
   const { scanLibrary } = await import("../src/server/scanner.js");
-  const { saveMetadataOverridesForTracks } = await import("../src/server/metadata-overrides.js");
+  const { saveMetadataOverridesForTracks } = await import("../src/server/track-decisions.js");
   const { listUnindexedFiles } = await import("../src/server/unindexed.js");
   const trustedRelativePath = "Artist/Artist - Real Album (2020)/Artist - Real Album (2020) - 01 - Track.mp3";
   const spotifyRelativePath = "[Unknown Artist]/[Unknown Artist] - [Unknown Album] (2018)/[Unknown Artist] - [Unknown Album] (2018) - 01 - The Flute Song.mp3";

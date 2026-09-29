@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { TrackFile } from "../shared/types.js";
 
 export function setTrackOrganizationSkipped(
@@ -28,18 +27,4 @@ export function setTrackOrganizationSkipped(
     skipped,
     updatedTrackIds: [localTrackId]
   };
-}
-
-export function preserveOrganizationSkipDecisions(scannedTracks: TrackFile[], previousTracks: TrackFile[]) {
-  const skippedByPath = new Map(
-    previousTracks
-      .filter((track) => typeof track.organizeSkippedAt === "string" && track.organizeSkippedAt)
-      .map((track) => [path.resolve(track.absolutePath), track.organizeSkippedAt as string])
-  );
-
-  return scannedTracks.map((track) => {
-    const organizeSkippedAt = skippedByPath.get(path.resolve(track.absolutePath));
-
-    return organizeSkippedAt ? { ...track, organizeSkippedAt } : track;
-  });
 }
