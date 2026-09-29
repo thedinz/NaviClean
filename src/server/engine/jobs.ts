@@ -14,6 +14,7 @@ import type {
 } from "../../shared/types.js";
 import { loadCatalog, saveCatalog, upsertCatalogTracks } from "../catalog.js";
 import { execute, parseJson, queryAll } from "../db.js";
+import { moveFileNoOverwrite } from "../file-ops.js";
 import { publish } from "../events.js";
 import { trashLibraryTracks } from "../library.js";
 import {
@@ -563,7 +564,7 @@ async function importIntoLibrary(
 
   const destination = await nextAvailableFilePath(path.resolve(libraryPath, ...planned.targetRelativePath.split("/")));
   await fs.mkdir(path.dirname(destination), { recursive: true });
-  await moveFile(stagedPath, destination);
+  await moveFileNoOverwrite(stagedPath, destination);
   const stats = await fs.stat(destination);
   const imported: TrackFile = downloadTrackToTrackFile(settings, item.track, format, {
     absolutePath: destination,
@@ -724,18 +725,6 @@ async function requireSettings() {
     throw new Error("The download engine has not been initialized.");
   }
   return loadSettings();
-}
-
-async function moveFile(source: string, target: string) {
-  try {
-    await fs.rename(source, target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EXDEV") {
-      throw error;
-    }
-    await fs.copyFile(source, target, fs.constants.COPYFILE_EXCL);
-    await fs.unlink(source);
-  }
 }
 
 export class EngineNotFoundError extends Error {}

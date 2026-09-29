@@ -6,7 +6,7 @@ import { test } from "node:test";
 import type { TrackFile } from "../src/shared/types.js";
 import { trustPathMetadataForFolder } from "../src/server/metadata-review.js";
 import { preserveOrganizationSkipDecisions, setTrackOrganizationSkipped } from "../src/server/organize-skip.js";
-import { buildOrganizePlan, targetForTrack, trackNeedsMove, trashOrganizeCandidate, trashOrganizeCandidates } from "../src/server/organizer.js";
+import { applyOrganizePlan, buildOrganizePlan, targetForTrack, trackNeedsMove, trashOrganizeCandidate, trashOrganizeCandidates } from "../src/server/organizer.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 
 const standardTrackFormat =
@@ -542,6 +542,68 @@ test("target collisions that duplicate cleanup cannot match still count as confl
     assert.deepEqual(new Set(plan.items.map((item) => item.status)), new Set(["conflict"]));
     assert.equal(plan.items[0]?.collision?.duplicateKeyMatches, false);
     assert.equal(plan.items[0]?.collision?.candidates.length, 2);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("applying a stale plan never overwrites a file that appeared at the target", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const targetRelativePath = "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3";
+    const sourcePath = path.join(root, "Unsorted", "Track.mp3");
+    const targetPath = path.join(root, ...targetRelativePath.split("/"));
+    const testSettings = settings({ libraryPath: root });
+    const tracks = [track({ id: "source", absolutePath: sourcePath, relativePath: "Unsorted/Track.mp3" })];
+
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "local-copy");
+
+    const reviewedPlan = await buildOrganizePlan(tracks, testSettings);
+    assert.equal(reviewedPlan.summary.ready, 1);
+
+    // Something else (a provider download, another tool) writes the target after the preview.
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, "downloaded");
+
+    const result = await applyOrganizePlan(reviewedPlan);
+
+    assert.equal(result.moved, 0);
+    assert.equal(result.errors.length, 1);
+    assert.match(result.errors[0], /Target already exists/);
+    assert.equal(await fs.readFile(targetPath, "utf8"), "downloaded");
+    assert.equal(await fs.readFile(sourcePath, "utf8"), "local-copy");
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("organize plan fingerprint changes when the ready moves change", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const targetRelativePath = "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3";
+    const sourcePath = path.join(root, "Unsorted", "Track.mp3");
+    const targetPath = path.join(root, ...targetRelativePath.split("/"));
+    const testSettings = settings({ libraryPath: root });
+    const tracks = [track({ id: "source", absolutePath: sourcePath, relativePath: "Unsorted/Track.mp3" })];
+
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "local-copy");
+
+    const first = await buildOrganizePlan(tracks, testSettings);
+    const unchanged = await buildOrganizePlan(tracks, testSettings);
+
+    assert.equal(first.fingerprint, unchanged.fingerprint);
+
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, "downloaded");
+
+    const changed = await buildOrganizePlan(tracks, testSettings);
+
+    assert.equal(changed.summary.ready, 0);
+    assert.notEqual(changed.fingerprint, first.fingerprint);
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }

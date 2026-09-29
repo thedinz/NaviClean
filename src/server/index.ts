@@ -670,11 +670,23 @@ app.post("/api/organize/preview", asyncHandler(async (_req, res) => {
   res.json(evaluation.plan);
 }));
 
-app.post("/api/organize/apply", asyncHandler(async (_req, res) => {
+app.post("/api/organize/apply", asyncHandler(async (req, res) => {
+  const reviewedFingerprint = String(req.body?.fingerprint || "");
   const catalog = await loadCatalog();
   const settings = await loadSettingsForPlanning();
-  const planned = await getOrganizeEvaluation(catalog, settings);
+  // Re-plan against the disk instead of trusting the cache: files may have appeared at targets
+  // since the preview, and only the moves the user actually reviewed may be applied.
+  const planned = await rebuildOrganizeEvaluation(catalog, settings);
   const plan = planned.plan;
+
+  if (!reviewedFingerprint || plan.fingerprint !== reviewedFingerprint) {
+    res.status(409).json({
+      error: "The organize plan changed since it was reviewed. Nothing was moved; review the refreshed preview and apply again.",
+      plan
+    });
+    return;
+  }
+
   const result = await applyOrganizePlan(plan, planned.tracks);
   let tracks = planned.tracks;
   let latestCatalog = catalog;

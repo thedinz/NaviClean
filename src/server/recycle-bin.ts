@@ -1,4 +1,4 @@
-import { constants, type Dirent } from "node:fs";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -7,6 +7,7 @@ import type {
   RecycleBinRestoreResult,
   RecycleBinView
 } from "../shared/types.js";
+import { moveFileNoOverwrite, pruneEmptyDirectories, safeRecycleBinPath } from "./file-ops.js";
 import type { PrivateSettings } from "./settings.js";
 import { isInsidePath, sha1, toPosixRelative } from "./utils.js";
 
@@ -165,21 +166,6 @@ export async function restoreRecycleBinItems(
   };
 }
 
-function safeRecycleBinPath(settings: PrivateSettings) {
-  const recycleBinPath = path.resolve(settings.naming.recycleBinPath);
-  const libraryPath = path.resolve(settings.naming.libraryPath);
-
-  if (recycleBinPath === path.parse(recycleBinPath).root) {
-    throw new Error("Recycle bin path cannot be a drive or filesystem root.");
-  }
-
-  if (recycleBinPath === libraryPath || isInsidePath(recycleBinPath, libraryPath)) {
-    throw new Error("Recycle bin path cannot be the library path or contain the library path.");
-  }
-
-  return recycleBinPath;
-}
-
 async function collectRecycleBinEntries(root: string) {
   const entries: RecycleBinEntry[] = [];
   const stack = [root];
@@ -276,52 +262,23 @@ function parseRecycleBinGroupDate(value: string) {
 }
 
 async function moveEntry(source: string, target: string) {
+  const stat = await fs.stat(source);
+
+  if (!stat.isDirectory()) {
+    await moveFileNoOverwrite(source, target);
+    return;
+  }
+
+  // Only empty folders are listed as recycle-bin folder items.
+  await fs.mkdir(target);
+
   try {
-    await fs.rename(source, target);
+    await fs.rmdir(source);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EXDEV") {
-      throw error;
-    }
-
-    const stat = await fs.stat(source);
-
-    if (stat.isDirectory()) {
-      await fs.mkdir(target);
-      await fs.chmod(target, stat.mode);
-      await fs.utimes(target, stat.atime, stat.mtime);
-      await fs.rmdir(source);
-      return;
-    }
-
-    await fs.copyFile(source, target, constants.COPYFILE_EXCL);
-    await fs.chmod(target, stat.mode);
-    await fs.utimes(target, stat.atime, stat.mtime);
-    await fs.unlink(source);
+    await fs.rmdir(target).catch(() => undefined);
+    throw error;
   }
-}
 
-async function pruneEmptyDirectories(root: string, startDirectory: string) {
-  let current = path.resolve(startDirectory);
-  const resolvedRoot = path.resolve(root);
-
-  while (current !== resolvedRoot && isInsidePath(resolvedRoot, current)) {
-    try {
-      await fs.rmdir(current);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-
-      if (code === "ENOENT") {
-        current = path.dirname(current);
-        continue;
-      }
-
-      if (code === "ENOTEMPTY" || code === "EEXIST") {
-        break;
-      }
-
-      throw error;
-    }
-
-    current = path.dirname(current);
-  }
+  await fs.chmod(target, stat.mode);
+  await fs.utimes(target, stat.atime, stat.mtime);
 }

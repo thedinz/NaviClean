@@ -32,7 +32,7 @@ import type {
   SpotifyMetadataSearchResult,
   TrackFile
 } from "../../shared/types";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { ActionProgress, EmptyState, PathDiff, StatusPill } from "../components/common";
 import { collisionRoleLabel, isTrackKeepManaged, navidromeMatchMethodLabel, pathDirectory, pathFilename, pluralize, qualitySummary } from "../lib/format";
 
@@ -187,13 +187,24 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
     setNotice(null);
     setApplyErrors([]);
     try {
-      const result = await api<OrganizeApplyResult>("/organize/apply", { method: "POST" });
+      const result = await api<OrganizeApplyResult>("/organize/apply", {
+        method: "POST",
+        body: JSON.stringify({ fingerprint: plan.fingerprint })
+      });
       const errorSuffix = result.errors.length ? `, ${result.errors.length} errors` : "";
       setNotice(`${result.moved} moved, ${result.skipped} skipped${errorSuffix}. Preview refreshed.`);
       setApplyErrors(result.errors);
 
       await load({ clearNotice: false, resetPlan: true });
     } catch (caught) {
+      // A 409 means the plan changed since it was reviewed; show the refreshed plan instead.
+      const changedPlan = caught instanceof ApiError && caught.status === 409
+        ? (caught.body as { plan?: OrganizePlan } | null)?.plan
+        : undefined;
+
+      if (changedPlan) {
+        showMutationPlan(changedPlan);
+      }
       setNotice((caught as Error).message);
     } finally {
       setApplyBusy(false);

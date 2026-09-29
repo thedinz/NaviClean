@@ -1,4 +1,4 @@
-import { constants, type Dirent } from "node:fs";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -11,8 +11,9 @@ import type {
   NonMusicFilesView,
   NonMusicTrashResult
 } from "../shared/types.js";
+import { createRecycleSession } from "./file-ops.js";
 import type { PrivateSettings } from "./settings.js";
-import { isInsidePath, sha1, toPosixRelative } from "./utils.js";
+import { sha1, toPosixRelative } from "./utils.js";
 
 type MutableNonMusicGroup = NonMusicFileGroup & {
   examples: NonMusicFileExample[];
@@ -190,30 +191,13 @@ async function trashNonMusicCandidates(
   files: NonMusicFileCandidate[],
   errors: string[]
 ) {
-  const libraryRoot = path.resolve(settings.naming.libraryPath);
-  const trashRoot = safeRecycleBinPath(settings);
-  const trashSessionRoot = path.join(trashRoot, new Date().toISOString().replace(/[:.]/g, "-"));
+  const session = createRecycleSession(settings);
   let trashed = 0;
   let trashedBytes = 0;
 
   for (const file of files) {
-    const sourcePath = path.resolve(file.absolutePath);
-
-    if (!isInsidePath(libraryRoot, sourcePath) || sourcePath === libraryRoot) {
-      errors.push(`${file.relativePath}: only files inside the configured library can be recycled`);
-      continue;
-    }
-
     try {
-      const targetPath = path.join(trashSessionRoot, ...file.relativePath.split("/").filter(Boolean));
-
-      if (!isInsidePath(trashSessionRoot, targetPath) || targetPath === trashSessionRoot) {
-        errors.push(`${file.relativePath}: recycle target leaves the recycle session folder`);
-        continue;
-      }
-
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await moveFile(sourcePath, targetPath);
+      await session.recycle(file.absolutePath, file.relativePath);
       trashed += 1;
       trashedBytes += file.size;
     } catch (error) {
@@ -510,35 +494,4 @@ function classificationRank(value: NonMusicFileClassification) {
   }
 
   return 2;
-}
-
-function safeRecycleBinPath(settings: PrivateSettings) {
-  const recycleBinPath = path.resolve(settings.naming.recycleBinPath);
-  const libraryPath = path.resolve(settings.naming.libraryPath);
-
-  if (recycleBinPath === path.parse(recycleBinPath).root) {
-    throw new Error("Recycle bin path cannot be a drive or filesystem root.");
-  }
-
-  if (recycleBinPath === libraryPath || isInsidePath(recycleBinPath, libraryPath)) {
-    throw new Error("Recycle bin path cannot be the library path or contain the library path.");
-  }
-
-  return recycleBinPath;
-}
-
-async function moveFile(source: string, target: string) {
-  try {
-    await fs.rename(source, target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EXDEV") {
-      throw error;
-    }
-
-    const stat = await fs.stat(source);
-    await fs.copyFile(source, target, constants.COPYFILE_EXCL);
-    await fs.chmod(target, stat.mode);
-    await fs.utimes(target, stat.atime, stat.mtime);
-    await fs.unlink(source);
-  }
 }

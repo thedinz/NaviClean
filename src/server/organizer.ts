@@ -13,12 +13,13 @@ import type {
   TrackFile
 } from "../shared/types.js";
 import { isConfirmedIdentityStatus } from "../shared/identity.js";
+import { createRecycleSession, moveFileNoOverwrite, pathExists, TargetExistsError } from "./file-ops.js";
 import { duplicateKeyForTrack } from "./matching.js";
 import { writeCanonicalTags } from "./canonical-tags.js";
 import { standardNamingFormatDefaults } from "./settings.js";
 import type { PrivateSettings } from "./settings.js";
 import { isTrackKeepManaged, normalizeTrackKeepManagedBy } from "./trackkeep.js";
-import { isInsidePath, toPosixRelative } from "./utils.js";
+import { isInsidePath, sha1, toPosixRelative } from "./utils.js";
 
 const unknownReleaseYear = "Unknown Year";
 const controlCharacters = /[\u0000-\u001f]/g;
@@ -163,6 +164,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
 
   return {
     items,
+    fingerprint: organizePlanFingerprint(items),
     warnings: navidromePlanWarnings(tracks),
     summary: {
       ready: items.filter((item) => item.status === "ready").length,
@@ -174,6 +176,19 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       skipped: items.filter((item) => Boolean(item.organizeSkippedAt)).length
     }
   };
+}
+
+/**
+ * Identifies exactly which moves Apply would perform. The client sends it back with Apply so the
+ * server can refuse to act on a plan that changed after the user reviewed it.
+ */
+export function organizePlanFingerprint(items: OrganizePlanItem[]) {
+  const readyMoves = items
+    .filter((item) => item.status === "ready")
+    .map((item) => [item.id, path.resolve(item.sourcePath), path.resolve(item.targetPath)])
+    .sort((left, right) => left[0].localeCompare(right[0]));
+
+  return sha1(JSON.stringify(readyMoves));
 }
 
 function navidromePlanWarnings(tracks: TrackFile[]) {
@@ -391,12 +406,18 @@ export async function applyOrganizePlan(plan: OrganizePlan, tracks: TrackFile[] 
     }
 
     try {
+      // Check before retagging so a blocked move never leaves the source rewritten in place.
+      // moveFileNoOverwrite still refuses if something appears at the target in between.
+      if (await pathExists(item.targetPath)) {
+        throw new TargetExistsError(item.targetPath);
+      }
+
       const track = tracksById.get(item.id);
       if (track) {
         await writeCanonicalTags(item.sourcePath, track);
       }
       await fs.mkdir(path.dirname(item.targetPath), { recursive: true });
-      await moveFile(item.sourcePath, item.targetPath);
+      await moveFileNoOverwrite(item.sourcePath, item.targetPath);
       result.moved += 1;
       result.items.push({ ...item, applied: true });
     } catch (error) {
@@ -442,9 +463,7 @@ export async function trashOrganizeCandidates(
     selectedCandidates.set(path.resolve(candidate.absolutePath), candidate);
   }
 
-  const libraryRoot = path.resolve(settings.naming.libraryPath);
-  const trashRoot = path.resolve(settings.naming.recycleBinPath);
-  const nowFolder = new Date().toISOString().replace(/[:.]/g, "-");
+  const session = createRecycleSession(settings);
   const removedTrackIds = new Set<string>();
   const removedPaths = new Set<string>();
   const errors: string[] = [];
@@ -453,7 +472,7 @@ export async function trashOrganizeCandidates(
   for (const candidate of selectedCandidates.values()) {
     const sourcePath = path.resolve(candidate.absolutePath);
 
-    if (!isInsidePath(libraryRoot, sourcePath)) {
+    if (!isInsidePath(session.libraryRoot, sourcePath)) {
       errors.push(`${candidate.relativePath}: only files inside the configured library can be recycled from organize`);
       continue;
     }
@@ -464,9 +483,7 @@ export async function trashOrganizeCandidates(
     }
 
     try {
-      const trashPath = path.join(trashRoot, nowFolder, candidate.relativePath);
-      await fs.mkdir(path.dirname(trashPath), { recursive: true });
-      await moveFile(sourcePath, trashPath);
+      await session.recycle(sourcePath, candidate.relativePath);
       trashed += 1;
       removedPaths.add(sourcePath);
 
@@ -775,15 +792,6 @@ function releaseYear(track: TrackFile) {
   return track.year ? String(track.year) : unknownReleaseYear;
 }
 
-async function pathExists(filePath: string) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function sourcePathStatus(filePath: string): Promise<"readable" | "missing" | "unreadable"> {
   try {
     await fs.access(filePath, constants.R_OK);
@@ -828,21 +836,5 @@ async function statIfExists(filePath: string) {
     }
 
     throw error;
-  }
-}
-
-async function moveFile(source: string, target: string) {
-  try {
-    await fs.rename(source, target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EXDEV") {
-      throw error;
-    }
-
-    const stat = await fs.stat(source);
-    await fs.copyFile(source, target, fs.constants.COPYFILE_EXCL);
-    await fs.chmod(target, stat.mode);
-    await fs.utimes(target, stat.atime, stat.mtime);
-    await fs.unlink(source);
   }
 }
