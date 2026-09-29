@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { TrackFile, TrackIdentificationCandidate } from "../src/shared/types.js";
-import { candidatesFromAcoustId, identificationNeedsReview, lookupAcoustId, resolveReleaseConsensus } from "../src/server/identification.js";
+import { candidatesFromAcoustId, lookupAcoustId, resolveReleaseConsensus } from "../src/server/identification.js";
+import { identificationNeedsReview } from "../src/server/identification-status.js";
 import { buildOrganizePlan } from "../src/server/organizer.js";
 import { normalizeSettings } from "../src/server/settings.js";
 

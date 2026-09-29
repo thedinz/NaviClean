@@ -60,7 +60,7 @@ export type PrivateSettings = {
       requestsPerMinute: number;
     };
   };
-  identification?: {
+  identification: {
     acoustIdEnabled: boolean;
     acoustIdApiKey: string;
     useEmbeddedTagsAsHints: boolean;
@@ -236,14 +236,12 @@ export function toSettingsView(settings: PrivateSettings): SettingsView {
       discovery: settings.catalog.discovery
     },
     identification: {
-      acoustIdEnabled: settings.identification?.acoustIdEnabled ?? defaultIdentification.acoustIdEnabled,
-      acoustIdApiKeySet: Boolean(settings.identification?.acoustIdApiKey),
-      useEmbeddedTagsAsHints: settings.identification?.useEmbeddedTagsAsHints ?? defaultIdentification.useEmbeddedTagsAsHints,
-      usePathAsHints: settings.identification?.usePathAsHints ?? defaultIdentification.usePathAsHints,
-      autoAcceptUniqueFingerprintMatches:
-        settings.identification?.autoAcceptUniqueFingerprintMatches ?? defaultIdentification.autoAcceptUniqueFingerprintMatches,
-      requireReviewBeforeFileChanges:
-        settings.identification?.requireReviewBeforeFileChanges ?? defaultIdentification.requireReviewBeforeFileChanges
+      acoustIdEnabled: settings.identification.acoustIdEnabled,
+      acoustIdApiKeySet: Boolean(settings.identification.acoustIdApiKey),
+      useEmbeddedTagsAsHints: settings.identification.useEmbeddedTagsAsHints,
+      usePathAsHints: settings.identification.usePathAsHints,
+      autoAcceptUniqueFingerprintMatches: settings.identification.autoAcceptUniqueFingerprintMatches,
+      requireReviewBeforeFileChanges: settings.identification.requireReviewBeforeFileChanges
     },
     naming: {
       libraryPath: settings.naming.libraryPath,
@@ -267,7 +265,7 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
       providers: { ...current.catalog.providers },
       discovery: { ...current.catalog.discovery }
     },
-    identification: { ...(current.identification ?? defaultIdentification) },
+    identification: { ...current.identification },
     naming: { ...current.naming },
     scan: { ...current.scan, extensions: [...current.scan.extensions] },
     cleanup: { ...current.cleanup, emptyFolderExclusions: [...current.cleanup.emptyFolderExclusions] },
@@ -335,7 +333,7 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
   }
 
   if (update.identification) {
-    const identification = next.identification ?? { ...defaultIdentification };
+    const identification = next.identification;
     if (typeof update.identification.acoustIdEnabled === "boolean") {
       identification.acoustIdEnabled = update.identification.acoustIdEnabled;
     }
@@ -354,7 +352,6 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
     if (typeof update.identification.requireReviewBeforeFileChanges === "boolean") {
       identification.requireReviewBeforeFileChanges = update.identification.requireReviewBeforeFileChanges;
     }
-    next.identification = identification;
   }
 
   if (update.catalog?.providers) {
@@ -590,8 +587,8 @@ function normalizeCatalogSettings(
 }
 
 function normalizeIdentificationSettings(
-  partial: Partial<NonNullable<PrivateSettings["identification"]>> | undefined
-): NonNullable<PrivateSettings["identification"]> {
+  partial: Partial<PrivateSettings["identification"]> | undefined
+): PrivateSettings["identification"] {
   return {
     acoustIdEnabled:
       typeof partial?.acoustIdEnabled === "boolean" ? partial.acoustIdEnabled : defaultIdentification.acoustIdEnabled,

@@ -12,8 +12,8 @@ import type {
   OrganizeTrashSelection,
   TrackFile
 } from "../shared/types.js";
-import { isConfirmedIdentityStatus } from "../shared/identity.js";
 import { createRecycleSession, moveFileNoOverwrite, pathExists, TargetExistsError } from "./file-ops.js";
+import { identificationNeedsReview } from "./identification-status.js";
 import { duplicateKeyForTrack } from "./matching.js";
 import { writeCanonicalTags } from "./canonical-tags.js";
 import type { PrivateSettings } from "./settings.js";
@@ -147,7 +147,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     } else if (target.outsideLibrary) {
       item.status = "outside-library";
       item.message = "Target leaves library root";
-    } else if (trackIdentificationNeedsReview(track, settings)) {
+    } else if (identificationNeedsReview(track, settings)) {
       item.status = "metadata-review";
       item.message = track.identification?.message || "Track identity needs confirmation";
     } else if (track.metadataConfidence === "path-suggestion") {
@@ -527,17 +527,6 @@ export async function trashOrganizeCandidates(
 
 export function trackNeedsMove(track: TrackFile) {
   return !isTrackKeepManaged(track.managedBy) && !track.organizeSkippedAt && path.resolve(track.absolutePath) !== path.resolve(track.targetPath);
-}
-
-function trackIdentificationNeedsReview(track: TrackFile, settings: PrivateSettings) {
-  const status = track.identification?.status;
-  if (!settings.identification || !status || isTrackKeepManaged(track.managedBy)) {
-    return false;
-  }
-  if (isConfirmedIdentityStatus(status)) {
-    return false;
-  }
-  return status !== "fingerprint-and-release-confirmed" || settings.identification.requireReviewBeforeFileChanges;
 }
 
 /**

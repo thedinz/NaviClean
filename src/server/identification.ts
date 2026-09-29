@@ -8,9 +8,9 @@ import type {
   TrackMetadataSource,
   TrackMusicBrainzIds
 } from "../shared/types.js";
-import { isConfirmedIdentityStatus } from "../shared/identity.js";
 import { httpCacheGet, httpCacheSet } from "./http-cache.js";
 import { FingerprintCache, IdentityStore, type FingerprintResult, type StoredIdentity } from "./identity-store.js";
+import { identificationNeedsReview } from "./identification-status.js";
 import { withIdentity } from "./identity.js";
 import { identifyByMusicBrainzText } from "./mb-identify.js";
 import { saveMetadataOverridesForTracks } from "./track-decisions.js";
@@ -73,10 +73,6 @@ export async function identifyTracks(
   onPhase?: (phase: "searching", totalFiles: number) => void
 ) {
   const identification = settings.identification;
-  if (!identification) {
-    return { tracks, warnings: [] as string[] };
-  }
-
   const warnings: string[] = [];
   const identities = IdentityStore.load();
   const fingerprintCache = new FingerprintCache();
@@ -285,7 +281,7 @@ export function resolveReleaseConsensus(tracks: TrackFile[], settings: PrivateSe
       : uniqueValue(candidates.map((candidate) => candidate.releaseId).filter(Boolean) as string[]);
     const matching = candidates.filter((candidate) => candidate.releaseId === releaseId);
 
-    if (!settings.identification?.autoAcceptUniqueFingerprintMatches || matching.length !== 1) {
+    if (!settings.identification.autoAcceptUniqueFingerprintMatches || matching.length !== 1) {
       return track;
     }
 
@@ -363,20 +359,6 @@ export async function rememberConfirmedTrackIdentities(tracks: TrackFile[], sour
   cache.flush();
 }
 
-export function identificationNeedsReview(track: TrackFile, settings: PrivateSettings) {
-  const status = track.identification?.status;
-  if (!settings.identification || !status || isTrackKeepManaged(track.managedBy)) {
-    return false;
-  }
-  if (isConfirmedIdentityStatus(status)) {
-    return false;
-  }
-  if (status === "fingerprint-and-release-confirmed") {
-    return settings.identification.requireReviewBeforeFileChanges;
-  }
-  return true;
-}
-
 /** Tier 1: a file tagged with both a MusicBrainz recording and release ID is trusted as-is. */
 function musicBrainzTaggedIdentity(track: TrackFile): TrackFile | null {
   const ids = track.musicbrainz;
@@ -415,7 +397,7 @@ export async function cachedAcoustIdLookup(apiKey: string, fingerprint: Fingerpr
   return candidates;
 }
 
-function localCandidateTrack(track: TrackFile, settings: NonNullable<PrivateSettings["identification"]>) {
+function localCandidateTrack(track: TrackFile, settings: PrivateSettings["identification"]) {
   const source: TrackMetadataSource = settings.useEmbeddedTagsAsHints
     ? "local-tags"
     : settings.usePathAsHints
