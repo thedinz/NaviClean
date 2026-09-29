@@ -105,3 +105,34 @@ export function toPosixRelative(root: string, target: string) {
   return path.relative(root, target).split(path.sep).join("/");
 }
 
+
+/**
+ * Maps values with at most `concurrency` mapper calls in flight, preserving input order.
+ * `onProgress` receives the number of completed items after each one finishes.
+ */
+export async function mapWithConcurrency<T, R>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<R>,
+  onProgress?: (completed: number) => void
+) {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  let completed = 0;
+
+  async function worker() {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(values[index]);
+      completed += 1;
+      onProgress?.(completed);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(Math.max(concurrency, 1), values.length) }, () => worker())
+  );
+
+  return results;
+}

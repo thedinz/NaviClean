@@ -12,7 +12,7 @@ import type {
   TrackFile
 } from "../shared/types.js";
 import type { PrivateSettings } from "./settings.js";
-import { normalizeForMatch } from "./utils.js";
+import { mapWithConcurrency, normalizeForMatch } from "./utils.js";
 
 type SpotifyImage = {
   height?: number | null;
@@ -346,28 +346,6 @@ async function getSpotifyTrackDetail(settings: PrivateSettings, trackId: string)
     track
   });
   return track;
-}
-
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  operation: (item: T) => Promise<R>
-) {
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-  const workers = Array.from(
-    { length: Math.min(Math.max(1, concurrency), items.length) },
-    async () => {
-      while (nextIndex < items.length) {
-        const index = nextIndex;
-        nextIndex += 1;
-        results[index] = await operation(items[index]);
-      }
-    }
-  );
-
-  await Promise.all(workers);
-  return results;
 }
 
 export async function buildSpotifyDownloadPlan(
