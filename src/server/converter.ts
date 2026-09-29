@@ -13,7 +13,7 @@ import type {
   TrackFile
 } from "../shared/types.js";
 import { loadCatalog } from "./catalog.js";
-import { scanLibrary } from "./scanner.js";
+import { scanAndWait } from "./scan-service.js";
 import type { PrivateSettings } from "./settings.js";
 import { isInsidePath, toPosixRelative } from "./utils.js";
 
@@ -263,10 +263,10 @@ async function runAudioConvertJob(settings: PrivateSettings, jobId: string) {
 
   updateJobCounts(job);
 
-  try {
-    await scanLibrary(settings);
-  } catch (error) {
-    job.errors.push(`Catalog refresh failed after conversion: ${errorMessage(error)}`);
+  // Go through the shared scan service so this refresh never runs alongside a user-started scan.
+  const scan = await scanAndWait();
+  if (scan.phase === "failed") {
+    job.errors.push(`Catalog refresh failed after conversion: ${scan.errors.join("; ")}`);
   }
 
   updateJobCounts(job);

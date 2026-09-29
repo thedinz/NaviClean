@@ -15,6 +15,7 @@ import type {
 import { loadCatalog, saveCatalog, upsertCatalogTracks } from "../catalog.js";
 import { execute, parseJson, queryAll } from "../db.js";
 import { moveFileNoOverwrite } from "../file-ops.js";
+import { withLibraryLock } from "../library-lock.js";
 import { publish } from "../events.js";
 import { trashLibraryTracks } from "../library.js";
 import {
@@ -540,7 +541,15 @@ async function acquireCandidate(
   }
 }
 
-async function importIntoLibrary(
+/**
+ * Moves a verified download into the library and records it in the catalog. Runs under the
+ * library lock: it reads the catalog, may replace an upgraded track, and writes it back.
+ */
+function importIntoLibrary(...args: Parameters<typeof importIntoLibraryUnlocked>) {
+  return withLibraryLock(() => importIntoLibraryUnlocked(...args));
+}
+
+async function importIntoLibraryUnlocked(
   settings: PrivateSettings,
   job: DownloadJob,
   item: DownloadJobItem,
