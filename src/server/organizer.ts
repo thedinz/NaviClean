@@ -15,7 +15,8 @@ import type {
 import { createRecycleSession, moveFileNoOverwrite, pathExists, TargetExistsError } from "./file-ops.js";
 import { identificationNeedsReview } from "./identification-status.js";
 import { duplicateKeyForTrack } from "./matching.js";
-import { writeCanonicalTags } from "./canonical-tags.js";
+import { snapshotCanonicalTags, writeCanonicalTags, type TagSnapshot } from "./canonical-tags.js";
+import { analyzeOrganizeChange } from "./organize-changes.js";
 import type { PrivateSettings } from "./settings.js";
 import { isTrackKeepManaged, normalizeTrackKeepManagedBy } from "./trackkeep.js";
 import { isInsidePath, mapWithConcurrency, sha1, toPosixRelative } from "./utils.js";
@@ -165,6 +166,10 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     } else if (targetGroup.length > 1) {
       item.status = "conflict";
       item.message = "Multiple tracks resolve to this target";
+    }
+
+    if (!trackKeepManaged && !organizationSkipped) {
+      Object.assign(item, analyzeOrganizeChange(track, item.sourceRelativePath, item.targetRelativePath));
     }
 
     return item;
@@ -397,7 +402,19 @@ function compareCollisionCandidates(left: OrganizeCollisionCandidate, right: Org
   return (right.size ?? 0) - (left.size ?? 0);
 }
 
-export async function applyOrganizePlan(plan: OrganizePlan, tracks: TrackFile[] = []): Promise<OrganizeMoveResult> {
+/** A completed move and the tags it replaced; what an undo needs to reverse it. */
+export type OrganizeJournalEntry = {
+  sourcePath: string;
+  targetPath: string;
+  appliedSize: number;
+  tags: TagSnapshot;
+};
+
+export async function applyOrganizePlan(
+  plan: OrganizePlan,
+  tracks: TrackFile[] = [],
+  journal?: (entry: OrganizeJournalEntry) => void
+): Promise<OrganizeMoveResult> {
   const result: OrganizeMoveResult = {
     moved: 0,
     skipped: 0,
@@ -421,11 +438,22 @@ export async function applyOrganizePlan(plan: OrganizePlan, tracks: TrackFile[] 
       }
 
       const track = tracksById.get(item.id);
+      let tags: TagSnapshot = { values: {} };
       if (track) {
+        // Without a record of the old tags the move could not be undone, so it is not made.
+        tags = await snapshotCanonicalTags(item.sourcePath, track).catch((error: Error) => {
+          throw new Error(`Could not record the current tags for undo; nothing was changed. ${error.message}`);
+        });
         await writeCanonicalTags(item.sourcePath, track);
       }
       await fs.mkdir(path.dirname(item.targetPath), { recursive: true });
       await moveFileNoOverwrite(item.sourcePath, item.targetPath);
+      journal?.({
+        sourcePath: item.sourcePath,
+        targetPath: item.targetPath,
+        appliedSize: (await fs.stat(item.targetPath)).size,
+        tags
+      });
       result.moved += 1;
       result.items.push({ ...item, applied: true });
     } catch (error) {
@@ -597,7 +625,28 @@ function sanitizePathSegment(value: string) {
 }
 
 function releaseYear(track: TrackFile) {
-  return track.year ? String(track.year) : unknownReleaseYear;
+  const year = namingYear(track);
+  return year ? String(year) : unknownReleaseYear;
+}
+
+/** The year in a standard album folder name, e.g. `Artist - Album (2023)`, or null. */
+export function currentFolderYear(relativePath: string) {
+  const folder = path.posix.basename(path.posix.dirname(relativePath.replace(/\\/g, "/")));
+  const year = Number(folder.match(/\((\d{4})\)$/)?.[1]);
+  return Number.isInteger(year) && year > 0 ? year : null;
+}
+
+/**
+ * The year used in folder names. The first-release year wins over the specific release's date,
+ * so a reissue or compilation date does not rename an album. When the current folder already shows
+ * either of the track's years, that year is kept: both are defensible, and renaming would be churn.
+ */
+export function namingYear(track: Pick<TrackFile, "relativePath" | "year" | "originalYear">) {
+  const folderYear = currentFolderYear(track.relativePath);
+  if (folderYear && (folderYear === track.year || folderYear === track.originalYear)) {
+    return folderYear;
+  }
+  return track.originalYear ?? track.year ?? null;
 }
 
 async function sourcePathStatus(filePath: string): Promise<"readable" | "missing" | "unreadable"> {

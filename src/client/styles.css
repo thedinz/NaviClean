@@ -2655,6 +2655,184 @@ button.stat:hover {
   width: min(230px, 100%);
 }
 
+.change-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.change-filter {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.change-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted-strong);
+  font-size: 0.8rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.change-chip strong {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.change-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.change-chip.active strong {
+  color: var(--accent-text);
+}
+
+.change-chip-identity:not(.active),
+.change-chip-spotify-differs:not(.active) {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+}
+
+.change-filter-text {
+  flex: 1 1 220px;
+  max-width: 340px;
+  min-height: 32px;
+}
+
+.change-kind {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.change-kind-identity,
+.change-kind-layout {
+  color: var(--warning-text);
+}
+
+.change-details {
+  display: grid;
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.change-line {
+  color: var(--text-soft);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+/* Table cells block their spans; a change reads as one sentence. */
+.change-line span,
+.change-line strong,
+.crosscheck span {
+  display: inline;
+  margin-top: 0;
+}
+
+.change-line em {
+  color: var(--muted);
+  font-style: normal;
+}
+
+.change-from {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.change-to {
+  font-weight: 650;
+}
+
+.crosscheck {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 0.8rem;
+  font-weight: 620;
+}
+
+.crosscheck svg {
+  flex: none;
+  align-self: center;
+}
+
+.crosscheck-agrees {
+  color: var(--success-text);
+}
+
+.crosscheck-differs {
+  color: var(--warning-text);
+}
+
+.crosscheck-unknown {
+  color: var(--muted);
+}
+
+.crosscheck-difference {
+  font-weight: 500;
+}
+
+.crosscheck a {
+  color: inherit;
+}
+
+.organize-history summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.organize-history ul {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.organize-history li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.organize-history li > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.organize-history small {
+  color: var(--muted);
+}
+
+/* .organizer-notes blocks its spans; button labels must stay inline. */
+.organize-history button span {
+  display: inline;
+  margin-top: 0;
+}
+
+.notice-bar .notice-undo {
+  margin-left: 10px;
+  vertical-align: middle;
+}
+
 .organize-toolbar-copy {
   display: grid;
   gap: 3px;

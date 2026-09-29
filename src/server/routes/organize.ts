@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import type { OrganizeTrashSelection, TrackFile } from "../../shared/types.js";
 import { loadCatalog, saveCatalog, type Catalog } from "../catalog.js";
 import { buildDuplicateGroups, resolveDuplicates, resolveSelectedDuplicates } from "../duplicates.js";
-import { HttpError, mutation, requireList, requireString, route, stringList } from "../http.js";
+import { HttpError, mutation, optionalStringList, requireList, requireString, route, stringList } from "../http.js";
+import { crossCheckTracks } from "../organize-crosscheck.js";
+import { listOrganizeRuns, startOrganizeRun, tracksAfterUndo, undoOrganizeRun } from "../organize-journal.js";
 import { confirmIdentificationCandidate, rememberConfirmedTrackIdentities } from "../identification.js";
 import { trustPathMetadataForFolder } from "../metadata-review.js";
 import {
@@ -52,7 +54,16 @@ organizeRouter.post("/organize/apply", mutation(async (req, res) => {
     );
   }
 
-  const result = await applyOrganizePlan(plan, planned.tracks);
+  // A batch applies only the chosen items, but the whole reviewed plan must still be unchanged.
+  const itemIds = optionalStringList(req.body?.itemIds);
+  const batch = itemIds ? new Set(itemIds) : null;
+  const run = startOrganizeRun(String(req.body?.label || "").trim().slice(0, 120) || "Organize");
+  const result = await applyOrganizePlan(
+    batch ? { ...plan, items: plan.items.filter((item) => batch.has(item.id)) } : plan,
+    planned.tracks,
+    run.record
+  );
+  const runId = run.close();
   let tracks = planned.tracks;
   let latestCatalog = catalog;
 
@@ -87,7 +98,39 @@ organizeRouter.post("/organize/apply", mutation(async (req, res) => {
   }
 
   const refreshed = await rebuildOrganizeEvaluation({ ...latestCatalog, tracks }, settings);
-  res.json({ ...result, plan: refreshed.plan });
+  res.json({ ...result, runId, plan: refreshed.plan });
+}));
+
+organizeRouter.get("/organize/runs", route(async (_req, res) => {
+  res.json(listOrganizeRuns());
+}));
+
+organizeRouter.post("/organize/runs/:id/undo", mutation(async (req, res) => {
+  const settings = await loadSettings();
+  const { moves, errors } = await undoOrganizeRun(String(req.params.id), settings);
+  const catalog = await loadCatalog();
+  let plan;
+
+  if (moves.length > 0) {
+    await moveTrackDecisions(moves.map((move) => ({ sourcePath: move.fromPath, targetPath: move.toPath, size: move.size })));
+    plan = await saveAndReplan(tracksAfterUndo(catalog.tracks, moves, settings), settings);
+  } else {
+    plan = (await getOrganizeEvaluation(catalog, settings)).plan;
+  }
+
+  res.json({ restored: moves.length, errors, runs: listOrganizeRuns(), plan });
+}));
+
+/** Cross-checks a small batch per request; the client loops so progress shows and it can be stopped. */
+organizeRouter.post("/organize/crosscheck", route(async (req, res) => {
+  const itemIds = requireList(req.body?.itemIds, "itemIds are required").slice(0, 25);
+  const catalog = await loadCatalog();
+  const settings = await loadSettings();
+  const wanted = new Set(itemIds);
+  const { results, errors } = await crossCheckTracks(settings, catalog.tracks.filter((track) => wanted.has(track.id)));
+
+  invalidateOrganizeEvaluationCache();
+  res.json({ checked: Object.keys(results).length, results, errors });
 }));
 
 organizeRouter.post("/organize/spotify-match", mutation(async (req, res) => {

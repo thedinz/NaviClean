@@ -29,10 +29,19 @@ export function musicBrainzIdsForTrack(track: TrackFile): TrackMusicBrainzIds {
 }
 
 export function canonicalMetadataArgs(track: TrackFile, extension = track.extension) {
+  return metadataArgs(canonicalMetadataValues(track, extension));
+}
+
+function metadataArgs(values: Array<[string, string]>) {
+  return values.flatMap(([key, value]) => ["-metadata", `${key}=${value}`]);
+}
+
+/** Every ffmpeg metadata key a canonical retag writes; an empty value deletes the tag. */
+export function canonicalMetadataValues(track: TrackFile, extension = track.extension): Array<[string, string]> {
   const trackNumber = fractionTag(track.trackNumber, track.trackTotal);
   const discNumber = fractionTag(track.discNumber, track.discTotal);
   const identification = track.identification;
-  const values: Array<[string, string]> = [
+  return [
     ["title", track.title],
     ["artist", track.artist],
     ["album", track.album],
@@ -48,8 +57,6 @@ export function canonicalMetadataArgs(track: TrackFile, extension = track.extens
     ["spotify_album_id", identification?.spotifyAlbumId || ""],
     ...musicBrainzMetadataPairs(musicBrainzIdsForTrack(track), tagFamily(extension))
   ];
-
-  return values.flatMap(([key, value]) => ["-metadata", `${key}=${value}`]);
 }
 
 /**
@@ -82,6 +89,68 @@ export function musicBrainzMetadataPairs(ids: TrackMusicBrainzIds, family: TagFa
 }
 
 export async function writeCanonicalTags(filePath: string, track: TrackFile) {
+  try {
+    await rewriteMetadata(filePath, canonicalMetadataValues(track, path.extname(filePath)), (tempPath) => {
+      writeTagLibMusicBrainzIds(tempPath, musicBrainzIdsForTrack(track));
+    });
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    throw new Error(`Could not write confirmed tags; the original file was left in place. ${details}`);
+  }
+}
+
+/** The MusicBrainz IDs held in frames only taglib writes (ID3 UFID, MP4 freeform atoms). */
+type TagLibIdSnapshot = {
+  recordingId?: string;
+  releaseId?: string;
+  releaseGroupId?: string;
+  artistId?: string;
+  albumArtistId?: string;
+};
+
+/** The tags a canonical retag is about to overwrite, as they were before it; enough to undo it. */
+export type TagSnapshot = {
+  /** Original value of every key the retag writes; null when the file did not have that tag. */
+  values: Record<string, string | null>;
+  taglib?: TagLibIdSnapshot;
+};
+
+/** Records the current value of every tag that `writeCanonicalTags(filePath, track)` would change. */
+export async function snapshotCanonicalTags(filePath: string, track: TrackFile): Promise<TagSnapshot> {
+  const { stdout } = await execFileAsync(
+    "ffprobe",
+    ["-v", "error", "-select_streams", "a:0", "-show_entries", "format_tags:stream_tags", "-of", "json", filePath],
+    { maxBuffer: 1024 * 1024 * 4, timeout: 60_000 }
+  );
+  const probed = JSON.parse(stdout) as { format?: { tags?: Record<string, string> }; streams?: Array<{ tags?: Record<string, string> }> };
+  // Ogg-family files keep their comments on the stream; everything else on the container.
+  const existing = new Map<string, string>();
+  for (const tags of [probed.streams?.[0]?.tags, probed.format?.tags]) {
+    for (const [key, value] of Object.entries(tags ?? {})) {
+      existing.set(key.toLowerCase(), String(value));
+    }
+  }
+
+  const values: Record<string, string | null> = {};
+  for (const [key] of canonicalMetadataValues(track, path.extname(filePath))) {
+    values[key] = existing.get(key.toLowerCase()) ?? null;
+  }
+  const taglib = readTagLibIds(filePath);
+  return taglib ? { values, taglib } : { values };
+}
+
+/** Puts back exactly the tags a canonical retag replaced, leaving every other tag as it is now. */
+export async function restoreTagSnapshot(filePath: string, snapshot: TagSnapshot) {
+  const values = Object.entries(snapshot.values).map(([key, value]): [string, string] => [key, value ?? ""]);
+  await rewriteMetadata(filePath, values, (tempPath) => {
+    if (snapshot.taglib) {
+      writeTagLibIdSnapshot(tempPath, snapshot.taglib);
+    }
+  });
+}
+
+/** Rewrites container metadata into a temp file and swaps it in, so a failure never touches the original. */
+async function rewriteMetadata(filePath: string, values: Array<[string, string]>, finish: (tempPath: string) => void) {
   const parsed = path.parse(filePath);
   const tempPath = path.join(
     parsed.dir,
@@ -105,7 +174,7 @@ export async function writeCanonicalTags(filePath: string, track: TrackFile) {
         "-c",
         "copy",
         ...(parsed.ext.toLowerCase() === ".mp3" ? ["-id3v2_version", "3"] : []),
-        ...canonicalMetadataArgs(track, parsed.ext),
+        ...metadataArgs(values),
         tempPath
       ],
       {
@@ -119,12 +188,51 @@ export async function writeCanonicalTags(filePath: string, track: TrackFile) {
       throw new Error("ffmpeg produced an empty tagged file");
     }
 
-    writeTagLibMusicBrainzIds(tempPath, musicBrainzIdsForTrack(track));
+    finish(tempPath);
     await fs.rename(tempPath, filePath);
   } catch (error) {
     await fs.rm(tempPath, { force: true }).catch(() => undefined);
-    const details = error instanceof Error ? error.message : String(error);
-    throw new Error(`Could not write confirmed tags; the original file was left in place. ${details}`);
+    throw error;
+  }
+}
+
+function readTagLibIds(filePath: string): TagLibIdSnapshot | undefined {
+  const family = tagFamily(path.extname(filePath));
+  if (family !== "id3" && family !== "mp4") {
+    return undefined;
+  }
+
+  const file = TagLibFile.createFromPath(filePath);
+  try {
+    const tag = file.tag;
+    return {
+      recordingId: tag.musicBrainzTrackId || undefined,
+      releaseId: tag.musicBrainzReleaseId || undefined,
+      releaseGroupId: tag.musicBrainzReleaseGroupId || undefined,
+      artistId: tag.musicBrainzArtistId || undefined,
+      albumArtistId: tag.musicBrainzReleaseArtistId || undefined
+    };
+  } finally {
+    file.dispose();
+  }
+}
+
+function writeTagLibIdSnapshot(filePath: string, snapshot: TagLibIdSnapshot) {
+  const family = tagFamily(path.extname(filePath));
+  const file = TagLibFile.createFromPath(filePath);
+  try {
+    const tag = file.tag;
+    // taglib removes a frame or atom when it is set to an empty value.
+    tag.musicBrainzTrackId = snapshot.recordingId ?? "";
+    if (family === "mp4") {
+      tag.musicBrainzReleaseId = snapshot.releaseId ?? "";
+      tag.musicBrainzReleaseGroupId = snapshot.releaseGroupId ?? "";
+      tag.musicBrainzArtistId = snapshot.artistId ?? "";
+      tag.musicBrainzReleaseArtistId = snapshot.albumArtistId ?? "";
+    }
+    file.save();
+  } finally {
+    file.dispose();
   }
 }
 

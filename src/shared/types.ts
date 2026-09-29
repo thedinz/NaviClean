@@ -630,6 +630,8 @@ export type TrackIdentificationCandidate = {
   discNumber: number | null;
   discTotal: number | null;
   year: number | null;
+  /** Year of the release group's first release, when known; folder names prefer it over `year`. */
+  originalYear?: number | null;
   duration: number | null;
   isrc: string | null;
   releaseTrackId?: string;
@@ -680,6 +682,8 @@ export type TrackFile = {
   discNumber: number | null;
   discTotal: number | null;
   year: number | null;
+  /** First-release year (Picard's `originaldate`); folder names prefer it over `year`. */
+  originalYear?: number | null;
   duration: number | null;
   isrc?: string | null;
   bitrate: number | null;
@@ -1056,6 +1060,73 @@ export type OrganizePlanItem = {
   status: "ready" | "same" | "skipped" | "metadata-review" | "duplicate-target" | "conflict" | "outside-library" | "missing-source";
   message: string;
   collision?: OrganizeCollision;
+  /** The riskiest kind of path change this move makes; drives the review buckets. */
+  changeKind?: OrganizeChangeKind;
+  /** Per-field differences between the current and proposed path, with where each new value came from. */
+  changes?: OrganizeFieldChange[];
+  crossCheck?: OrganizeCrossCheck;
+};
+
+/** Ordered from least to most risky. */
+export type OrganizeChangeKind = "none" | "cosmetic" | "track-number" | "year" | "layout" | "identity";
+
+export type OrganizeChangeField = "albumArtist" | "album" | "year" | "track" | "title";
+
+export type OrganizeFieldChange = {
+  field: OrganizeChangeField;
+  /** Null when the current path is not in the standard layout, so the old value is unknown. */
+  from: string | null;
+  to: string;
+  /** True when only case, punctuation, spacing or accents differ. */
+  cosmetic: boolean;
+  /** Where the proposed value came from, e.g. "this file's own tags (original release date)". */
+  source: string;
+};
+
+export type OrganizeCrossCheckDifference = {
+  field: OrganizeChangeField;
+  proposed: string;
+  spotify: string;
+};
+
+export type OrganizeCrossCheck = {
+  status: "agrees" | "differs" | "not-found" | "unavailable";
+  method: "isrc" | "search" | "none";
+  checkedAt: string;
+  message: string;
+  differences: OrganizeCrossCheckDifference[];
+  spotify?: {
+    trackId: string;
+    title: string;
+    albumArtist: string;
+    album: string;
+    year: number | null;
+    trackNumber: number;
+    url: string;
+  };
+};
+
+export type OrganizeCrossCheckResult = {
+  checked: number;
+  results: Record<string, OrganizeCrossCheck>;
+  errors: string[];
+};
+
+export type OrganizeRunSummary = {
+  id: string;
+  createdAt: string;
+  moved: number;
+  /** Moves in this run that have not been reversed yet. */
+  undoable: number;
+  undoneAt: string | null;
+  label: string;
+};
+
+export type OrganizeUndoResult = {
+  restored: number;
+  errors: string[];
+  runs: OrganizeRunSummary[];
+  plan: OrganizePlan;
 };
 
 export type OrganizeSpotifyMatchResult = {
@@ -1132,6 +1203,8 @@ export type OrganizeApplyResult = {
   moved: number;
   skipped: number;
   errors: string[];
+  /** Undo journal entry for this apply; null when nothing moved. */
+  runId?: string | null;
   items: Array<OrganizePlanItem & { applied: boolean }>;
   plan: OrganizePlan;
 };

@@ -13,6 +13,8 @@ import { FingerprintCache, IdentityStore, type FingerprintResult, type StoredIde
 import { identificationNeedsReview } from "./identification-status.js";
 import { withIdentity } from "./identity.js";
 import { identifyByMusicBrainzText } from "./mb-identify.js";
+import { getMusicBrainzReleaseGroup, releaseYear as mbReleaseYear } from "./musicbrainz.js";
+import { currentFolderYear } from "./organizer.js";
 import { saveMetadataOverridesForTracks } from "./track-decisions.js";
 import type { PrivateSettings } from "./settings.js";
 import { isTrackKeepManaged } from "./trackkeep.js";
@@ -228,7 +230,9 @@ export async function identifyTracks(
   // Tier 2: text search for whatever the fingerprint tier could not place.
   const searched = await identifyByMusicBrainzText(settings, prepared, onProgress, signal, (total) => onPhase?.("searching", total));
   warnings.push(...searched.warnings);
-  const resolved = resolveReleaseConsensus(searched.tracks, settings);
+  const originals = await fillOriginalYearsFromReleaseGroups(resolveReleaseConsensus(searched.tracks, settings), settings, signal);
+  warnings.push(...originals.warnings);
+  const resolved = originals.tracks;
   identities.flush();
   fingerprintCache.flush();
 
@@ -249,6 +253,67 @@ export async function identifyTracks(
   }
 
   return { tracks: resolved, warnings };
+}
+
+/**
+ * Picard writes the chosen release's date to `date`, which for a reissue or compilation is not the
+ * album's year. When a MusicBrainz-tagged file has no `originaldate` and its folder shows a different
+ * year, ask MusicBrainz for the release group's first release date. Only those tracks are looked up,
+ * one request per release group, so an already-consistent library costs nothing.
+ */
+export async function fillOriginalYearsFromReleaseGroups(
+  tracks: TrackFile[],
+  settings: PrivateSettings,
+  signal?: AbortSignal,
+  lookup: (releaseGroupId: string) => Promise<{ "first-release-date"?: string }> = getMusicBrainzReleaseGroup
+) {
+  const releaseGroupIds = new Set<string>();
+  for (const track of tracks) {
+    const folderYear = currentFolderYear(track.relativePath);
+    const releaseGroupId = track.musicbrainz?.releaseGroupId;
+    if (
+      track.identification?.status === "musicbrainz-tagged" &&
+      !track.originalYear &&
+      releaseGroupId &&
+      folderYear &&
+      folderYear !== track.year
+    ) {
+      releaseGroupIds.add(releaseGroupId);
+    }
+  }
+
+  if (releaseGroupIds.size === 0) {
+    return { tracks, warnings: [] as string[] };
+  }
+
+  const years = new Map<string, number>();
+  let failures = 0;
+  for (const releaseGroupId of releaseGroupIds) {
+    if (signal?.aborted) {
+      break;
+    }
+    try {
+      const year = mbReleaseYear((await lookup(releaseGroupId))["first-release-date"]);
+      if (year) {
+        years.set(releaseGroupId, year);
+      }
+    } catch {
+      failures += 1;
+    }
+  }
+
+  const warnings = failures > 0
+    ? [`Original release years: ${failures.toLocaleString()} MusicBrainz release-group lookups failed; those folders keep the tagged date.`]
+    : [];
+  return {
+    warnings,
+    tracks: tracks.map((track) => {
+      const year = track.musicbrainz?.releaseGroupId ? years.get(track.musicbrainz.releaseGroupId) : undefined;
+      return year && track.identification?.status === "musicbrainz-tagged" && !track.originalYear
+        ? withIdentity(track, settings, { originalYear: year })
+        : track;
+    })
+  };
 }
 
 export function resolveReleaseConsensus(tracks: TrackFile[], settings: PrivateSettings) {
@@ -429,6 +494,7 @@ function applyCandidate(
     discNumber: candidate.discNumber,
     discTotal: candidate.discTotal,
     year: candidate.year,
+    originalYear: candidate.originalYear ?? null,
     duration: track.duration ?? candidate.duration,
     isrc: candidate.isrc ?? track.isrc ?? null,
     metadataConfidence: "musicbrainz",
@@ -520,6 +586,7 @@ function storedIdentityFromTrack(
     discNumber: track.discNumber,
     discTotal: track.discTotal,
     year: track.year,
+    originalYear: track.originalYear ?? null,
     duration: track.duration,
     isrc: track.isrc ?? null
   };
@@ -640,6 +707,9 @@ export function candidatesFromAcoustId(payload: AcoustIdResponse): TrackIdentifi
         : [{ releases: recording.releases }] as AcoustIdReleaseGroup[];
       for (const releaseGroup of releaseGroups) {
         const releases = releaseGroup.releases?.length ? releaseGroup.releases : [undefined];
+        // AcoustID returns no release-group date; the earliest listed release is the best estimate.
+        const groupYears = releases.map((release) => releaseYear(release?.date)).filter((year): year is number => year !== null);
+        const originalYear = groupYears.length ? Math.min(...groupYears) : null;
         for (const release of releases) {
           const slot = release ? recordingSlot(release, recordingId) : null;
           const recordingArtists = artistCredit(recording.artists);
@@ -661,6 +731,7 @@ export function candidatesFromAcoustId(payload: AcoustIdResponse): TrackIdentifi
             discNumber: slot?.discNumber ?? null,
             discTotal: release?.medium_count ?? release?.mediums?.length ?? null,
             year: releaseYear(release?.date),
+            originalYear,
             duration: recording.duration ? Math.round(recording.duration) : null,
             isrc: recording.isrcs?.[0]?.toUpperCase() ?? null
           };

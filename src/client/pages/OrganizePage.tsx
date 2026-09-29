@@ -13,6 +13,7 @@ import {
   Play,
   RefreshCw,
   Search,
+  ShieldCheck,
   SlidersHorizontal,
   Trash2,
   Undo2
@@ -20,6 +21,9 @@ import {
 import type {
   LibraryStats,
   OrganizeApplyResult,
+  OrganizeCrossCheckResult,
+  OrganizeRunSummary,
+  OrganizeUndoResult,
   OrganizeIdentificationMatchResult,
   OrganizeCollisionCandidate,
   OrganizePlan,
@@ -35,6 +39,39 @@ import type {
 import { api, ApiError } from "../api";
 import { ActionProgress, EmptyState, PathDiff, StatusPill } from "../components/common";
 import { collisionRoleLabel, isTrackKeepManaged, navidromeMatchMethodLabel, pathDirectory, pathFilename, pluralize, qualitySummary } from "../lib/format";
+import {
+  ChangeDetails,
+  ChangeFilterBar,
+  changeKindLabel,
+  countOrganizeChangeFilters,
+  CrossCheckBadge,
+  OrganizeHistory,
+  organizeChangeFilters,
+  organizeItemMatchesChangeFilter,
+  organizeItemMatchesText,
+  type OrganizeChangeFilter
+} from "./organize-review";
+
+const crossCheckBatchSize = 20;
+
+/** Names an apply after the filters that selected it, so the history says what each run was. */
+export function applyRunLabel(changeFilter: OrganizeChangeFilter, textFilter: string, count: number) {
+  const parts = [
+    changeFilter === "all" ? "" : organizeChangeFilters.find((filter) => filter.id === changeFilter)?.label ?? "",
+    textFilter.trim() ? `“${textFilter.trim()}”` : ""
+  ].filter(Boolean);
+  return `${parts.length ? parts.join(" · ") : "All ready moves"} · ${count.toLocaleString()} ${count === 1 ? "file" : "files"}`;
+}
+
+/** "Year: 212, Formatting only: 40", shown in the apply confirmation. */
+export function summarizeChangeKinds(items: Array<OrganizePlan["items"][number]>) {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const label = changeKindLabel(item.changeKind) || "Other";
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return Array.from(counts, ([label, count]) => `${label}: ${count.toLocaleString()}`).join(", ");
+}
 
 export type OrganizePreviewFilter = "attention" | "metadata-review" | "navidrome-unmatched" | "skipped" | "ready" | "duplicate-target" | "conflict" | "missing" | "trackkeep" | "same" | "all";
 export type OrganizePreviewItem = OrganizePlan["items"][number];
@@ -68,6 +105,12 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
   const [applyBusy, setApplyBusy] = useState(false);
   const [trashBusyKey, setTrashBusyKey] = useState<string | null>(null);
   const [selectedTrashCandidates, setSelectedTrashCandidates] = useState<Record<string, string>>({});
+  const [changeFilter, setChangeFilter] = useState<OrganizeChangeFilter>("all");
+  const [textFilter, setTextFilter] = useState("");
+  const [runs, setRuns] = useState<OrganizeRunSummary[]>([]);
+  const [lastRunId, setLastRunId] = useState<string | null>(null);
+  const [crossCheckProgress, setCrossCheckProgress] = useState<{ done: number; total: number } | null>(null);
+  const crossCheckStop = useRef(false);
   const previewRequestId = useRef(0);
   const lastScanFinishedAtRef = useRef<string | null | undefined>(undefined);
   const workflow = stats?.workflow;
@@ -92,9 +135,21 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
   const primaryOrganizeFilters = visibleOrganizeFilters.filter((filter) => ["attention", "metadata-review", "ready", "all"].includes(filter.id));
   const secondaryOrganizeFilters = visibleOrganizeFilters.filter((filter) => !primaryOrganizeFilters.includes(filter));
   const secondaryFilterSelected = secondaryOrganizeFilters.some((filter) => filter.id === organizeFilter);
+  const statusItems = useMemo(
+    () => organizeItems.filter((item) => organizePreviewItemMatchesFilter(item, organizeFilter) && organizeItemMatchesText(item, textFilter)),
+    [organizeFilter, organizeItems, textFilter]
+  );
+  const changeCounts = useMemo(() => countOrganizeChangeFilters(statusItems), [statusItems]);
   const filteredItems = useMemo(
-    () => organizeItems.filter((item) => organizePreviewItemMatchesFilter(item, organizeFilter)),
-    [organizeFilter, organizeItems]
+    () => statusItems.filter((item) => organizeItemMatchesChangeFilter(item, changeFilter)),
+    [changeFilter, statusItems]
+  );
+  // Apply acts on what the reviewer is looking at: every ready item that passes the current filters.
+  const readyInView = useMemo(() => filteredItems.filter((item) => item.status === "ready"), [filteredItems]);
+  const applyingSubset = Boolean(plan) && readyInView.length !== plan?.summary.ready;
+  const uncheckedInView = useMemo(
+    () => filteredItems.filter((item) => item.targetRelativePath && item.status !== "same" && !item.crossCheck),
+    [filteredItems]
   );
   const selectedTrashSelections = useMemo(
     () => selectedOrganizeTrashSelections(organizeItems, selectedTrashCandidates),
@@ -161,8 +216,17 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
     }
   };
 
+  const loadRuns = async () => {
+    try {
+      setRuns(await api<OrganizeRunSummary[]>("/organize/runs"));
+    } catch {
+      // History is optional; the preview still works without it.
+    }
+  };
+
   useEffect(() => {
     void load({ quick: true });
+    void loadRuns();
   }, []);
 
   useEffect(() => {
@@ -177,7 +241,16 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
   }, [lastScanFinishedAt]);
 
   const apply = async () => {
-    if (!plan?.summary.ready || !window.confirm(`Move ${plan.summary.ready} files?`)) {
+    if (!plan || readyInView.length === 0) {
+      return;
+    }
+
+    const label = applyRunLabel(changeFilter, textFilter, readyInView.length);
+    const breakdown = summarizeChangeKinds(readyInView);
+    if (!window.confirm(
+      `Move and retag ${readyInView.length.toLocaleString()} ${pluralize("file", readyInView.length)} (${breakdown})?\n\n` +
+      "The old paths and tags are recorded, so this run can be undone from Organize history."
+    )) {
       return;
     }
 
@@ -186,16 +259,23 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
     setPreviewBusy(false);
     setNotice(null);
     setApplyErrors([]);
+    setLastRunId(null);
     try {
       const result = await api<OrganizeApplyResult>("/organize/apply", {
         method: "POST",
-        body: JSON.stringify({ fingerprint: plan.fingerprint })
+        body: JSON.stringify({
+          fingerprint: plan.fingerprint,
+          label,
+          ...(applyingSubset ? { itemIds: readyInView.map((item) => item.id) } : {})
+        })
       });
       const errorSuffix = result.errors.length ? `, ${result.errors.length} errors` : "";
-      setNotice(`${result.moved} moved, ${result.skipped} skipped${errorSuffix}. Preview refreshed.`);
+      setNotice(`${result.moved} moved${errorSuffix}. Preview refreshed.`);
       setApplyErrors(result.errors);
+      setLastRunId(result.runId ?? null);
 
       await load({ clearNotice: false, resetPlan: true });
+      await loadRuns();
     } catch (caught) {
       // A 409 means the plan changed since it was reviewed; show the refreshed plan instead.
       const changedPlan = caught instanceof ApiError && caught.status === 409
@@ -208,6 +288,75 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
       setNotice((caught as Error).message);
     } finally {
       setApplyBusy(false);
+    }
+  };
+
+  const undoRun = async (run: OrganizeRunSummary) => {
+    if (!window.confirm(`Undo "${run.label}"? ${run.undoable.toLocaleString()} ${pluralize("file", run.undoable)} will go back to their old paths and tags.`)) {
+      return;
+    }
+
+    previewRequestId.current += 1;
+    setPreviewBusy(false);
+    setNotice(null);
+    setApplyErrors([]);
+    try {
+      const result = await api<OrganizeUndoResult>(`/organize/runs/${encodeURIComponent(run.id)}/undo`, { method: "POST" });
+      const errorSuffix = result.errors.length ? `, ${result.errors.length} left in place` : "";
+      setNotice(`Undo restored ${result.restored.toLocaleString()} ${pluralize("file", result.restored)}${errorSuffix}.`);
+      setApplyErrors(result.errors);
+      setRuns(result.runs);
+      setLastRunId(null);
+      showMutationPlan(result.plan);
+      await onChanged();
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    }
+  };
+
+  const crossCheck = async () => {
+    const pending = uncheckedInView.map((item) => item.id);
+    if (pending.length === 0) {
+      return;
+    }
+
+    crossCheckStop.current = false;
+    setCrossCheckProgress({ done: 0, total: pending.length });
+    setNotice(null);
+    const errors: string[] = [];
+    let attempted = 0;
+    let checked = 0;
+    const tally = { agrees: 0, differs: 0, other: 0 };
+
+    try {
+      for (let index = 0; index < pending.length && !crossCheckStop.current; index += crossCheckBatchSize) {
+        const batch = pending.slice(index, index + crossCheckBatchSize);
+        const result = await api<OrganizeCrossCheckResult>("/organize/crosscheck", {
+          method: "POST",
+          body: JSON.stringify({ itemIds: batch })
+        });
+        errors.push(...result.errors);
+        attempted += batch.length;
+        checked += result.checked;
+        for (const check of Object.values(result.results)) {
+          tally[check.status === "agrees" ? "agrees" : check.status === "differs" ? "differs" : "other"] += 1;
+        }
+        setCrossCheckProgress({ done: attempted, total: pending.length });
+        setPlan((current) => current && {
+          ...current,
+          items: current.items.map((item) => result.results[item.id] ? { ...item, crossCheck: result.results[item.id] } : item)
+        });
+      }
+      setNotice(
+        `${crossCheckStop.current ? "Cross-check stopped" : "Cross-check finished"}: ${checked.toLocaleString()} of ${pending.length.toLocaleString()} checked. ` +
+        `Spotify agrees on ${tally.agrees.toLocaleString()}, differs on ${tally.differs.toLocaleString()}, ` +
+        `could not find ${tally.other.toLocaleString()}.${tally.differs > 0 ? ' Use the "Spotify disagrees" filter to review them.' : ""}`
+      );
+    } catch (caught) {
+      setNotice((caught as Error).message);
+    } finally {
+      setApplyErrors(errors);
+      setCrossCheckProgress(null);
     }
   };
 
@@ -260,9 +409,34 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
               <span>{trashBusyKey ? "Moving" : `Trash ${selectedTrashSelections.length}`}</span>
             </button>
           )}
-          <button className="primary-button" type="button" onClick={apply} disabled={previewBusy || applyBusy || Boolean(trashBusyKey) || !plan?.summary.ready}>
+          {crossCheckProgress ? (
+            <button className="secondary-button" type="button" onClick={() => { crossCheckStop.current = true; }}>
+              <Loader2 className="spin" size={18} />
+              <span>{`Checked ${crossCheckProgress.done}/${crossCheckProgress.total} · Stop`}</span>
+            </button>
+          ) : (
+            uncheckedInView.length > 0 && (
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void crossCheck()}
+                disabled={previewBusy || applyBusy || Boolean(trashBusyKey)}
+                title="Look up each shown track on Spotify (by ISRC first) and flag any disagreement. Nothing is changed."
+              >
+                <ShieldCheck size={18} />
+                <span>{`Cross-check ${uncheckedInView.length.toLocaleString()} with Spotify`}</span>
+              </button>
+            )
+          )}
+          <button
+            className="primary-button"
+            type="button"
+            onClick={apply}
+            disabled={previewBusy || applyBusy || Boolean(trashBusyKey) || Boolean(crossCheckProgress) || readyInView.length === 0}
+            title={applyingSubset ? "Applies only the ready items that match the current filters" : "Applies every ready item"}
+          >
             {applyBusy ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
-            <span>{applyBusy ? "Applying" : `Apply ${plan?.summary.ready || 0}`}</span>
+            <span>{applyBusy ? "Applying" : applyingSubset ? `Apply ${readyInView.length.toLocaleString()} shown` : `Apply all ${readyInView.length.toLocaleString()}`}</span>
           </button>
         </div>
       </div>
@@ -271,7 +445,22 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
           label={trashBusyKey ? "Moving selected files to recycle bin" : applyBusy ? "Applying organization plan" : "Building organization preview"}
         />
       )}
-      {notice && <div className="notice-bar">{notice}</div>}
+      {notice && (
+        <div className="notice-bar">
+          {notice}
+          {lastRunId && runs.find((run) => run.id === lastRunId && run.undoable > 0) && (
+            <button
+              className="secondary-button compact-button notice-undo"
+              type="button"
+              onClick={() => void undoRun(runs.find((run) => run.id === lastRunId)!)}
+            >
+              <Undo2 size={16} />
+              <span>Undo this run</span>
+            </button>
+          )}
+        </div>
+      )}
+      <OrganizeHistory runs={runs} disabled={previewBusy || applyBusy || Boolean(trashBusyKey)} onUndo={undoRun} />
       {plan?.warnings?.length ? (
         <details className="organizer-notes">
           <summary>{plan.warnings.length} index {pluralize("note", plan.warnings.length)}</summary>
@@ -378,6 +567,19 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
                 <ChevronsRight size={18} />
               </button>
             </div>}
+            <ChangeFilterBar
+              counts={changeCounts}
+              value={changeFilter}
+              text={textFilter}
+              onChange={(value) => {
+                setChangeFilter(value);
+                setPageIndex(0);
+              }}
+              onTextChange={(value) => {
+                setTextFilter(value);
+                setPageIndex(0);
+              }}
+            />
           </div>
           {filteredItems.length === 0 ? (
             <EmptyState
@@ -404,6 +606,9 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
                     <tr key={item.id}>
                       <td>
                         <StatusPill active={item.status === "ready"} label={organizeChangeLabel(item)} />
+                        {item.changeKind && item.changeKind !== "none" && (
+                          <span className={`change-kind change-kind-${item.changeKind}`}>{changeKindLabel(item.changeKind)}</span>
+                        )}
                         {item.status !== "ready" && item.status !== "same" && (
                           <span className="status-detail">{item.message}</span>
                         )}
@@ -419,7 +624,10 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
                             <span className="path-change-arrow" aria-hidden="true">↓</span>
                             <span className="path-label">Proposed</span>
                             <PathDiff value={item.targetRelativePath} compareTo={item.sourceRelativePath} />
-                            <span className="status-detail">{organizeMetadataSourceLabel(item)}</span>
+                            {item.changes?.length || item.changeKind === "layout"
+                              ? <ChangeDetails item={item} />
+                              : <span className="status-detail">{organizeMetadataSourceLabel(item)}</span>}
+                            <CrossCheckBadge check={item.crossCheck} />
                             {organizeNavidromeDiagnosticLabel(item) && (
                               <span className="status-detail navidrome-diagnostic">
                                 {organizeNavidromeDiagnosticLabel(item)}
