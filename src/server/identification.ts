@@ -11,10 +11,9 @@ import type {
 import { isConfirmedIdentityStatus } from "../shared/identity.js";
 import { httpCacheGet, httpCacheSet } from "./http-cache.js";
 import { FingerprintCache, IdentityStore, type FingerprintResult, type StoredIdentity } from "./identity-store.js";
-import { buildDuplicateKey } from "./matching.js";
+import { withIdentity } from "./identity.js";
 import { identifyByMusicBrainzText } from "./mb-identify.js";
 import { saveMetadataOverridesForTracks } from "./metadata-overrides.js";
-import { targetForTrack } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
 import { isTrackKeepManaged } from "./trackkeep.js";
 import { mapWithConcurrency, sha1 } from "./utils.js";
@@ -437,8 +436,7 @@ function applyCandidate(
   settings: PrivateSettings,
   status: TrackIdentificationStatus
 ): TrackFile {
-  const partial = {
-    ...track,
+  return withIdentity(track, settings, {
     artist: candidate.artist || candidate.albumArtist,
     albumArtist: candidate.albumArtist || candidate.artist,
     album: candidate.album,
@@ -451,23 +449,12 @@ function applyCandidate(
     year: candidate.year,
     duration: track.duration ?? candidate.duration,
     isrc: candidate.isrc ?? track.isrc ?? null,
-    duplicateKey: buildDuplicateKey({
-      artist: candidate.albumArtist || candidate.artist,
-      album: candidate.album,
-      albumType: candidate.albumType || "Album",
-      title: candidate.title,
-      trackNumber: candidate.trackNumber,
-      discNumber: candidate.discNumber,
-      year: candidate.year,
-      duration: track.duration ?? candidate.duration,
-      isrc: candidate.isrc ?? track.isrc ?? null
-    }),
-    metadataConfidence: "musicbrainz" as TrackFile["metadataConfidence"],
-    targetSource: "musicbrainz" as TrackFile["targetSource"],
+    metadataConfidence: "musicbrainz",
+    targetSource: "musicbrainz",
     musicbrainz: musicBrainzIdsFromCandidate(candidate, track.musicbrainz),
     identification: {
       status,
-      source: "musicbrainz" as const,
+      source: "musicbrainz",
       message: status === "user-confirmed"
         ? "MusicBrainz release selected by the user."
         : "A unique acoustic fingerprint and album release match was found.",
@@ -479,9 +466,7 @@ function applyCandidate(
       candidates: track.identification?.candidates,
       candidateSource: track.identification?.candidateSource
     }
-  } satisfies TrackFile;
-  const target = targetForTrack(partial, settings);
-  return { ...partial, targetPath: target.targetPath, targetRelativePath: target.targetRelativePath };
+  });
 }
 
 function musicBrainzIdsFromCandidate(

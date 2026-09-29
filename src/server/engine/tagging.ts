@@ -2,8 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DownloadTrack, TrackFile } from "../../shared/types.js";
 import { musicBrainzMetadataPairs, tagFamily, writeTagLibMusicBrainzIds } from "../canonical-tags.js";
-import { buildDuplicateKey } from "../matching.js";
-import { targetForTrack } from "../organizer.js";
+import { withIdentity } from "../identity.js";
 import {
   downloadCoverImage,
   formatFfmpegError,
@@ -55,17 +54,7 @@ export function downloadTrackToTrackFile(
     codec: profile.codec,
     container: profile.container,
     lossless: false,
-    duplicateKey: buildDuplicateKey({
-      artist: track.albumArtist,
-      album: track.album,
-      albumType: track.albumType || "Album",
-      title: track.title,
-      trackNumber: track.trackNumber,
-      discNumber: track.discNumber,
-      year: track.releaseYear,
-      duration,
-      isrc: track.isrc
-    }),
+    duplicateKey: "",
     qualityScore: profile.qualityScore,
     targetPath: "",
     targetRelativePath: "",
@@ -98,8 +87,7 @@ export function downloadTrackToTrackFile(
         })
   };
 
-  const target = targetForTrack(partial, settings);
-  return { ...partial, targetPath: target.targetPath, targetRelativePath: target.targetRelativePath };
+  return withIdentity(partial, settings);
 }
 
 export function downloadTrackToProviderTrack(track: DownloadTrack): CatalogProviderTrack {

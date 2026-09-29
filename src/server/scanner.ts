@@ -8,6 +8,7 @@ import { AudioMetadataCache, musicBrainzIdsFromMetadata, readAudioMetadata, type
 import { loadCatalog, saveCatalog } from "./catalog.js";
 import { buildDuplicateKey } from "./matching.js";
 import { identifyTracks } from "./identification.js";
+import { pathReviewIssue, withIdentity } from "./identity.js";
 import { loadMetadataOverrides, validMetadataOverride, type MetadataOverride } from "./metadata-overrides.js";
 import { fetchNavidromeLibraryTracks, searchNavidromeLibraryTrackCandidates, type NavidromeLibraryTrack } from "./navidrome.js";
 import { targetForTrack } from "./organizer.js";
@@ -1214,7 +1215,7 @@ async function readTrack(
     (structuredPathIdentityReason || ((!commonArtist || !commonAlbum) && (inferred.artist || inferred.album)))
   );
   if (pathIdentityNeedsReview) {
-    issues.push("Path-derived artist or album requires metadata review");
+    issues.push(pathReviewIssue);
   }
   const inferredArtist = cleanDisplayText(
     (useStructuredPathIdentity ? inferred.artist : commonArtist || inferred.artist),
@@ -1301,17 +1302,7 @@ async function readTrack(
     codec,
     container,
     lossless,
-    duplicateKey: buildDuplicateKey({
-      artist: albumArtist || artist,
-      album,
-      albumType,
-      title,
-      trackNumber,
-      discNumber,
-      year,
-      duration,
-      isrc
-    }),
+    duplicateKey: "",
     qualityScore: qualityScore(extension, bitrate, bitsPerSample, lossless),
     targetPath: "",
     targetRelativePath: "",
@@ -1357,12 +1348,7 @@ async function readTrack(
     issues
   } satisfies TrackFile;
 
-  const target = targetForTrack(partialTrack, settings);
-  return {
-    ...partialTrack,
-    targetPath: target.targetPath,
-    targetRelativePath: target.targetRelativePath
-  };
+  return withIdentity(partialTrack, settings);
 }
 
 function qualityScore(extension: string, bitrate: number | null, bitsPerSample: number | null, lossless: boolean) {
