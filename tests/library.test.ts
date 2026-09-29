@@ -204,14 +204,8 @@ function settings(libraryPath: string): PrivateSettings {
       }
     },
     naming: {
-      mode: "standard",
       libraryPath,
       recycleBinPath: path.join(libraryPath, ".naviclean-trash"),
-      artistFolderFormat: "{Album Artist Name}",
-      standardTrackFormat: "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}",
-      multiDiscTrackFormat: "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}",
-      replaceIllegalCharacters: true,
-      colonReplacementFormat: 4
     },
     scan: {
       extensions: [".mp3", ".flac"],

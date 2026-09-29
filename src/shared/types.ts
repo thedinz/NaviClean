@@ -498,18 +498,11 @@ export type SpotifyCatalogDownloadQueueResult = {
   preview: SpotifyCatalogDownloadPreviewResult;
 };
 
+/** Only the paths are configurable; the folder and file layout is fixed (see organizer.ts). */
 export type NamingSettings = {
-  mode: NamingMode;
   libraryPath: string;
   recycleBinPath: string;
-  artistFolderFormat: string;
-  standardTrackFormat: string;
-  multiDiscTrackFormat: string;
-  replaceIllegalCharacters: boolean;
-  colonReplacementFormat: number;
 };
-
-export type NamingMode = "standard";
 
 export type ScanSettings = {
   extensions: string[];

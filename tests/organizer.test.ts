@@ -9,13 +9,8 @@ import { preserveOrganizationSkipDecisions, setTrackOrganizationSkipped } from "
 import { applyOrganizePlan, buildOrganizePlan, targetForTrack, trackNeedsMove, trashOrganizeCandidate, trashOrganizeCandidates } from "../src/server/organizer.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 
-const standardTrackFormat =
-  "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}";
-const standardMultiDiscTrackFormat =
-  "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}";
-
 test("standard mode uses the clean artist album year layout", () => {
-  const target = targetForTrack(track(), settings({ mode: "standard" }));
+  const target = targetForTrack(track(), settings());
 
   assert.equal(
     target.targetRelativePath,
@@ -24,7 +19,7 @@ test("standard mode uses the clean artist album year layout", () => {
 });
 
 test("standard mode includes disc number for multi-disc albums", () => {
-  const target = targetForTrack(track({ discNumber: 2, discTotal: 2 }), settings({ mode: "standard" }));
+  const target = targetForTrack(track({ discNumber: 2, discTotal: 2 }), settings());
 
   assert.equal(
     target.targetRelativePath,
@@ -33,7 +28,7 @@ test("standard mode includes disc number for multi-disc albums", () => {
 });
 
 test("standard mode keeps disc one tracks in standard numbering", () => {
-  const target = targetForTrack(track({ discNumber: 1, discTotal: 2 }), settings({ mode: "standard" }));
+  const target = targetForTrack(track({ discNumber: 1, discTotal: 2 }), settings());
 
   assert.equal(
     target.targetRelativePath,
@@ -45,7 +40,6 @@ test("custom naming templates are ignored", () => {
   const target = targetForTrack(
     track({ albumType: "single", trackTotal: 5 }),
     settings({
-      standardTrackFormat: "{Album Artist Name}/{Album Type} - {Album Title}/{track:00} - {Track Title}"
     })
   );
 
@@ -74,7 +68,6 @@ test("standard folder with a different local year needs organization", async () 
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -115,7 +108,6 @@ test("standard folder with inferred year needs organization when metadata year i
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -150,7 +142,6 @@ test("TrackKeep-managed file is not organized only because its path differs", as
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -179,7 +170,7 @@ test("legacy SpotifyBU-managed file receives TrackKeep organization protection",
 
     const plan = await buildOrganizePlan(
       [track({ absolutePath: sourcePath, relativePath: sourceRelativePath, managedBy: "spotifybu" })],
-      settings({ libraryPath: root, mode: "standard" })
+      settings({ libraryPath: root })
     );
 
     assert.equal(plan.summary.ready, 0);
@@ -275,7 +266,6 @@ test("normal file without TrackKeep identity keeps existing organization behavio
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -404,7 +394,6 @@ test("TrackKeep-managed missing source still reports the hard error", async () =
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -446,7 +435,6 @@ test("duplicate source blocked by an existing organized target does not count as
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -489,7 +477,6 @@ test("multiple duplicate sources for an empty target do not count as conflicts",
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -532,7 +519,6 @@ test("target collisions that duplicate cleanup cannot match still count as confl
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -619,7 +605,6 @@ test("trashing an organize collision candidate recycles the file and refreshes t
     const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
     const testSettings = settings({
       libraryPath: root,
-      mode: "standard"
     });
     const tracks = [
       track({
@@ -671,7 +656,6 @@ test("trashing multiple organize collision candidates recycles them in one plan 
   try {
     const testSettings = settings({
       libraryPath: root,
-      mode: "standard"
     });
     const firstTargetRelativePath = "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3";
     const firstSourceRelativePath = "Unsorted/Track Copy.mp3";
@@ -757,7 +741,6 @@ test("trashing an organize duplicate-target candidate refreshes the plan", async
   try {
     const testSettings = settings({
       libraryPath: root,
-      mode: "standard"
     });
     const firstRelativePath = "Incoming/Track One.mp3";
     const secondRelativePath = "Incoming/Track Two.mp3";
@@ -811,7 +794,6 @@ test("trashing an organize existing-file conflict refreshes the plan", async () 
   try {
     const testSettings = settings({
       libraryPath: root,
-      mode: "standard"
     });
     const targetRelativePath = "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3";
     const sourceRelativePath = "Incoming/Track Copy.mp3";
@@ -882,14 +864,8 @@ function settings(overrides: Partial<PrivateSettings["naming"]> = {}): PrivateSe
       }
     },
     naming: {
-      mode: "standard",
       libraryPath,
       recycleBinPath: path.join(libraryPath, ".naviclean-trash"),
-      artistFolderFormat: "{Album Artist Name}",
-      standardTrackFormat,
-      multiDiscTrackFormat: standardMultiDiscTrackFormat,
-      replaceIllegalCharacters: true,
-      colonReplacementFormat: 4,
       ...overrides
     },
     scan: {

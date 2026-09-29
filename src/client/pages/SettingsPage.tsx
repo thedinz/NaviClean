@@ -70,7 +70,7 @@ export function SettingsPage({ auth, onAuthChange }: { auth: AuthInfo; onAuthCha
             discovery: settings.catalog.discovery
           },
           identification: { ...settings.identification, acoustIdApiKey },
-          naming: { mode: "standard", libraryPath: settings.naming.libraryPath, recycleBinPath: settings.naming.recycleBinPath },
+          naming: { libraryPath: settings.naming.libraryPath, recycleBinPath: settings.naming.recycleBinPath },
           scan: settings.scan,
           cleanup: settings.cleanup,
           engine: settings.engine,
