@@ -18,7 +18,7 @@ import { duplicateKeyForTrack } from "./matching.js";
 import { writeCanonicalTags } from "./canonical-tags.js";
 import type { PrivateSettings } from "./settings.js";
 import { isTrackKeepManaged, normalizeTrackKeepManagedBy } from "./trackkeep.js";
-import { isInsidePath, sha1, toPosixRelative } from "./utils.js";
+import { isInsidePath, mapWithConcurrency, sha1, toPosixRelative } from "./utils.js";
 
 const unknownReleaseYear = "Unknown Year";
 const controlCharacters = /[\u0000-\u001f]/g;
@@ -618,32 +618,6 @@ async function sourcePathStatus(filePath: string): Promise<"readable" | "missing
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unreadable";
   }
-}
-
-async function mapWithConcurrency<T, R>(
-  values: T[],
-  concurrency: number,
-  mapper: (value: T) => Promise<R>
-) {
-  const results = new Array<R>(values.length);
-  let nextIndex = 0;
-
-  async function worker() {
-    while (nextIndex < values.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await mapper(values[index]);
-    }
-  }
-
-  await Promise.all(
-    Array.from(
-      { length: Math.min(Math.max(concurrency, 1), values.length || 1) },
-      () => worker()
-    )
-  );
-
-  return results;
 }
 
 async function statIfExists(filePath: string) {

@@ -17,7 +17,7 @@ import { saveMetadataOverridesForTracks } from "./metadata-overrides.js";
 import { targetForTrack } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
 import { isTrackKeepManaged } from "./trackkeep.js";
-import { sha1 } from "./utils.js";
+import { mapWithConcurrency, sha1 } from "./utils.js";
 
 const execFileAsync = promisify(execFile);
 const minimumAutomaticScore = 0.95;
@@ -777,19 +777,4 @@ function uniqueValue(values: string[]) {
 
 function withIdentification(track: TrackFile, identification: NonNullable<TrackFile["identification"]>): TrackFile {
   return { ...track, identification };
-}
-
-async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>, onProgress?: (completed: number) => void) {
-  const results = new Array<R>(items.length);
-  let cursor = 0;
-  let completed = 0;
-  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor++;
-      results[index] = await worker(items[index]);
-      onProgress?.(++completed);
-    }
-  });
-  await Promise.all(runners);
-  return results;
 }
