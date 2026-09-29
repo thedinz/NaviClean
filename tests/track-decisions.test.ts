@@ -80,7 +80,10 @@ test("a skip survives a rescan through the decision store", async () => {
   const { scanLibrary } = await import("../src/server/scanner.js");
   const { setTrackOrganizationSkipped } = await import("../src/server/organize-skip.js");
   const { normalizeSettings } = await import("../src/server/settings.js");
-  const settings = normalizeSettings({ naming: { libraryPath: library, recycleBinPath: path.join(root, "trash") } });
+  const settings = normalizeSettings({
+    naming: { libraryPath: library, recycleBinPath: path.join(root, "trash") },
+    musicbrainz: { textSearchEnabled: false, maxTextLookupsPerScan: 0, catalogSource: "musicbrainz" }
+  });
 
   const first = await scanLibrary(settings);
   const skipped = setTrackOrganizationSkipped(first.tracks, first.tracks[0]!.id, true);

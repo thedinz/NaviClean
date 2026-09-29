@@ -437,6 +437,16 @@ function settings(): PrivateSettings {
         requestsPerMinute: 40
       }
     },
+    identification: {
+      acoustIdEnabled: false,
+      acoustIdApiKey: "",
+      useEmbeddedTagsAsHints: true,
+      usePathAsHints: true,
+      autoAcceptUniqueFingerprintMatches: true,
+      requireReviewBeforeFileChanges: true
+    },
+    // Tests never query MusicBrainz over the network.
+    musicbrainz: { textSearchEnabled: false, maxTextLookupsPerScan: 0, catalogSource: "musicbrainz" },
     naming: {
       libraryPath: "/music",
       recycleBinPath: path.join("/music", ".naviclean-trash"),

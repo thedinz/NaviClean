@@ -40,7 +40,7 @@ export async function identifyByMusicBrainzText(
   const options = musicBrainzSettings(settings);
   const warnings: string[] = [];
 
-  if (!options.textSearchEnabled || !settings.identification?.useEmbeddedTagsAsHints) {
+  if (!options.textSearchEnabled || !settings.identification.useEmbeddedTagsAsHints) {
     return { tracks, warnings, identified: 0 };
   }
 
