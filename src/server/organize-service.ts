@@ -1,5 +1,6 @@
 import type { OrganizePlan, TrackFile, WorkflowState } from "../shared/types.js";
 import type { Catalog } from "./catalog.js";
+import { attachCrossChecks } from "./organize-crosscheck.js";
 import { buildOrganizePlan } from "./organizer.js";
 import type { PrivateSettings } from "./settings.js";
 
@@ -30,7 +31,7 @@ export async function getOrganizeEvaluation(catalog: Catalog, settings: PrivateS
 /** Re-plans against the disk and caches the result unless the cache was invalidated meanwhile. */
 export async function rebuildOrganizeEvaluation(catalog: Catalog, settings: PrivateSettings): Promise<OrganizeEvaluation> {
   const token = cacheToken;
-  const plan = await buildOrganizePlan(catalog.tracks, settings);
+  const plan = attachCrossChecks(await buildOrganizePlan(catalog.tracks, settings), catalog.tracks);
   const evaluation: OrganizeEvaluation = {
     key: evaluationKey(catalog, settings),
     plan,

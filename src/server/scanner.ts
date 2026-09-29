@@ -512,6 +512,9 @@ async function readTrack(
   const commonTrackNumber = common?.track?.no || null;
   const metadataYear = typeof common?.year === "number" && Number.isFinite(common.year) ? common.year : null;
   const commonYear = metadataYear ?? parseYear(firstCommonString(commonRecord, ["date", "originaldate", "releasedate"]));
+  const commonOriginalYear = typeof common?.originalyear === "number" && Number.isFinite(common.originalyear)
+    ? common.originalyear
+    : parseYear(firstCommonString(commonRecord, ["originaldate"]));
   const hasPlaceholderIdentityTag = [common?.artist, common?.artists?.[0], common?.albumartist, common?.album].some(
     isUnknownMetadataValue
   );
@@ -522,7 +525,8 @@ async function readTrack(
     hasPlaceholderIdentityTag,
     title: commonTitle,
     trackNumber: commonTrackNumber,
-    year: commonYear
+    year: commonYear,
+    originalYear: commonOriginalYear
   });
 
   if (!metadataOverride && structuredPathIdentityReason === "placeholder-tags") {
@@ -577,6 +581,10 @@ async function readTrack(
   const discTotal = metadataOverride?.metadata.discTotal ?? common?.disk?.of ?? null;
   const inferredYear = (useStructuredPathIdentity ? inferred.year : commonYear ?? inferred.year) ?? null;
   const year = metadataOverride?.metadata.year ?? inferredYear;
+  // A confirmed decision owns the year entirely, so a stale `originaldate` tag cannot override it.
+  const originalYear = metadataOverride
+    ? metadataOverride.metadata.originalYear ?? null
+    : useStructuredPathIdentity ? null : commonOriginalYear;
   const inferredAlbumType = normalizeAlbumType(firstCommonString(commonRecord, ["albumtype", "releasetype", "release_type"]) || inferred.albumType, trackTotal);
   const albumType = metadataOverride?.metadata.albumType ?? inferredAlbumType;
   const duration = typeof format?.duration === "number" ? format.duration : null;
@@ -616,6 +624,7 @@ async function readTrack(
     discNumber,
     discTotal,
     year,
+    originalYear,
     duration,
     isrc,
     bitrate,
@@ -770,6 +779,7 @@ function structuredPathIdentityReasonForTags(
     title?: string;
     trackNumber: number | null;
     year: number | null;
+    originalYear?: number | null;
   }
 ): StructuredPathIdentityReason | null {
   if (!inferred.structuredPath || !hasCompleteStructuredPathIdentity(inferred)) {
@@ -786,7 +796,7 @@ function structuredPathIdentityReasonForTags(
     metadataTextDiffers(inferred.album || "", tags.album),
     Boolean(tags.title && metadataTextDiffers(inferred.title || "", tags.title)),
     Boolean(tags.trackNumber && inferred.trackNumber && tags.trackNumber !== inferred.trackNumber),
-    Boolean(tags.year && inferred.year && tags.year !== inferred.year)
+    Boolean(tags.year && inferred.year && tags.year !== inferred.year && tags.originalYear !== inferred.year)
   ].filter(Boolean).length;
 
   if (tags.title && hasMeaningfulPathTitleVersion(inferred.title || "", tags.title, inferred.albumArtist || inferred.artist || albumArtist)) {

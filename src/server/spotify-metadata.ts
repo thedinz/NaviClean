@@ -130,6 +130,8 @@ function trackWithSpotifyMetadata(
     discNumber: spotifyTrack.discNumber,
     discTotal: album.discTotal,
     year: album.releaseYear,
+    // Spotify has one date per album; drop any tag-derived original year so the choice sticks.
+    originalYear: null,
     duration: track.duration ?? spotifyTrack.duration,
     isrc: spotifyTrack.isrc ?? track.isrc ?? null,
     issues,

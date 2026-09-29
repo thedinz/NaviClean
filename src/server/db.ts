@@ -131,6 +131,35 @@ const migrations: Migration[] = [
         }
       }
     }
+  },
+  {
+    // An undo journal for organize runs, and saved Spotify cross-checks of proposed metadata.
+    version: 3,
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE organize_runs (
+          id TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          undone_at TEXT
+        );
+        CREATE TABLE organize_run_items (
+          run_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          source_path TEXT NOT NULL,
+          target_path TEXT NOT NULL,
+          applied_size INTEGER NOT NULL,
+          tags TEXT NOT NULL,
+          undone_at TEXT,
+          PRIMARY KEY (run_id, seq)
+        );
+        CREATE TABLE organize_crosschecks (
+          track_id TEXT PRIMARY KEY,
+          proposal TEXT NOT NULL,
+          data TEXT NOT NULL
+        );
+      `);
+    }
   }
 ];
 

@@ -301,6 +301,7 @@ export function candidateFromReleaseTrack(
     discNumber,
     discTotal: release.media?.length ?? 1,
     year: releaseYear(release.date ?? release["release-group"]?.["first-release-date"]),
+    originalYear: releaseYear(release["release-group"]?.["first-release-date"]),
     duration: (releaseTrack.length ?? recording.length) ? Math.round((releaseTrack.length ?? recording.length ?? 0) / 1000) : null,
     isrc: recording.isrcs?.[0]?.toUpperCase() ?? null
   };
@@ -337,6 +338,7 @@ function candidateFromRecordingRelease(
     discNumber: medium?.position ?? 1,
     discTotal: release.media?.length ?? null,
     year: releaseYear(release.date),
+    originalYear: releaseYear(release["release-group"]?.["first-release-date"]),
     duration: recording.length ? Math.round(recording.length / 1000) : null,
     isrc: recording.isrcs?.[0]?.toUpperCase() ?? null
   };

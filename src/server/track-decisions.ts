@@ -28,6 +28,7 @@ export type MetadataOverride = {
     | "discNumber"
     | "discTotal"
     | "year"
+    | "originalYear"
     | "isrc"
   >;
 };
@@ -150,6 +151,7 @@ function overrideFromTrack(track: TrackFile, source: MetadataOverrideSource): Me
       discNumber: track.discNumber,
       discTotal: track.discTotal,
       year: track.year,
+      originalYear: track.originalYear ?? null,
       isrc: track.isrc ?? null
     }
   };
