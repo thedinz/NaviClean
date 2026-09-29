@@ -1121,6 +1121,8 @@ export type OrganizeCollisionCandidate = {
 
 export type OrganizePlan = {
   items: OrganizePlanItem[];
+  /** Hash of the ready moves; Apply must echo it back so a changed plan is never applied blind. */
+  fingerprint: string;
   warnings: string[];
   summary: {
     ready: number;

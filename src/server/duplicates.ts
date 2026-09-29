@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { DuplicateBulkResolveResult, DuplicateGroup, DuplicateResolveResult, TrackFile } from "../shared/types.js";
+import { createRecycleSession } from "./file-ops.js";
 import type { PrivateSettings } from "./settings.js";
 import { duplicateKeyForTrack } from "./matching.js";
 import { toPosixRelative } from "./utils.js";
@@ -118,7 +118,7 @@ async function recycleDuplicateTracks(settings: PrivateSettings, tracks: TrackFi
     errors: [],
     tracks
   };
-  const nowFolder = new Date().toISOString().replace(/[:.]/g, "-");
+  const session = createRecycleSession(settings);
   const removedTrackIds = new Set<string>();
 
   for (const track of tracks) {
@@ -127,10 +127,7 @@ async function recycleDuplicateTracks(settings: PrivateSettings, tracks: TrackFi
     }
 
     try {
-      const trashRoot = path.resolve(settings.naming.recycleBinPath);
-      const target = path.join(trashRoot, nowFolder, track.relativePath);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.rename(track.absolutePath, target);
+      await session.recycle(track.absolutePath, track.relativePath);
       result.trashed += 1;
       removedTrackIds.add(track.id);
     } catch (error) {

@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { CatalogProviderId, NamingMode, QualityCodecFamily, SettingsUpdate, SettingsView } from "../shared/types.js";
+import { writeJsonAtomic } from "./file-ops.js";
 
 export type EngineSettings = {
   /** Candidates at or above this score (0-100) download without review. */
@@ -228,10 +229,7 @@ export async function loadSettings(): Promise<PrivateSettings> {
 }
 
 export async function saveSettings(settings: PrivateSettings) {
-  await fs.mkdir(dataDir, { recursive: true });
-  const tempPath = `${settingsPath}.tmp`;
-  await fs.writeFile(tempPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-  await fs.rename(tempPath, settingsPath);
+  await writeJsonAtomic(settingsPath, settings);
 }
 
 export function toSettingsView(settings: PrivateSettings): SettingsView {

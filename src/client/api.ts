@@ -1,3 +1,13 @@
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly body: unknown
+  ) {
+    super(message);
+  }
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
 
@@ -14,13 +24,14 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 
   if (!response.ok) {
     let message = response.statusText;
+    let body: unknown = null;
     try {
-      const body = (await response.json()) as { error?: string };
-      message = body.error || message;
+      body = await response.json();
+      message = (body as { error?: string }).error || message;
     } catch {
       // Keep the HTTP status text.
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status, body);
   }
 
   return response.json() as Promise<T>;
