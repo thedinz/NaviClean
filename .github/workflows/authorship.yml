@@ -1,0 +1,45 @@
+name: Authorship check
+
+# Fails if any commit or tag in the repo is not authored by thedinz,
+# or carries an AI co-author trailer / attribution footer.
+on:
+  push:
+    branches: ["**"]
+    tags: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  authorship:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commits and tags
+        run: |
+          ID="thedinz <68015411+thedinz@users.noreply.github.com>"
+          WEB="GitHub <noreply@github.com>"
+          AI='^(co-authored-by:|signed-off-by:.*(claude|codex|openai|anthropic|chatgpt|copilot)|.*generated with \[?(claude|codex|chatgpt))|(noreply@anthropic\.com|codex@openai\.com)'
+          bad=0
+          for c in $(git rev-list HEAD); do
+            author=$(git log -1 --format='%an <%ae>' "$c")
+            committer=$(git log -1 --format='%cn <%ce>' "$c")
+            if [ "$author" != "$ID" ] || { [ "$committer" != "$ID" ] && [ "$committer" != "$WEB" ]; }; then
+              echo "::error::$c author '$author', committer '$committer'"; bad=1
+            fi
+            if git log -1 --format=%B "$c" | grep -qiE "$AI"; then
+              echo "::error::$c has an AI trailer/footer: $(git log -1 --format=%B "$c" | grep -iE "$AI" | head -1)"; bad=1
+            fi
+          done
+          for t in $(git tag); do
+            if [ "$(git cat-file -t "$t")" = tag ]; then
+              tagger=$(git cat-file -p "$t" | sed -n 's/^tagger \(.*>\).*/\1/p')
+              [ "$tagger" = "$ID" ] || { echo "::error::tag $t tagger '$tagger'"; bad=1; }
+            fi
+          done
+          exit $bad
