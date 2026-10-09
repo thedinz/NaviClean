@@ -151,15 +151,19 @@ function settings(libraryPath: string): PrivateSettings {
     cleanup: {
       emptyFolderExclusions: []
     },
+    identification: {
+      acoustIdEnabled: false,
+      acoustIdApiKey: "",
+      useEmbeddedTagsAsHints: true,
+      usePathAsHints: true,
+      autoAcceptUniqueFingerprintMatches: true,
+      requireReviewBeforeFileChanges: true
+    },
+    // Tests never query MusicBrainz over the network.
+    musicbrainz: { textSearchEnabled: false, maxTextLookupsPerScan: 0, catalogSource: "musicbrainz" },
     naming: {
-      artistFolderFormat: "",
-      colonReplacementFormat: 4,
       libraryPath,
-      mode: "standard",
-      multiDiscTrackFormat: "",
       recycleBinPath: `${libraryPath}/.naviclean-trash`,
-      replaceIllegalCharacters: true,
-      standardTrackFormat: ""
     },
     navidrome: {
       baseUrl: "",

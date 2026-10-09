@@ -5,17 +5,12 @@ import path from "node:path";
 import { test } from "node:test";
 import type { TrackFile } from "../src/shared/types.js";
 import { trustPathMetadataForFolder } from "../src/server/metadata-review.js";
-import { preserveOrganizationSkipDecisions, setTrackOrganizationSkipped } from "../src/server/organize-skip.js";
-import { buildOrganizePlan, targetForTrack, trackNeedsMove, trashOrganizeCandidate, trashOrganizeCandidates } from "../src/server/organizer.js";
+import { setTrackOrganizationSkipped } from "../src/server/organize-skip.js";
+import { applyOrganizePlan, buildOrganizePlan, targetForTrack, trackNeedsMove, trashOrganizeCandidate, trashOrganizeCandidates } from "../src/server/organizer.js";
 import type { PrivateSettings } from "../src/server/settings.js";
 
-const standardTrackFormat =
-  "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}";
-const standardMultiDiscTrackFormat =
-  "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}";
-
 test("standard mode uses the clean artist album year layout", () => {
-  const target = targetForTrack(track(), settings({ mode: "standard" }));
+  const target = targetForTrack(track(), settings());
 
   assert.equal(
     target.targetRelativePath,
@@ -24,7 +19,7 @@ test("standard mode uses the clean artist album year layout", () => {
 });
 
 test("standard mode includes disc number for multi-disc albums", () => {
-  const target = targetForTrack(track({ discNumber: 2, discTotal: 2 }), settings({ mode: "standard" }));
+  const target = targetForTrack(track({ discNumber: 2, discTotal: 2 }), settings());
 
   assert.equal(
     target.targetRelativePath,
@@ -33,7 +28,7 @@ test("standard mode includes disc number for multi-disc albums", () => {
 });
 
 test("standard mode keeps disc one tracks in standard numbering", () => {
-  const target = targetForTrack(track({ discNumber: 1, discTotal: 2 }), settings({ mode: "standard" }));
+  const target = targetForTrack(track({ discNumber: 1, discTotal: 2 }), settings());
 
   assert.equal(
     target.targetRelativePath,
@@ -45,7 +40,6 @@ test("custom naming templates are ignored", () => {
   const target = targetForTrack(
     track({ albumType: "single", trackTotal: 5 }),
     settings({
-      standardTrackFormat: "{Album Artist Name}/{Album Type} - {Album Title}/{track:00} - {Track Title}"
     })
   );
 
@@ -74,7 +68,6 @@ test("standard folder with a different local year needs organization", async () 
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -115,7 +108,6 @@ test("standard folder with inferred year needs organization when metadata year i
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -150,7 +142,6 @@ test("TrackKeep-managed file is not organized only because its path differs", as
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -179,7 +170,7 @@ test("legacy SpotifyBU-managed file receives TrackKeep organization protection",
 
     const plan = await buildOrganizePlan(
       [track({ absolutePath: sourcePath, relativePath: sourceRelativePath, managedBy: "spotifybu" })],
-      settings({ libraryPath: root, mode: "standard" })
+      settings({ libraryPath: root })
     );
 
     assert.equal(plan.summary.ready, 0);
@@ -257,6 +248,39 @@ test("trusting an ordinary folder never trusts managed tracks in that folder", (
   assert.equal(result.tracks[2]?.metadataConfidence, "path-suggestion");
 });
 
+test("trusting a folder confirms its identity immediately, without waiting for a rescan", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const sourceRelativePath = "Artist/Album Name/03 - Track.mp3";
+    const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "audio");
+    const testSettings = settings({ libraryPath: root });
+    const pathTrack = track({
+      id: "path-only",
+      absolutePath: sourcePath,
+      relativePath: sourceRelativePath,
+      metadataConfidence: "path-suggestion",
+      metadataSuggestion: { artist: "Artist", albumArtist: "Artist", album: "Album Name", title: "Track", trackNumber: 3, discNumber: 1, year: 2026 },
+      identification: { status: "candidate-only", source: "local-path", message: "Path hints only." },
+      issues: ["Path-derived artist or album requires metadata review"]
+    });
+
+    const before = await buildOrganizePlan([pathTrack], testSettings);
+    assert.equal(before.items[0]?.status, "metadata-review");
+
+    const trusted = trustPathMetadataForFolder(testSettings, [pathTrack], "path-only");
+    const after = await buildOrganizePlan(trusted.tracks, testSettings);
+
+    assert.equal(trusted.tracks[0]?.identification?.status, "user-confirmed");
+    assert.deepEqual(trusted.tracks[0]?.issues, []);
+    assert.equal(after.items[0]?.status, "ready");
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("normal file without TrackKeep identity keeps existing organization behavior", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
 
@@ -275,7 +299,6 @@ test("normal file without TrackKeep identity keeps existing organization behavio
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -351,17 +374,7 @@ test("every track can be skipped and retried without mutating the original catal
   assert.ok(trackKeep.tracks[0]?.organizeSkippedAt);
 });
 
-test("skip decisions survive rescans by absolute source path", () => {
-  const scanned = track({ id: "new-scan-id", organizeSkippedAt: undefined });
-  const previous = track({ id: "old-scan-id", organizeSkippedAt: "2026-07-18T12:00:00.000Z" });
-  const preserved = preserveOrganizationSkipDecisions([scanned], [previous]);
-
-  assert.equal(preserved[0]?.id, "new-scan-id");
-  assert.equal(preserved[0]?.organizeSkippedAt, "2026-07-18T12:00:00.000Z");
-  assert.equal(scanned.organizeSkippedAt, undefined);
-});
-
-test("TrackKeep skip decisions survive rescans and appear in the skipped plan", async () => {
+test("skipped TrackKeep tracks appear in the skipped plan", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
   const relativePath = "TrackKeep Downloads/Managed.mp3";
   const absolutePath = path.join(root, ...relativePath.split("/"));
@@ -369,17 +382,14 @@ test("TrackKeep skip decisions survive rescans and appear in the skipped plan", 
   try {
     await fs.mkdir(path.dirname(absolutePath), { recursive: true });
     await fs.writeFile(absolutePath, "audio");
-    const previous = track({
+    const skipped = track({
       absolutePath,
       relativePath,
       managedBy: "trackkeep",
       organizeSkippedAt: "2026-07-18T12:00:00.000Z"
     });
-    const scanned = track({ absolutePath, relativePath, managedBy: "trackkeep" });
-    const preserved = preserveOrganizationSkipDecisions([scanned], [previous]);
-    const plan = await buildOrganizePlan(preserved, settings({ libraryPath: root }));
+    const plan = await buildOrganizePlan([skipped], settings({ libraryPath: root }));
 
-    assert.equal(preserved[0]?.organizeSkippedAt, "2026-07-18T12:00:00.000Z");
     assert.equal(plan.items[0]?.status, "skipped");
     assert.equal(plan.summary.skipped, 1);
   } finally {
@@ -404,7 +414,6 @@ test("TrackKeep-managed missing source still reports the hard error", async () =
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -446,7 +455,6 @@ test("duplicate source blocked by an existing organized target does not count as
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -489,7 +497,6 @@ test("multiple duplicate sources for an empty target do not count as conflicts",
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -532,7 +539,6 @@ test("target collisions that duplicate cleanup cannot match still count as confl
       ],
       settings({
         libraryPath: root,
-        mode: "standard"
       })
     );
 
@@ -542,6 +548,68 @@ test("target collisions that duplicate cleanup cannot match still count as confl
     assert.deepEqual(new Set(plan.items.map((item) => item.status)), new Set(["conflict"]));
     assert.equal(plan.items[0]?.collision?.duplicateKeyMatches, false);
     assert.equal(plan.items[0]?.collision?.candidates.length, 2);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("applying a stale plan never overwrites a file that appeared at the target", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const targetRelativePath = "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3";
+    const sourcePath = path.join(root, "Unsorted", "Track.mp3");
+    const targetPath = path.join(root, ...targetRelativePath.split("/"));
+    const testSettings = settings({ libraryPath: root });
+    const tracks = [track({ id: "source", absolutePath: sourcePath, relativePath: "Unsorted/Track.mp3" })];
+
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "local-copy");
+
+    const reviewedPlan = await buildOrganizePlan(tracks, testSettings);
+    assert.equal(reviewedPlan.summary.ready, 1);
+
+    // Something else (a provider download, another tool) writes the target after the preview.
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, "downloaded");
+
+    const result = await applyOrganizePlan(reviewedPlan);
+
+    assert.equal(result.moved, 0);
+    assert.equal(result.errors.length, 1);
+    assert.match(result.errors[0], /Target already exists/);
+    assert.equal(await fs.readFile(targetPath, "utf8"), "downloaded");
+    assert.equal(await fs.readFile(sourcePath, "utf8"), "local-copy");
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("organize plan fingerprint changes when the ready moves change", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-organizer-"));
+
+  try {
+    const targetRelativePath = "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3";
+    const sourcePath = path.join(root, "Unsorted", "Track.mp3");
+    const targetPath = path.join(root, ...targetRelativePath.split("/"));
+    const testSettings = settings({ libraryPath: root });
+    const tracks = [track({ id: "source", absolutePath: sourcePath, relativePath: "Unsorted/Track.mp3" })];
+
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "local-copy");
+
+    const first = await buildOrganizePlan(tracks, testSettings);
+    const unchanged = await buildOrganizePlan(tracks, testSettings);
+
+    assert.equal(first.fingerprint, unchanged.fingerprint);
+
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, "downloaded");
+
+    const changed = await buildOrganizePlan(tracks, testSettings);
+
+    assert.equal(changed.summary.ready, 0);
+    assert.notEqual(changed.fingerprint, first.fingerprint);
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }
@@ -557,7 +625,6 @@ test("trashing an organize collision candidate recycles the file and refreshes t
     const sourcePath = path.join(root, ...sourceRelativePath.split("/"));
     const testSettings = settings({
       libraryPath: root,
-      mode: "standard"
     });
     const tracks = [
       track({
@@ -609,7 +676,6 @@ test("trashing multiple organize collision candidates recycles them in one plan 
   try {
     const testSettings = settings({
       libraryPath: root,
-      mode: "standard"
     });
     const firstTargetRelativePath = "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3";
     const firstSourceRelativePath = "Unsorted/Track Copy.mp3";
@@ -695,7 +761,6 @@ test("trashing an organize duplicate-target candidate refreshes the plan", async
   try {
     const testSettings = settings({
       libraryPath: root,
-      mode: "standard"
     });
     const firstRelativePath = "Incoming/Track One.mp3";
     const secondRelativePath = "Incoming/Track Two.mp3";
@@ -749,7 +814,6 @@ test("trashing an organize existing-file conflict refreshes the plan", async () 
   try {
     const testSettings = settings({
       libraryPath: root,
-      mode: "standard"
     });
     const targetRelativePath = "Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track.mp3";
     const sourceRelativePath = "Incoming/Track Copy.mp3";
@@ -819,15 +883,19 @@ function settings(overrides: Partial<PrivateSettings["naming"]> = {}): PrivateSe
         requestsPerMinute: 40
       }
     },
+    identification: {
+      acoustIdEnabled: false,
+      acoustIdApiKey: "",
+      useEmbeddedTagsAsHints: true,
+      usePathAsHints: true,
+      autoAcceptUniqueFingerprintMatches: true,
+      requireReviewBeforeFileChanges: true
+    },
+    // Tests never query MusicBrainz over the network.
+    musicbrainz: { textSearchEnabled: false, maxTextLookupsPerScan: 0, catalogSource: "musicbrainz" },
     naming: {
-      mode: "standard",
       libraryPath,
       recycleBinPath: path.join(libraryPath, ".naviclean-trash"),
-      artistFolderFormat: "{Album Artist Name}",
-      standardTrackFormat,
-      multiDiscTrackFormat: standardMultiDiscTrackFormat,
-      replaceIllegalCharacters: true,
-      colonReplacementFormat: 4,
       ...overrides
     },
     scan: {

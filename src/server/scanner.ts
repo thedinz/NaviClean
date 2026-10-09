@@ -1,16 +1,33 @@
-import { parseFile } from "music-metadata";
+import type { IAudioMetadata } from "music-metadata";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isConfirmedIdentityStatus } from "../shared/identity.js";
 import type { NavidromeMetadataEnrichment, NavidromeMetadataMatchMethod, ScanStatus, TrackFile } from "../shared/types.js";
-import { loadCatalog, saveCatalog } from "./catalog.js";
-import { buildDuplicateKey } from "./matching.js";
-import { loadMetadataOverrides, validMetadataOverride, type MetadataOverride } from "./metadata-overrides.js";
+import { AudioMetadataCache, musicBrainzIdsFromMetadata, readAudioMetadata, type AudioMetadata } from "./audio-metadata.js";
+import { saveCatalog } from "./catalog.js";
+import { identifyTracks } from "./identification.js";
+import { pathReviewIssue, withIdentity } from "./identity.js";
+import {
+  loadMetadataOverrides,
+  loadSkipDecisions,
+  pruneTrackDecisions,
+  skipDecisionFor,
+  validMetadataOverride,
+  type MetadataOverride
+} from "./track-decisions.js";
 import { fetchNavidromeLibraryTracks, searchNavidromeLibraryTrackCandidates, type NavidromeLibraryTrack } from "./navidrome.js";
-import { targetForTrack } from "./organizer.js";
-import { preserveOrganizationSkipDecisions } from "./organize-skip.js";
+import {
+  buildNavidromeMatchIndex,
+  findIndexedNavidromeMatch,
+  navidromeCandidateMatchMethod,
+  navidromeMatchDescription,
+  navidromeRelativePathKey,
+  titleSuffixIsNoise,
+  type NavidromeTrackMatch
+} from "./navidrome-matching.js";
 import type { PrivateSettings } from "./settings.js";
-import { hasTrackKeepIdentityTags } from "./trackkeep.js";
+import { hasTrackKeepIdentityTags, readTrackKeepIdentity } from "./trackkeep.js";
 import {
   cleanDisplayValue,
   normalizeForMatch,
@@ -23,7 +40,7 @@ import {
 export { hasTrackKeepIdentityTags };
 
 type ProgressHandler = (status: Partial<ScanStatus>) => void;
-type ParsedAudioMetadata = Awaited<ReturnType<typeof parseFile>>;
+type ParsedCommonTags = IAudioMetadata["common"];
 type StructuredPathIdentityReason = "missing-tags" | "placeholder-tags" | "conflicting-tags";
 
 const extensionQuality: Record<string, number> = {
@@ -39,47 +56,107 @@ const extensionQuality: Record<string, number> = {
   ".mp3": 550,
   ".wma": 420
 };
-export async function scanLibrary(settings: PrivateSettings, onProgress?: ProgressHandler) {
+export class ScanCancelledError extends Error {
+  constructor() {
+    super("The scan was cancelled. Files read so far are cached, so the next scan resumes quickly.");
+  }
+}
+
+export type ScanOptions = {
+  signal?: AbortSignal;
+};
+
+const metadataReadConcurrency = 8;
+
+export async function scanLibrary(settings: PrivateSettings, onProgress?: ProgressHandler, options: ScanOptions = {}) {
   const root = path.resolve(settings.naming.libraryPath);
   const extensions = new Set(settings.scan.extensions.map((extension) => extension.toLowerCase()));
   const recycleRoot = path.resolve(settings.naming.recycleBinPath);
+  const throwIfCancelled = () => {
+    if (options.signal?.aborted) {
+      throw new ScanCancelledError();
+    }
+  };
+  onProgress?.({ phase: "discovering", processedFiles: 0, totalFiles: 0 });
   const files = await collectAudioFiles(root, extensions, recycleRoot, onProgress);
-  const tracks: TrackFile[] = [];
+  throwIfCancelled();
+  const readResults = new Array<TrackFile | null>(files.length).fill(null);
   const errors: string[] = [];
   const warnings: string[] = [];
-  const metadataOverrides = await loadMetadataOverrides();
+  const decisions = { overrides: await loadMetadataOverrides(), skips: loadSkipDecisions() };
+  const metadataCache = new AudioMetadataCache();
 
-  for (const filePath of files) {
-    try {
-      const track = await readTrack(filePath, root, settings, metadataOverrides);
-      tracks.push(track);
-    } catch (error) {
-      const message = `${toPosixRelative(root, filePath)}: ${(error as Error).message}`;
-      errors.push(message);
-      if (errors.length > 100) {
-        errors.shift();
+  onProgress?.({ phase: "metadata", processedFiles: 0, totalFiles: files.length, cachedFiles: 0 });
+  let processedFiles = 0;
+  let audioFiles = 0;
+  let nextFile = 0;
+
+  const readWorker = async () => {
+    while (nextFile < files.length && !options.signal?.aborted) {
+      const index = nextFile++;
+      const filePath = files[index];
+
+      try {
+        readResults[index] = await readTrack(filePath, root, settings, decisions, metadataCache);
+        audioFiles += 1;
+      } catch (error) {
+        errors.push(`${toPosixRelative(root, filePath)}: ${(error as Error).message}`);
+        if (errors.length > 100) {
+          errors.shift();
+        }
       }
-    }
 
-    onProgress?.({
-      audioFiles: tracks.length,
-      errors
-    });
+      onProgress?.({
+        processedFiles: ++processedFiles,
+        audioFiles,
+        cachedFiles: metadataCache.hits,
+        errors
+      });
+    }
+  };
+
+  try {
+    await Promise.all(
+      Array.from({ length: Math.min(metadataReadConcurrency, Math.max(1, files.length)) }, () => readWorker())
+    );
+  } finally {
+    // Keep whatever was read, even when cancelled, so an interrupted scan resumes from the cache.
+    metadataCache.flush();
+  }
+  throwIfCancelled();
+
+  const tracks = readResults.filter((track): track is TrackFile => Boolean(track));
+  if (metadataCache.hits > 0) {
+    warnings.push(
+      `Library scan: reused cached tags for ${metadataCache.hits.toLocaleString()} unchanged files and read ${metadataCache.misses.toLocaleString()} new or changed files.`
+    );
   }
 
-  const navidromeEnriched = await enrichTracksWithNavidromeMetadata(settings, tracks);
+  onProgress?.({ phase: "identifying", processedFiles: 0, totalFiles: tracks.length });
+  const identified = await identifyTracks(
+    settings,
+    tracks,
+    (processedFiles) => onProgress?.({ processedFiles }),
+    options.signal,
+    (phase, totalFiles) => onProgress?.({ phase, processedFiles: 0, totalFiles })
+  );
+  throwIfCancelled();
+  warnings.push(...identified.warnings);
+  onProgress?.({ phase: "navidrome", processedFiles: 0, totalFiles: tracks.length });
+  const navidromeCompared = await compareWithNavidromeIndex(settings, identified.tracks, onProgress);
+  throwIfCancelled();
 
-  for (const warning of navidromeEnriched.warnings) {
+  for (const warning of navidromeCompared.warnings) {
     warnings.push(warning);
   }
 
-  const latestCatalog = await loadCatalog();
-  const nextTracks = preserveOrganizationSkipDecisions(navidromeEnriched.tracks, latestCatalog.tracks);
-  await saveCatalog(nextTracks);
-  return { tracks: nextTracks, errors, warnings };
+  onProgress?.({ phase: "saving", processedFiles: tracks.length, totalFiles: tracks.length });
+  await saveCatalog(navidromeCompared.tracks);
+  pruneTrackDecisions(files);
+  return { tracks: navidromeCompared.tracks, errors, warnings };
 }
 
-async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, tracks: TrackFile[]) {
+async function compareWithNavidromeIndex(settings: PrivateSettings, tracks: TrackFile[], onProgress?: ProgressHandler) {
   const warnings: string[] = [];
 
   if (!settings.navidrome.baseUrl || !settings.navidrome.username || !settings.navidrome.password) {
@@ -88,11 +165,11 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
         withNavidromeDiagnostic(track, {
           status: "skipped",
           code: "settings-missing",
-          message: "Navidrome metadata was not checked because the Navidrome URL, username, or password is missing."
+          message: "The Navidrome index was not checked because its URL, username, or password is missing."
         })
       ),
       warnings: tracks.length
-        ? [`Navidrome metadata: settings missing; skipped enrichment for ${tracks.length.toLocaleString()} files.`]
+        ? [`Navidrome index: settings missing; skipped comparison for ${tracks.length.toLocaleString()} files.`]
         : warnings
     };
   }
@@ -107,10 +184,10 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
         withNavidromeDiagnostic(track, {
           status: "skipped",
           code: "api-request-failed",
-          message: `Navidrome metadata was not checked because the API request failed: ${(error as Error).message}`
+          message: `The Navidrome index was not checked because the API request failed: ${(error as Error).message}`
         })
       ),
-      warnings: [`Navidrome metadata scan skipped: ${(error as Error).message}`]
+      warnings: [`Navidrome index comparison skipped: ${(error as Error).message}`]
     };
   }
 
@@ -120,14 +197,14 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
         withNavidromeDiagnostic(track, {
           status: "skipped",
           code: "zero-tracks",
-          message: "Navidrome returned zero tracks, so NaviClean used local file metadata and path inference."
+          message: "Navidrome returned zero indexed tracks; it was not used as a metadata authority."
         })
       ),
-      warnings: ["Navidrome metadata scan returned no tracks; local file metadata was used."]
+      warnings: ["Navidrome index comparison returned no tracks."]
     };
   }
 
-  const index = buildNavidromeTrackIndex(navidromeTracks);
+  const index = buildNavidromeMatchIndex(navidromeTracks);
   let matched = 0;
   let searchFallbackMatched = 0;
   let searchFallbackFailures = 0;
@@ -136,7 +213,7 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
   const enrichedTracks: TrackFile[] = new Array(tracks.length);
 
   tracks.forEach((track, trackIndex) => {
-    const navidromeMatch = findNavidromeTrackForFile(index, track);
+    const navidromeMatch = findIndexedNavidromeMatch(index, track);
 
     if (!navidromeMatch) {
       unmatchedTracks.push({ index: trackIndex, track });
@@ -144,9 +221,10 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
     }
 
     matched += 1;
-    enrichedTracks[trackIndex] = trackFileFromNavidromeTrack(track, navidromeMatch.track, settings, navidromeMatch.method, navidromeTracks.length);
+    enrichedTracks[trackIndex] = withNavidromeDiagnostic(track, matchedNavidromeDiagnostic(navidromeMatch.method, navidromeTracks.length));
   });
 
+  onProgress?.({ processedFiles: tracks.length - unmatchedTracks.length });
   for (let offset = 0; offset < unmatchedTracks.length; offset += 6) {
     const batch = unmatchedTracks.slice(offset, offset + 6);
     const batchMatches = await Promise.all(
@@ -154,7 +232,9 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
         try {
           return await findNavidromeSearchFallbackForFile(settings, track);
         } catch {
-          searchFallbackFailures += 1;
+          if (!hasConfirmedIdentity(track)) {
+            searchFallbackFailures += 1;
+          }
           return null;
         }
       })
@@ -164,17 +244,23 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
       const navidromeMatch = batchMatches[batchIndex];
 
       if (!navidromeMatch) {
-        if (unmatchedExamples.length < 5) {
+        if (!hasConfirmedIdentity(track) && unmatchedExamples.length < 5) {
           unmatchedExamples.push(track.relativePath);
         }
-        enrichedTracks[trackIndex] = withNavidromeDiagnostic(track, unmatchedNavidromeDiagnostic(track, navidromeTracks.length));
+        enrichedTracks[trackIndex] = withNavidromeDiagnostic(
+          track,
+          hasConfirmedIdentity(track)
+            ? confirmedIdentityDiagnostic(track, navidromeTracks.length)
+            : unmatchedNavidromeDiagnostic(track, navidromeTracks.length)
+        );
         return;
       }
 
       matched += 1;
       searchFallbackMatched += 1;
-      enrichedTracks[trackIndex] = trackFileFromNavidromeTrack(track, navidromeMatch.track, settings, navidromeMatch.method, navidromeTracks.length);
+      enrichedTracks[trackIndex] = withNavidromeDiagnostic(track, matchedNavidromeDiagnostic(navidromeMatch.method, navidromeTracks.length));
     });
+    onProgress?.({ processedFiles: tracks.length - unmatchedTracks.length + offset + batch.length });
   }
   const tracksWithUsablePaths = navidromeTracks.filter((track) => track.sourcePathStatus === "usable").length;
   const tracksWithoutPaths = navidromeTracks.filter((track) => track.sourcePathStatus === "missing").length;
@@ -184,20 +270,27 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
     .filter((diagnostic): diagnostic is NavidromeMetadataEnrichment => Boolean(diagnostic));
   const noApiMatchCount = unmatchedDiagnostics.filter((diagnostic) => diagnostic.code === "no-api-match").length;
   const possibleStaleScanCount = unmatchedDiagnostics.filter((diagnostic) => diagnostic.code === "possible-stale-scan").length;
+  const spotifyConfirmedCount = unmatchedDiagnostics.filter((diagnostic) => diagnostic.code === "spotify-confirmed").length;
 
   warnings.push(
-    `Navidrome metadata: ${matched.toLocaleString()} matched / ${tracks.length.toLocaleString()} files (${navidromeTracks.length.toLocaleString()} indexed tracks).`
+    `Navidrome index: ${matched.toLocaleString()} matched / ${tracks.length.toLocaleString()} files (${navidromeTracks.length.toLocaleString()} indexed tracks).`
   );
 
   if (searchFallbackMatched > 0) {
     warnings.push(
-      `Navidrome metadata: ${searchFallbackMatched.toLocaleString()} files matched through Navidrome search fallback after the full album catalog did not expose a matching key.`
+      `Navidrome metadata: ${searchFallbackMatched.toLocaleString()} files matched through Navidrome search fallback after the full album catalog did not expose a matching key; these matches succeeded and need no action.`
     );
   }
 
   if (searchFallbackFailures > 0) {
     warnings.push(
       `Navidrome metadata: search fallback failed for ${searchFallbackFailures.toLocaleString()} unmatched files.`
+    );
+  }
+
+  if (spotifyConfirmedCount > 0) {
+    warnings.push(
+      `Navidrome metadata: ${spotifyConfirmedCount.toLocaleString()} files did not match Navidrome and retained user-confirmed Spotify metadata; no action is required.`
     );
   }
 
@@ -221,13 +314,13 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
 
   if (noApiMatchCount > 0) {
     warnings.push(
-      `Navidrome metadata: ${noApiMatchCount.toLocaleString()} local files did not match any Navidrome API record by absolute path, relative path, filename+size, metadata key, or metadata+size.`
+      `Navidrome metadata: ${noApiMatchCount.toLocaleString()} local files did not match any Navidrome API record by absolute path, relative path, filename+size, metadata key, or metadata+size. Review them under Organize > Navidrome unmatched.`
     );
   }
 
   if (possibleStaleScanCount > 0) {
     warnings.push(
-      `Navidrome metadata: ${possibleStaleScanCount.toLocaleString()} organized local files did not match any Navidrome API record by path or metadata+size. If these files were recently moved, rescan Navidrome; otherwise inspect match details for metadata/path differences.`
+      `Navidrome metadata: ${possibleStaleScanCount.toLocaleString()} organized local files did not match any Navidrome API record by path or metadata+size. If these files were recently moved, rescan Navidrome; otherwise inspect match details for metadata/path differences and review them under Organize > Navidrome unmatched.`
     );
   }
 
@@ -241,118 +334,6 @@ async function enrichTracksWithNavidromeMetadata(settings: PrivateSettings, trac
   };
 }
 
-type NavidromeTrackIndex = {
-  byAbsolutePath: Map<string, NavidromeLibraryTrack>;
-  byRelativePath: Map<string, NavidromeLibraryTrack>;
-  byFilenameAndSize: Map<string, NavidromeLibraryTrack | null>;
-  byMetadata: Map<string, NavidromeLibraryTrack | null>;
-  byMetadataRelaxedDuration: Map<string, NavidromeLibraryTrack | null>;
-  byEditionMetadata: Map<string, NavidromeLibraryTrack | null>;
-  byTitleSuffixMetadata: Map<string, NavidromeLibraryTrack | null>;
-  byEditionTitleSuffixMetadata: Map<string, NavidromeLibraryTrack | null>;
-  byTrackAgnosticMetadata: Map<string, NavidromeLibraryTrack | null>;
-  byArtistAgnosticMetadata: Map<string, NavidromeLibraryTrack | null>;
-};
-
-type NavidromeTrackMatch = {
-  track: NavidromeLibraryTrack;
-  method: NavidromeMetadataMatchMethod;
-};
-
-function buildNavidromeTrackIndex(tracks: NavidromeLibraryTrack[]): NavidromeTrackIndex {
-  const index: NavidromeTrackIndex = {
-    byAbsolutePath: new Map(),
-    byRelativePath: new Map(),
-    byFilenameAndSize: new Map(),
-    byMetadata: new Map(),
-    byMetadataRelaxedDuration: new Map(),
-    byEditionMetadata: new Map(),
-    byTitleSuffixMetadata: new Map(),
-    byEditionTitleSuffixMetadata: new Map(),
-    byTrackAgnosticMetadata: new Map(),
-    byArtistAgnosticMetadata: new Map()
-  };
-
-  for (const track of tracks) {
-    if (track.sourceAbsolutePath) {
-      index.byAbsolutePath.set(pathKey(track.sourceAbsolutePath), track);
-    }
-
-    if (track.sourceRelativePath) {
-      index.byRelativePath.set(relativePathKey(track.sourceRelativePath), track);
-      addUniqueNavidromeMatch(index.byFilenameAndSize, filenameSizeKey(track.sourceRelativePath, track.size), track);
-    }
-
-    addUniqueNavidromeMatch(index.byMetadata, navidromeMetadataKey(track), track);
-    addUniqueNavidromeMatch(index.byMetadataRelaxedDuration, navidromeRelaxedDurationKey(track), track);
-    addUniqueNavidromeMatch(index.byEditionMetadata, navidromeEditionMetadataKey(track), track);
-    addUniqueNavidromeMatch(index.byTitleSuffixMetadata, navidromeTitleSuffixMetadataKey(track), track);
-    addUniqueNavidromeMatch(index.byEditionTitleSuffixMetadata, navidromeEditionTitleSuffixMetadataKey(track), track);
-    addUniqueNavidromeMatch(index.byTrackAgnosticMetadata, navidromeTrackAgnosticMetadataKey(track), track);
-    addUniqueNavidromeMatch(index.byArtistAgnosticMetadata, navidromeArtistAgnosticMetadataKey(track), track);
-  }
-
-  return index;
-}
-
-function findNavidromeTrackForFile(index: NavidromeTrackIndex, track: TrackFile): NavidromeTrackMatch | null {
-  const absolutePathMatch = index.byAbsolutePath.get(pathKey(track.absolutePath));
-  if (absolutePathMatch) {
-    return { track: absolutePathMatch, method: "absolute-path" };
-  }
-
-  const relativePathMatch = index.byRelativePath.get(relativePathKey(track.relativePath));
-  if (relativePathMatch) {
-    return { track: relativePathMatch, method: "relative-path" };
-  }
-
-  const filenameSizeMatch = uniqueNavidromeMatch(index.byFilenameAndSize.get(filenameSizeKey(track.relativePath, track.size)));
-  if (filenameSizeMatch) {
-    return { track: filenameSizeMatch, method: "filename-size" };
-  }
-
-  const metadataMatch = uniqueNavidromeMatch(index.byMetadata.get(trackMetadataKey(track)));
-  if (metadataMatch) {
-    return { track: metadataMatch, method: "metadata-key" };
-  }
-
-  const relaxedDurationMatch = uniqueNavidromeMatch(
-    index.byMetadataRelaxedDuration.get(trackRelaxedDurationKey(track))
-  );
-  if (relaxedDurationMatch) {
-    return { track: relaxedDurationMatch, method: "metadata-size-relaxed-duration" };
-  }
-
-  const editionMetadataMatch = uniqueNavidromeMatch(index.byEditionMetadata.get(trackEditionMetadataKey(track)));
-  if (editionMetadataMatch) {
-    return { track: editionMetadataMatch, method: "edition-metadata-size" };
-  }
-
-  const titleSuffixMetadataMatch = uniqueNavidromeMatch(index.byTitleSuffixMetadata.get(trackTitleSuffixMetadataKey(track)));
-  if (titleSuffixMetadataMatch) {
-    return { track: titleSuffixMetadataMatch, method: "metadata-size-title-suffix" };
-  }
-
-  const editionTitleSuffixMetadataMatch = uniqueNavidromeMatch(
-    index.byEditionTitleSuffixMetadata.get(trackEditionTitleSuffixMetadataKey(track))
-  );
-  if (editionTitleSuffixMetadataMatch) {
-    return { track: editionTitleSuffixMetadataMatch, method: "edition-title-suffix-metadata-size" };
-  }
-
-  const trackAgnosticMetadataMatch = uniqueNavidromeMatch(index.byTrackAgnosticMetadata.get(trackTrackAgnosticMetadataKey(track)));
-  if (trackAgnosticMetadataMatch) {
-    return { track: trackAgnosticMetadataMatch, method: "metadata-size-track-agnostic" };
-  }
-
-  const artistAgnosticMetadataMatch = uniqueNavidromeMatch(index.byArtistAgnosticMetadata.get(trackArtistAgnosticMetadataKey(track)));
-  if (artistAgnosticMetadataMatch) {
-    return { track: artistAgnosticMetadataMatch, method: "metadata-size-artist-agnostic" };
-  }
-
-  return null;
-}
-
 async function findNavidromeSearchFallbackForFile(
   settings: PrivateSettings,
   track: TrackFile
@@ -363,145 +344,16 @@ async function findNavidromeSearchFallbackForFile(
     artist: track.artist,
     title: track.title
   });
-  const matches = result.tracks
-    .map((candidate) => findNavidromeCandidateMatch(track, candidate))
-    .filter((match): match is NavidromeTrackMatch => Boolean(match));
+  const matches = result.tracks.flatMap((candidate): NavidromeTrackMatch[] => {
+    const method = navidromeCandidateMatchMethod(track, candidate);
+    return method ? [{ track: candidate, method }] : [];
+  });
 
   if (matches.length !== 1) {
     return null;
   }
 
   return matches[0];
-}
-
-function findNavidromeCandidateMatch(track: TrackFile, candidate: NavidromeLibraryTrack): NavidromeTrackMatch | null {
-  if (candidate.sourceAbsolutePath && pathKey(candidate.sourceAbsolutePath) === pathKey(track.absolutePath)) {
-    return { track: candidate, method: "absolute-path" };
-  }
-
-  if (candidate.sourceRelativePath && relativePathKey(candidate.sourceRelativePath) === relativePathKey(track.relativePath)) {
-    return { track: candidate, method: "relative-path" };
-  }
-
-  if (sameNonEmptyKey(filenameSizeKey(candidate.sourceRelativePath, candidate.size), filenameSizeKey(track.relativePath, track.size))) {
-    return { track: candidate, method: "filename-size" };
-  }
-
-  if (sameNonEmptyKey(navidromeMetadataKey(candidate), trackMetadataKey(track))) {
-    return { track: candidate, method: "metadata-key" };
-  }
-
-  if (sameNonEmptyKey(navidromeRelaxedDurationKey(candidate), trackRelaxedDurationKey(track))) {
-    return { track: candidate, method: "metadata-size-relaxed-duration" };
-  }
-
-  if (sameNonEmptyKey(navidromeEditionMetadataKey(candidate), trackEditionMetadataKey(track))) {
-    return { track: candidate, method: "edition-metadata-size" };
-  }
-
-  if (sameNonEmptyKey(navidromeTitleSuffixMetadataKey(candidate), trackTitleSuffixMetadataKey(track))) {
-    return { track: candidate, method: "metadata-size-title-suffix" };
-  }
-
-  if (sameNonEmptyKey(navidromeEditionTitleSuffixMetadataKey(candidate), trackEditionTitleSuffixMetadataKey(track))) {
-    return { track: candidate, method: "edition-title-suffix-metadata-size" };
-  }
-
-  if (sameNonEmptyKey(navidromeTrackAgnosticMetadataKey(candidate), trackTrackAgnosticMetadataKey(track))) {
-    return { track: candidate, method: "metadata-size-track-agnostic" };
-  }
-
-  if (sameNonEmptyKey(navidromeArtistAgnosticMetadataKey(candidate), trackArtistAgnosticMetadataKey(track))) {
-    return { track: candidate, method: "metadata-size-artist-agnostic" };
-  }
-
-  return null;
-}
-
-function trackFileFromNavidromeTrack(
-  track: TrackFile,
-  navidromeTrack: NavidromeLibraryTrack,
-  settings: PrivateSettings,
-  matchMethod: NavidromeMetadataMatchMethod,
-  indexedTrackCount: number
-): TrackFile {
-  const navidromeEnrichment = matchedNavidromeDiagnostic(matchMethod, indexedTrackCount);
-
-  if (track.metadataConfidence === "spotify" || track.metadataConfidence === "trusted-path") {
-    return withNavidromeDiagnostic(track, navidromeEnrichment);
-  }
-
-  const navidromeArtist = cleanDisplayValue(navidromeTrack.artist, track.artist);
-  const navidromeAlbumArtist = cleanDisplayValue(
-    navidromeTrack.albumArtist || navidromeTrack.artist,
-    track.albumArtist || navidromeArtist
-  );
-  const albumArtist = preferredLatinArtistAlias(track.albumArtist || track.artist, navidromeAlbumArtist, navidromeTrack);
-  const artist = preferredLatinArtistAlias(track.artist, navidromeArtist, navidromeTrack);
-  const album = cleanDisplayValue(cleanNavidromeAlbumTitle(navidromeTrack.album, navidromeTrack.year), track.album);
-  const title = cleanDisplayValue(
-    matchMethod === "metadata-size-title-suffix" || matchMethod === "edition-title-suffix-metadata-size" ? track.title : navidromeTrack.title,
-    track.title
-  );
-  const albumType = cleanDisplayValue(navidromeTrack.albumType, track.albumType || "Album");
-  const preserveTrackSlot = matchMethod === "metadata-size-track-agnostic";
-  const trackNumber = preserveTrackSlot ? track.trackNumber : navidromeTrack.trackNumber ?? track.trackNumber;
-  const trackTotal = navidromeTrack.trackTotal ?? track.trackTotal;
-  const discNumber = preserveTrackSlot ? track.discNumber : navidromeTrack.discNumber ?? track.discNumber;
-  const discTotal = navidromeTrack.discTotal ?? track.discTotal;
-  const year = navidromeTrack.year ?? track.year;
-  const duration = navidromeTrack.duration ?? track.duration;
-  const isrc = navidromeTrack.isrc ?? track.isrc ?? null;
-  const issues = track.issues.filter((issue) => {
-    if (issue === "Missing artist" && artist) {
-      return false;
-    }
-    if (issue === "Missing album" && album) {
-      return false;
-    }
-    if (issue === "Missing track number" && trackNumber) {
-      return false;
-    }
-    return true;
-  });
-  const partialTrack = {
-    ...track,
-    artist,
-    albumArtist,
-    album,
-    albumType,
-    title,
-    trackNumber,
-    trackTotal,
-    discNumber,
-    discTotal,
-    year,
-    duration,
-    isrc,
-    bitrate: track.bitrate ?? navidromeTrack.bitrate,
-    duplicateKey: buildDuplicateKey({
-      artist: albumArtist || artist,
-      album,
-      albumType: albumType || "Album",
-      title,
-      trackNumber,
-      discNumber,
-      year,
-      duration,
-      isrc
-    }),
-    issues,
-    navidromeEnrichment,
-    metadataConfidence: "navidrome" as const,
-    targetSource: "navidrome"
-  } satisfies TrackFile;
-  const target = targetForTrack(partialTrack, settings);
-
-  return {
-    ...partialTrack,
-    targetPath: target.targetPath,
-    targetRelativePath: target.targetRelativePath
-  };
 }
 
 function matchedNavidromeDiagnostic(
@@ -511,7 +363,7 @@ function matchedNavidromeDiagnostic(
   return {
     status: "matched",
     code: "matched",
-    message: `Matched Navidrome metadata by ${navidromeMatchMethodLabel(matchMethod)}.`,
+    message: `Matched the Navidrome index by ${navidromeMatchDescription(matchMethod)}.`,
     matchMethod,
     indexedTrackCount
   };
@@ -524,10 +376,35 @@ function withNavidromeDiagnostic(track: TrackFile, navidromeEnrichment: Navidrom
   };
 }
 
+function spotifyConfirmedDiagnostic(indexedTrackCount: number): NavidromeMetadataEnrichment {
+  return {
+    status: "skipped",
+    code: "spotify-confirmed",
+    message: "Navidrome did not match this file, so NaviClean retained the user-confirmed Spotify metadata.",
+    indexedTrackCount
+  };
+}
+
+function confirmedIdentityDiagnostic(track: TrackFile, indexedTrackCount: number): NavidromeMetadataEnrichment {
+  if (track.metadataConfidence === "spotify") {
+    return spotifyConfirmedDiagnostic(indexedTrackCount);
+  }
+  return {
+    status: "skipped",
+    code: "identity-confirmed",
+    message: "Navidrome did not match this file; NaviClean retained its confirmed identity metadata.",
+    indexedTrackCount
+  };
+}
+
+function hasConfirmedIdentity(track: TrackFile) {
+  return isConfirmedIdentityStatus(track.identification?.status);
+}
+
 function unmatchedNavidromeDiagnostic(track: TrackFile, indexedTrackCount: number): NavidromeMetadataEnrichment {
   const possibleStaleScan =
     track.targetRelativePath &&
-    relativePathKey(track.relativePath) === relativePathKey(track.targetRelativePath);
+    navidromeRelativePathKey(track.relativePath) === navidromeRelativePathKey(track.targetRelativePath);
 
   if (possibleStaleScan) {
     return {
@@ -546,450 +423,6 @@ function unmatchedNavidromeDiagnostic(track: TrackFile, indexedTrackCount: numbe
       "No Navidrome API record matched this local file by absolute path, relative path, filename+size, metadata key, or metadata+size; NaviClean used local metadata and path inference.",
     indexedTrackCount
   };
-}
-
-function navidromeMatchMethodLabel(method: NavidromeMetadataMatchMethod) {
-  if (method === "absolute-path") {
-    return "absolute path";
-  }
-
-  if (method === "relative-path") {
-    return "relative path";
-  }
-
-  if (method === "filename-size") {
-    return "filename and size";
-  }
-
-  if (method === "metadata-size-relaxed-duration") {
-    return "metadata and exact size";
-  }
-
-  if (method === "edition-metadata-size") {
-    return "edition-compatible metadata and size";
-  }
-
-  if (method === "metadata-size-title-suffix") {
-    return "metadata and size with a compatible title suffix";
-  }
-
-  if (method === "edition-title-suffix-metadata-size") {
-    return "edition-compatible metadata and size with a compatible title suffix";
-  }
-
-  if (method === "metadata-size-track-agnostic") {
-    return "metadata and size without release track number";
-  }
-
-  if (method === "metadata-size-artist-agnostic") {
-    return "release slot metadata and size without album artist";
-  }
-
-  return "metadata key";
-}
-
-function cleanNavidromeAlbumTitle(album: string, year: number | null) {
-  if (!year) {
-    return album;
-  }
-
-  return album.replace(new RegExp(`\\s*\\(${year}\\)\\s*$`), "").trim() || album;
-}
-
-function addUniqueNavidromeMatch(
-  map: Map<string, NavidromeLibraryTrack | null>,
-  key: string,
-  track: NavidromeLibraryTrack
-) {
-  if (!key) {
-    return;
-  }
-
-  map.set(key, map.has(key) ? null : track);
-}
-
-function uniqueNavidromeMatch(track: NavidromeLibraryTrack | null | undefined) {
-  return track ?? null;
-}
-
-function pathKey(value: string) {
-  return path.resolve(value).toLowerCase();
-}
-
-function relativePathKey(value: string) {
-  return value.replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
-}
-
-function filenameSizeKey(relativePath: string | null, size: number | null) {
-  if (!relativePath || !size) {
-    return "";
-  }
-
-  return `${path.posix.basename(relativePath.replace(/\\/g, "/")).toLowerCase()}|${size}`;
-}
-
-function navidromeMetadataKey(track: NavidromeLibraryTrack) {
-  return [
-    normalizeForMatch(track.albumArtist || track.artist, { removeBracketedText: false }),
-    normalizeForMatch(track.album, { removeBracketedText: false }),
-    normalizeForMatch(track.title, { removeBracketedText: false }),
-    track.discNumber ?? 1,
-    track.trackNumber ?? "",
-    durationBucket(track.duration),
-    track.size ?? ""
-  ].join("|");
-}
-
-function trackMetadataKey(track: TrackFile) {
-  return [
-    normalizeForMatch(track.albumArtist || track.artist, { removeBracketedText: false }),
-    normalizeForMatch(track.album, { removeBracketedText: false }),
-    normalizeForMatch(track.title, { removeBracketedText: false }),
-    track.discNumber ?? 1,
-    track.trackNumber ?? "",
-    durationBucket(track.duration),
-    track.size ?? ""
-  ].join("|");
-}
-
-function navidromeRelaxedDurationKey(track: NavidromeLibraryTrack) {
-  return relaxedDurationKey({
-    album: track.album,
-    albumArtist: track.albumArtist || track.artist,
-    size: track.size,
-    title: track.title,
-    trackNumber: track.trackNumber,
-    discNumber: track.discNumber
-  });
-}
-
-function trackRelaxedDurationKey(track: TrackFile) {
-  return relaxedDurationKey({
-    album: track.album,
-    albumArtist: track.albumArtist || track.artist,
-    size: track.size,
-    title: track.title,
-    trackNumber: track.trackNumber,
-    discNumber: track.discNumber
-  });
-}
-
-function navidromeEditionMetadataKey(track: NavidromeLibraryTrack) {
-  return editionMetadataKey({
-    album: track.album,
-    albumArtist: track.albumArtist || track.artist,
-    size: track.size,
-    title: track.title,
-    trackNumber: track.trackNumber,
-    discNumber: track.discNumber
-  });
-}
-
-function navidromeTitleSuffixMetadataKey(track: NavidromeLibraryTrack) {
-  return titleSuffixMetadataKey({
-    album: track.album,
-    albumArtist: track.albumArtist || track.artist,
-    size: track.size,
-    title: track.title,
-    trackNumber: track.trackNumber,
-    discNumber: track.discNumber
-  });
-}
-
-function navidromeEditionTitleSuffixMetadataKey(track: NavidromeLibraryTrack) {
-  return editionTitleSuffixMetadataKey({
-    album: track.album,
-    albumArtist: track.albumArtist || track.artist,
-    size: track.size,
-    title: track.title,
-    trackNumber: track.trackNumber,
-    discNumber: track.discNumber
-  });
-}
-
-function navidromeTrackAgnosticMetadataKey(track: NavidromeLibraryTrack) {
-  return trackAgnosticMetadataKey({
-    album: track.album,
-    albumArtist: track.albumArtist || track.artist,
-    size: track.size,
-    title: track.title
-  });
-}
-
-function navidromeArtistAgnosticMetadataKey(track: NavidromeLibraryTrack) {
-  return artistAgnosticMetadataKey({
-    album: track.album,
-    discNumber: track.discNumber,
-    size: track.size,
-    title: track.title,
-    trackNumber: track.trackNumber
-  });
-}
-
-function trackEditionMetadataKey(track: TrackFile) {
-  return editionMetadataKey({
-    album: track.album,
-    albumArtist: track.albumArtist || track.artist,
-    size: track.size,
-    title: track.title,
-    trackNumber: track.trackNumber,
-    discNumber: track.discNumber
-  });
-}
-
-function trackTitleSuffixMetadataKey(track: TrackFile) {
-  return titleSuffixMetadataKey({
-    album: track.album,
-    albumArtist: track.albumArtist || track.artist,
-    size: track.size,
-    title: track.title,
-    trackNumber: track.trackNumber,
-    discNumber: track.discNumber
-  });
-}
-
-function trackEditionTitleSuffixMetadataKey(track: TrackFile) {
-  return editionTitleSuffixMetadataKey({
-    album: track.album,
-    albumArtist: track.albumArtist || track.artist,
-    size: track.size,
-    title: track.title,
-    trackNumber: track.trackNumber,
-    discNumber: track.discNumber
-  });
-}
-
-function relaxedDurationKey(track: {
-  album: string;
-  albumArtist: string;
-  size: number | null;
-  title: string;
-  trackNumber: number | null;
-  discNumber: number | null;
-}) {
-  if (!track.albumArtist || !track.album || !track.title || !track.trackNumber || !track.size) {
-    return "";
-  }
-
-  return [
-    normalizeArtistMetadataText(track.albumArtist),
-    normalizeForMatch(track.album, { removeBracketedText: false }),
-    normalizeForMatch(track.title, { removeBracketedText: false }),
-    track.discNumber ?? 1,
-    track.trackNumber,
-    track.size
-  ].join("|");
-}
-
-function editionMetadataKey(track: {
-  album: string;
-  albumArtist: string;
-  size: number | null;
-  title: string;
-  trackNumber: number | null;
-  discNumber: number | null;
-}) {
-  if (!track.albumArtist || !track.album || !track.title || !track.trackNumber || !track.size) {
-    return "";
-  }
-
-  return [
-    normalizeArtistMetadataText(track.albumArtist),
-    normalizeForMatch(track.album),
-    normalizeForMatch(track.title, { removeBracketedText: false }),
-    track.discNumber ?? 1,
-    track.trackNumber,
-    track.size
-  ].join("|");
-}
-
-function editionTitleSuffixMetadataKey(track: {
-  album: string;
-  albumArtist: string;
-  size: number | null;
-  title: string;
-  trackNumber: number | null;
-  discNumber: number | null;
-}) {
-  if (!track.albumArtist || !track.album || !track.title || !track.trackNumber || !track.size) {
-    return "";
-  }
-
-  return [
-    normalizeArtistMetadataText(track.albumArtist),
-    normalizeForMatch(track.album),
-    normalizeForMatch(stripProviderTitleSuffix(track.title, track.albumArtist), { removeBracketedText: false }),
-    track.discNumber ?? 1,
-    track.trackNumber,
-    track.size
-  ].join("|");
-}
-
-function trackTrackAgnosticMetadataKey(track: TrackFile) {
-  return trackAgnosticMetadataKey({
-    album: track.album,
-    albumArtist: track.albumArtist || track.artist,
-    size: track.size,
-    title: track.title
-  });
-}
-
-function trackArtistAgnosticMetadataKey(track: TrackFile) {
-  return artistAgnosticMetadataKey({
-    album: track.album,
-    discNumber: track.discNumber,
-    size: track.size,
-    title: track.title,
-    trackNumber: track.trackNumber
-  });
-}
-
-function titleSuffixMetadataKey(track: {
-  album: string;
-  albumArtist: string;
-  size: number | null;
-  title: string;
-  trackNumber: number | null;
-  discNumber: number | null;
-}) {
-  if (!track.albumArtist || !track.album || !track.title || !track.trackNumber || !track.size) {
-    return "";
-  }
-
-  return [
-    normalizeArtistMetadataText(track.albumArtist),
-    normalizeForMatch(track.album, { removeBracketedText: false }),
-    normalizeForMatch(stripProviderTitleSuffix(track.title, track.albumArtist), { removeBracketedText: false }),
-    track.discNumber ?? 1,
-    track.trackNumber,
-    track.size
-  ].join("|");
-}
-
-function trackAgnosticMetadataKey(track: {
-  album: string;
-  albumArtist: string;
-  size: number | null;
-  title: string;
-}) {
-  if (!track.albumArtist || !track.album || !track.title || !track.size) {
-    return "";
-  }
-
-  return [
-    normalizeArtistMetadataText(track.albumArtist),
-    normalizeForMatch(track.album),
-    normalizeForMatch(track.title, { removeBracketedText: false }),
-    track.size
-  ].join("|");
-}
-
-function artistAgnosticMetadataKey(track: {
-  album: string;
-  discNumber: number | null;
-  size: number | null;
-  title: string;
-  trackNumber: number | null;
-}) {
-  if (!track.album || !track.title || !track.trackNumber || !track.size) {
-    return "";
-  }
-
-  return [
-    normalizeForMatch(track.album),
-    normalizeForMatch(track.title, { removeBracketedText: false }),
-    track.discNumber ?? 1,
-    track.trackNumber,
-    track.size
-  ].join("|");
-}
-
-function stripProviderTitleSuffix(value: string, albumArtist: string) {
-  return value
-    .replace(/\s+\(([^)]*)\)\s*$/i, (match, suffix: string, offset: number, fullValue: string) =>
-      titleSuffixIsNoise(fullValue.slice(0, offset), suffix, albumArtist) ? "" : match
-    )
-    .trim();
-}
-
-function titleSuffixIsNoise(baseTitle: string, suffix: string, albumArtist: string) {
-  const normalizedBaseTitle = normalizeForMatch(baseTitle, { removeBracketedText: false });
-  const normalizedSuffix = normalizeForMatch(suffix, { removeBracketedText: false });
-
-  if (normalizedBaseTitle && normalizedBaseTitle === normalizedSuffix) {
-    return true;
-  }
-
-  if (normalizedSuffix === "single version") {
-    return true;
-  }
-
-  return providerTitleSuffixIsNoise(suffix, albumArtist);
-}
-
-function providerTitleSuffixIsNoise(suffix: string, albumArtist: string) {
-  const normalizedSuffix = normalizeForMatch(suffix, { removeBracketedText: false });
-
-  if (normalizedSuffix === "pmedia") {
-    return true;
-  }
-
-  const normalizedArtist = normalizeArtistMetadataText(albumArtist);
-  return Boolean(
-    normalizedArtist &&
-      normalizedSuffix.includes(normalizedArtist) &&
-      /\b(?:music|singer|artist|band|born|b\s+\d{4})\b/.test(normalizedSuffix)
-  );
-}
-
-function preferredLatinArtistAlias(localValue: string, navidromeValue: string, navidromeTrack: NavidromeLibraryTrack) {
-  if (
-    !localValue ||
-    !latinOnlyText(localValue) ||
-    !containsNonLatinLetter(navidromeValue) ||
-    !navidromePathContainsArtistAlias(navidromeTrack, localValue)
-  ) {
-    return navidromeValue;
-  }
-
-  return localValue;
-}
-
-function navidromePathContainsArtistAlias(track: NavidromeLibraryTrack, artist: string) {
-  const aliasKey = pathTokenKey(artist);
-  const folder = (track.sourceRelativePath || track.sourceRawPath || "").split(/[\\/]/).find(Boolean);
-
-  if (!aliasKey || !folder) {
-    return false;
-  }
-
-  return folder
-    .split(/\s+(?:\u2022|\u00e2\u20ac\u00a2)\s+/u)
-    .some((part) => pathTokenKey(part) === aliasKey);
-}
-
-function latinOnlyText(value: string) {
-  return containsLatinLetter(value) && !containsNonLatinLetter(value);
-}
-
-function containsLatinLetter(value: string) {
-  return Array.from(value).some((char) => /\p{Script=Latin}/u.test(char));
-}
-
-function containsNonLatinLetter(value: string) {
-  return Array.from(value).some((char) => /\p{L}/u.test(char) && !/\p{Script=Latin}/u.test(char));
-}
-
-function normalizeArtistMetadataText(value: string) {
-  return normalizeForMatch(value, { removeBracketedText: false }).replace(/^the\s+/, "");
-}
-
-function sameNonEmptyKey(left: string, right: string) {
-  return Boolean(left && right && left === right);
-}
-
-function durationBucket(duration: number | null) {
-  return duration ? Math.round(duration / 2) * 2 : "";
 }
 
 async function collectAudioFiles(root: string, extensions: Set<string>, recycleRoot: string, onProgress?: ProgressHandler) {
@@ -1045,25 +478,33 @@ async function readTrack(
   filePath: string,
   root: string,
   settings: PrivateSettings,
-  metadataOverrides: Map<string, MetadataOverride>
+  decisions: { overrides: Map<string, MetadataOverride>; skips: Map<string, string> },
+  metadataCache?: AudioMetadataCache
 ): Promise<TrackFile> {
   const stat = await fs.stat(filePath);
-  const metadataOverride = validMetadataOverride(metadataOverrides, filePath, stat.size);
+  const metadataOverride = validMetadataOverride(decisions.overrides, filePath, stat.size);
   const extension = path.extname(filePath).toLowerCase();
   const relativePath = toPosixRelative(root, filePath);
   const inferred = inferMetadataFromPath(relativePath);
   const issues: string[] = [];
-  let metadata: Awaited<ReturnType<typeof parseFile>> | null = null;
+  let metadata: AudioMetadata | null = null;
 
   try {
-    metadata = await parseFile(filePath, { duration: true });
+    metadata = await readAudioMetadata(filePath, { size: stat.size, mtimeMs: stat.mtimeMs }, metadataCache);
   } catch (error) {
     issues.push(`Metadata read failed: ${(error as Error).message}`);
   }
 
-  const common = metadata?.common;
+  const common = metadata?.common as ParsedCommonTags | undefined;
   const commonRecord = common as Record<string, unknown> | undefined;
+  const musicbrainz = metadataOverride?.source === "musicbrainz"
+    ? metadataOverride.musicbrainz ?? musicBrainzIdsFromMetadata(metadata)
+    : musicBrainzIdsFromMetadata(metadata);
   const format = metadata?.format;
+  const trackKeepIdentity = readTrackKeepIdentity({
+    common: metadata?.common as Record<string, unknown> | undefined,
+    native: metadata?.native
+  });
   const commonArtist = knownMetadataValue(common?.artist) || knownMetadataValue(common?.artists?.[0]);
   const commonAlbumArtist = knownMetadataValue(common?.albumartist);
   const commonAlbum = knownMetadataValue(common?.album);
@@ -1071,17 +512,21 @@ async function readTrack(
   const commonTrackNumber = common?.track?.no || null;
   const metadataYear = typeof common?.year === "number" && Number.isFinite(common.year) ? common.year : null;
   const commonYear = metadataYear ?? parseYear(firstCommonString(commonRecord, ["date", "originaldate", "releasedate"]));
+  const commonOriginalYear = typeof common?.originalyear === "number" && Number.isFinite(common.originalyear)
+    ? common.originalyear
+    : parseYear(firstCommonString(commonRecord, ["originaldate"]));
   const hasPlaceholderIdentityTag = [common?.artist, common?.artists?.[0], common?.albumartist, common?.album].some(
     isUnknownMetadataValue
   );
-  const structuredPathIdentityReason = structuredPathIdentityReasonForTags(inferred, {
+  const structuredPathIdentityReason = trackKeepIdentity ? null : structuredPathIdentityReasonForTags(inferred, {
     album: commonAlbum,
     albumArtist: commonAlbumArtist || commonArtist,
     artist: commonArtist,
     hasPlaceholderIdentityTag,
     title: commonTitle,
     trackNumber: commonTrackNumber,
-    year: commonYear
+    year: commonYear,
+    originalYear: commonOriginalYear
   });
 
   if (!metadataOverride && structuredPathIdentityReason === "placeholder-tags") {
@@ -1096,7 +541,7 @@ async function readTrack(
     (structuredPathIdentityReason || ((!commonArtist || !commonAlbum) && (inferred.artist || inferred.album)))
   );
   if (pathIdentityNeedsReview) {
-    issues.push("Path-derived artist or album requires metadata review");
+    issues.push(pathReviewIssue);
   }
   const inferredArtist = cleanDisplayText(
     (useStructuredPathIdentity ? inferred.artist : commonArtist || inferred.artist),
@@ -1136,6 +581,10 @@ async function readTrack(
   const discTotal = metadataOverride?.metadata.discTotal ?? common?.disk?.of ?? null;
   const inferredYear = (useStructuredPathIdentity ? inferred.year : commonYear ?? inferred.year) ?? null;
   const year = metadataOverride?.metadata.year ?? inferredYear;
+  // A confirmed decision owns the year entirely, so a stale `originaldate` tag cannot override it.
+  const originalYear = metadataOverride
+    ? metadataOverride.metadata.originalYear ?? null
+    : useStructuredPathIdentity ? null : commonOriginalYear;
   const inferredAlbumType = normalizeAlbumType(firstCommonString(commonRecord, ["albumtype", "releasetype", "release_type"]) || inferred.albumType, trackTotal);
   const albumType = metadataOverride?.metadata.albumType ?? inferredAlbumType;
   const duration = typeof format?.duration === "number" ? format.duration : null;
@@ -1146,10 +595,7 @@ async function readTrack(
   const codec = cleanNullable(format?.codec);
   const container = cleanNullable(format?.container);
   const lossless = Boolean(format?.lossless || [".flac", ".alac", ".wav", ".aiff", ".aif"].includes(extension));
-  const managedBy = hasTrackKeepIdentityTags({
-    common: metadata?.common as Record<string, unknown> | undefined,
-    native: metadata?.native
-  }) ? "trackkeep" : undefined;
+  const managedBy = trackKeepIdentity ? "trackkeep" : undefined;
 
   if (artist === "Unknown Artist") {
     issues.push("Missing artist");
@@ -1178,6 +624,7 @@ async function readTrack(
     discNumber,
     discTotal,
     year,
+    originalYear,
     duration,
     isrc,
     bitrate,
@@ -1186,21 +633,13 @@ async function readTrack(
     codec,
     container,
     lossless,
-    duplicateKey: buildDuplicateKey({
-      artist: albumArtist || artist,
-      album,
-      albumType,
-      title,
-      trackNumber,
-      discNumber,
-      year,
-      duration,
-      isrc
-    }),
+    duplicateKey: "",
     qualityScore: qualityScore(extension, bitrate, bitsPerSample, lossless),
     targetPath: "",
     targetRelativePath: "",
-    targetSource: metadataOverride?.source === "spotify" ? "spotify" : undefined,
+    targetSource: metadataOverride?.source === "spotify" || metadataOverride?.source === "musicbrainz"
+      ? metadataOverride.source
+      : undefined,
     metadataConfidence: metadataOverride?.source ?? (pathIdentityNeedsReview ? "path-suggestion" : "embedded"),
     metadataSuggestion: pathIdentityNeedsReview
       ? {
@@ -1213,16 +652,35 @@ async function readTrack(
           year: inferred.year ?? null
         }
       : undefined,
+    identification: trackKeepIdentity
+      ? {
+          status: "trackkeep-confirmed" as const,
+          source: "trackkeep" as const,
+          message: "TrackKeep identity tags are authoritative.",
+          spotifyTrackId: trackKeepIdentity.trackId ?? undefined,
+          spotifyAlbumId: trackKeepIdentity.albumId ?? undefined
+        }
+      : metadataOverride
+        ? {
+            status: "user-confirmed" as const,
+            source: metadataOverride.source === "spotify"
+              ? "spotify" as const
+              : metadataOverride.source === "musicbrainz"
+                ? "musicbrainz" as const
+                : "local-path" as const,
+            message: "Restored metadata previously confirmed by the user.",
+            recordingId: metadataOverride.musicbrainz?.recordingId,
+            releaseId: metadataOverride.musicbrainz?.releaseId,
+            releaseGroupId: metadataOverride.musicbrainz?.releaseGroupId
+          }
+        : undefined,
     managedBy,
+    musicbrainz,
+    organizeSkippedAt: skipDecisionFor(decisions.skips, filePath),
     issues
   } satisfies TrackFile;
 
-  const target = targetForTrack(partialTrack, settings);
-  return {
-    ...partialTrack,
-    targetPath: target.targetPath,
-    targetRelativePath: target.targetRelativePath
-  };
+  return withIdentity(partialTrack, settings);
 }
 
 function qualityScore(extension: string, bitrate: number | null, bitsPerSample: number | null, lossless: boolean) {
@@ -1321,6 +779,7 @@ function structuredPathIdentityReasonForTags(
     title?: string;
     trackNumber: number | null;
     year: number | null;
+    originalYear?: number | null;
   }
 ): StructuredPathIdentityReason | null {
   if (!inferred.structuredPath || !hasCompleteStructuredPathIdentity(inferred)) {
@@ -1337,7 +796,7 @@ function structuredPathIdentityReasonForTags(
     metadataTextDiffers(inferred.album || "", tags.album),
     Boolean(tags.title && metadataTextDiffers(inferred.title || "", tags.title)),
     Boolean(tags.trackNumber && inferred.trackNumber && tags.trackNumber !== inferred.trackNumber),
-    Boolean(tags.year && inferred.year && tags.year !== inferred.year)
+    Boolean(tags.year && inferred.year && tags.year !== inferred.year && tags.originalYear !== inferred.year)
   ].filter(Boolean).length;
 
   if (tags.title && hasMeaningfulPathTitleVersion(inferred.title || "", tags.title, inferred.albumArtist || inferred.artist || albumArtist)) {

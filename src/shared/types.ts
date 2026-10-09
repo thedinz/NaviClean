@@ -2,7 +2,34 @@ export type AuthInfo = {
   advancedDiagnosticsEnabled: boolean;
   authEnabled: boolean;
   authenticated: boolean;
+  /** True while the account still uses the shipped default password. */
+  mustChangePassword: boolean;
   username: string | null;
+};
+
+export type QualityCodecFamily = "opus" | "vorbis" | "aac" | "mp3" | "other";
+
+export type EngineSettingsView = {
+  autoAcceptScore: number;
+  reviewScore: number;
+  verifyDuration: boolean;
+  verifyFingerprint: boolean;
+  sourcePriority: CatalogProviderId[];
+  disabledSources: CatalogProviderId[];
+  wantedEnabled: boolean;
+  wantedIntervalMinutes: number;
+  followCheckHours: number;
+  autoDownloadFollowedReleases: boolean;
+};
+
+export type QualitySettingsView = {
+  minimumBitrateKbps: Record<QualityCodecFamily, number>;
+};
+
+export type MusicBrainzSettingsView = {
+  textSearchEnabled: boolean;
+  maxTextLookupsPerScan: number;
+  catalogSource: "musicbrainz" | "spotify";
 };
 
 export type NavidromeSettingsView = {
@@ -12,9 +39,19 @@ export type NavidromeSettingsView = {
 };
 
 export type SpotifySettingsView = {
+  enabled: boolean;
   clientId: string;
   clientSecretSet: boolean;
   market: string;
+};
+
+export type IdentificationSettingsView = {
+  acoustIdEnabled: boolean;
+  acoustIdApiKeySet: boolean;
+  useEmbeddedTagsAsHints: boolean;
+  usePathAsHints: boolean;
+  autoAcceptUniqueFingerprintMatches: boolean;
+  requireReviewBeforeFileChanges: boolean;
 };
 
 export type ProviderSettingsView = {
@@ -167,7 +204,244 @@ export type CatalogProviderCandidate = {
   title: string;
   url: string;
   verified: boolean;
+  /** Scoring notes such as "topic-channel", "isrc-match", or "version:live". */
+  flags?: string[];
+  channel?: string;
 };
+
+/** One track to acquire, independent of whether MusicBrainz or Spotify described it. */
+export type DownloadTrack = {
+  /** Stable identity: "mb:<recordingId>" / "mb:<releaseTrackId>" or "spotify:<trackId>". */
+  key: string;
+  catalog: "musicbrainz" | "spotify";
+  title: string;
+  artists: string[];
+  album: string;
+  albumArtist: string;
+  albumType: string;
+  trackNumber: number;
+  discNumber: number;
+  trackTotal: number | null;
+  discTotal: number | null;
+  releaseDate: string;
+  releaseYear: number | null;
+  durationMs: number;
+  isrc: string | null;
+  coverUrl: string | null;
+  musicbrainz?: TrackMusicBrainzIds;
+  spotify?: { trackId: string; albumId: string; url: string };
+};
+
+export type DownloadJobStatus = "queued" | "running" | "review" | "completed" | "partial" | "failed" | "cancelled";
+
+export type DownloadItemStatus =
+  | "pending"
+  | "searching"
+  | "review"
+  | "downloading"
+  | "verifying"
+  | "completed"
+  | "skipped"
+  | "failed"
+  | "cancelled";
+
+export type DownloadVerification = {
+  durationDeltaSeconds: number | null;
+  sourceBitrateKbps: number | null;
+  sourceCodec: string | null;
+  fingerprint: "match" | "mismatch" | "inconclusive" | "skipped";
+  acoustIdScore: number | null;
+  notes: string[];
+};
+
+export type DownloadAttempt = {
+  candidateId: string;
+  at: string;
+  reason: "duration-mismatch" | "fingerprint-mismatch" | "low-quality" | "download-failed" | "not-better";
+  message: string;
+};
+
+export type DownloadJobItem = {
+  id: string;
+  track: DownloadTrack;
+  status: DownloadItemStatus;
+  candidates: CatalogProviderCandidate[];
+  selectedCandidateId?: string;
+  attempts: DownloadAttempt[];
+  verification?: DownloadVerification;
+  message?: string;
+  error?: string;
+  targetRelativePath: string;
+  relativePath?: string;
+  /** Set when a person approved the selected candidate in the review queue. */
+  approvedByUser?: boolean;
+  /** Library track this download is meant to replace (quality upgrades). */
+  replaceTrackId?: string;
+  startedAt?: string;
+  completedAt?: string;
+};
+
+export type DownloadJob = {
+  id: string;
+  title: string;
+  subtitle: string;
+  origin: "manual" | "wanted" | "follow" | "upgrade";
+  catalog: "musicbrainz" | "spotify";
+  coverUrl: string | null;
+  status: DownloadJobStatus;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  counts: Record<DownloadItemStatus, number> & { total: number };
+  items: DownloadJobItem[];
+};
+
+export type DownloadJobSummary = Omit<DownloadJob, "items">;
+
+export type DownloadReviewItem = {
+  jobId: string;
+  jobTitle: string;
+  item: DownloadJobItem;
+};
+
+export type WantedStatus = "waiting" | "searching" | "paused" | "found";
+
+export type WantedItem = {
+  id: string;
+  track: DownloadTrack;
+  status: WantedStatus;
+  attempts: number;
+  reason: string;
+  lastError: string | null;
+  nextAttemptAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type QuarantineEntry = {
+  candidateId: string;
+  trackKey: string;
+  reason: string;
+  detail: string;
+  createdAt: string;
+};
+
+export type FollowedArtist = {
+  artistId: string;
+  name: string;
+  disambiguation: string;
+  autoDownload: boolean;
+  createdAt: string;
+  lastCheckedAt: string | null;
+  newReleaseCount: number;
+};
+
+export type ArtistRelease = {
+  id: string;
+  artistId: string;
+  artistName: string;
+  title: string;
+  primaryType: string;
+  secondaryTypes: string[];
+  firstReleaseDate: string;
+  status: "new" | "existing" | "dismissed" | "queued";
+  seen: boolean;
+  firstSeenAt: string;
+  inLibrary: boolean;
+};
+
+export type CatalogArtistSummary = {
+  id: string;
+  name: string;
+  disambiguation: string;
+  country: string;
+  type: string;
+  score: number;
+  lifeSpan: string;
+  localTrackCount: number;
+};
+
+export type CatalogReleaseGroup = {
+  id: string;
+  title: string;
+  primaryType: string;
+  secondaryTypes: string[];
+  firstReleaseDate: string;
+  year: number | null;
+  coverUrl: string;
+  artistCredit: string;
+  localTrackCount: number;
+};
+
+export type CatalogArtistView = {
+  artist: CatalogArtistSummary & { genres: string[] };
+  followed: boolean;
+  releaseGroups: CatalogReleaseGroup[];
+};
+
+export type CatalogEdition = {
+  id: string;
+  title: string;
+  date: string;
+  country: string;
+  status: string;
+  formats: string[];
+  trackCount: number;
+  disambiguation: string;
+};
+
+export type CatalogTrack = {
+  /** Release track MBID, used to select tracks for download. */
+  id: string;
+  recordingId: string;
+  title: string;
+  artists: string[];
+  discNumber: number;
+  trackNumber: number;
+  duration: number | null;
+  isrc: string | null;
+  present: boolean;
+  queued: boolean;
+};
+
+export type CatalogReleaseView = {
+  releaseGroup: CatalogReleaseGroup;
+  release: CatalogEdition & { artist: string; artistIds: string[]; coverUrl: string; labels: string[] };
+  preferredReleaseId: string;
+  editions: CatalogEdition[];
+  tracks: CatalogTrack[];
+  localTrackCount: number;
+};
+
+export type UpgradeCandidate = {
+  track: TrackFile;
+  codecFamily: QualityCodecFamily;
+  bitrateKbps: number | null;
+  minimumKbps: number;
+  reason: string;
+};
+
+export type UpgradeView = {
+  totalTracks: number;
+  candidates: UpgradeCandidate[];
+};
+
+export type EngineStatus = {
+  activeJobs: number;
+  reviewCount: number;
+  wantedCount: number;
+  newReleaseCount: number;
+  sources: Array<{ id: CatalogProviderId; label: string; available: boolean; enabled: boolean; message: string }>;
+};
+
+/** Messages streamed to the browser over /api/events. */
+export type ServerEvent =
+  | { type: "scan"; status: ScanStatus }
+  | { type: "download-job"; job: DownloadJobSummary }
+  | { type: "download-item"; jobId: string; item: DownloadJobItem }
+  | { type: "engine"; status: EngineStatus }
+  | { type: "catalog-changed"; updatedAt: string | null }
+  | { type: "convert-job"; job: AudioConvertJob };
 
 export type SpotifyCatalogDownloadPreviewItem = {
   candidates: CatalogProviderCandidate[];
@@ -224,18 +498,11 @@ export type SpotifyCatalogDownloadQueueResult = {
   preview: SpotifyCatalogDownloadPreviewResult;
 };
 
+/** Only the paths are configurable; the folder and file layout is fixed (see organizer.ts). */
 export type NamingSettings = {
-  mode: NamingMode;
   libraryPath: string;
   recycleBinPath: string;
-  artistFolderFormat: string;
-  standardTrackFormat: string;
-  multiDiscTrackFormat: string;
-  replaceIllegalCharacters: boolean;
-  colonReplacementFormat: number;
 };
-
-export type NamingMode = "standard";
 
 export type ScanSettings = {
   extensions: string[];
@@ -254,9 +521,13 @@ export type SettingsView = {
   };
   navidrome: NavidromeSettingsView;
   catalog: CatalogSettingsView;
+  identification: IdentificationSettingsView;
   naming: NamingSettings;
   scan: ScanSettings;
   cleanup: CleanupSettings;
+  engine: EngineSettingsView;
+  quality: QualitySettingsView;
+  musicbrainz: MusicBrainzSettingsView;
 };
 
 export type SettingsUpdate = {
@@ -272,6 +543,7 @@ export type SettingsUpdate = {
   };
   catalog?: {
     spotify?: {
+      enabled?: boolean;
       clientId?: string;
       clientSecret?: string;
       market?: string;
@@ -279,9 +551,20 @@ export type SettingsUpdate = {
     providers?: Partial<ProviderSettingsView>;
     discovery?: Partial<DiscoverySettingsView>;
   };
+  identification?: {
+    acoustIdEnabled?: boolean;
+    acoustIdApiKey?: string;
+    useEmbeddedTagsAsHints?: boolean;
+    usePathAsHints?: boolean;
+    autoAcceptUniqueFingerprintMatches?: boolean;
+    requireReviewBeforeFileChanges?: boolean;
+  };
   naming?: Partial<NamingSettings>;
   scan?: Partial<ScanSettings>;
   cleanup?: Partial<CleanupSettings>;
+  engine?: Partial<EngineSettingsView>;
+  quality?: { minimumBitrateKbps?: Partial<Record<QualityCodecFamily, number>> };
+  musicbrainz?: Partial<MusicBrainzSettingsView>;
 };
 
 export type NavidromeMetadataMatchMethod =
@@ -303,6 +586,8 @@ export type NavidromeMetadataDiagnosticCode =
   | "zero-tracks"
   | "track-no-usable-path"
   | "path-outside-library-root"
+  | "spotify-confirmed"
+  | "identity-confirmed"
   | "no-api-match"
   | "possible-stale-scan";
 
@@ -316,6 +601,69 @@ export type NavidromeMetadataEnrichment = {
 
 /** `spotifybu` is retained only for persisted/external data from before the TrackKeep rename. */
 export type TrackManager = "trackkeep" | "spotifybu";
+
+export type TrackIdentificationStatus =
+  | "trackkeep-confirmed"
+  | "user-confirmed"
+  | "musicbrainz-tagged"
+  | "fingerprint-and-release-confirmed"
+  | "recording-identified-release-ambiguous"
+  | "candidate-only"
+  | "unidentified";
+
+export type TrackMetadataSource = "trackkeep" | "spotify" | "musicbrainz" | "local-tags" | "local-path" | "unknown";
+
+export type TrackIdentificationCandidate = {
+  id: string;
+  score: number;
+  acoustId: string;
+  recordingId: string;
+  releaseId: string | null;
+  releaseGroupId: string | null;
+  artist: string;
+  albumArtist: string;
+  album: string;
+  albumType: string;
+  title: string;
+  trackNumber: number | null;
+  trackTotal: number | null;
+  discNumber: number | null;
+  discTotal: number | null;
+  year: number | null;
+  /** Year of the release group's first release, when known; folder names prefer it over `year`. */
+  originalYear?: number | null;
+  duration: number | null;
+  isrc: string | null;
+  releaseTrackId?: string;
+  artistIds?: string[];
+  albumArtistIds?: string[];
+};
+
+export type TrackIdentification = {
+  status: TrackIdentificationStatus;
+  source: TrackMetadataSource;
+  message: string;
+  fingerprint?: string;
+  acoustId?: string;
+  recordingId?: string;
+  releaseId?: string;
+  releaseGroupId?: string;
+  spotifyTrackId?: string;
+  spotifyAlbumId?: string;
+  candidates?: TrackIdentificationCandidate[];
+  /** How the candidates were found: audio fingerprint or MusicBrainz text search. */
+  candidateSource?: "acoustid" | "musicbrainz-search";
+};
+
+/** MusicBrainz identifiers carried in a file's tags (Picard conventions). */
+export type TrackMusicBrainzIds = {
+  recordingId?: string;
+  releaseTrackId?: string;
+  releaseId?: string;
+  releaseGroupId?: string;
+  artistIds?: string[];
+  albumArtistIds?: string[];
+};
 
 export type TrackFile = {
   id: string;
@@ -334,6 +682,8 @@ export type TrackFile = {
   discNumber: number | null;
   discTotal: number | null;
   year: number | null;
+  /** First-release year (Picard's `originaldate`); folder names prefer it over `year`. */
+  originalYear?: number | null;
   duration: number | null;
   isrc?: string | null;
   bitrate: number | null;
@@ -346,12 +696,14 @@ export type TrackFile = {
   qualityScore: number;
   targetPath: string;
   targetRelativePath: string;
-  targetSource?: "naviclean" | "navidrome" | "spotify";
-  metadataConfidence?: "embedded" | "path-suggestion" | "trusted-path" | "navidrome" | "spotify";
+  targetSource?: "naviclean" | "navidrome" | "spotify" | "musicbrainz";
+  metadataConfidence?: "embedded" | "path-suggestion" | "trusted-path" | "navidrome" | "spotify" | "musicbrainz";
   metadataSuggestion?: TrackMetadataSuggestion;
+  identification?: TrackIdentification;
   navidromeEnrichment?: NavidromeMetadataEnrichment;
   managedBy?: TrackManager;
   organizeSkippedAt?: string;
+  musicbrainz?: TrackMusicBrainzIds;
   issues: string[];
 };
 
@@ -387,6 +739,12 @@ export type DuplicateGroup = {
 };
 
 export type ScanStatus = {
+  phase?: "discovering" | "metadata" | "identifying" | "searching" | "navidrome" | "saving" | "complete" | "failed" | "cancelled";
+  /** Files whose tags were reused from the cache because size and mtime were unchanged. */
+  cachedFiles?: number;
+  progressAt?: string;
+  processedFiles?: number;
+  totalFiles?: number;
   running: boolean;
   startedAt: string | null;
   finishedAt: string | null;
@@ -686,12 +1044,13 @@ export type OrganizePlanItem = {
   targetPath: string;
   sourceRelativePath: string;
   targetRelativePath: string;
-  targetSource?: "naviclean" | "navidrome" | "spotify";
+  targetSource?: "naviclean" | "navidrome" | "spotify" | "musicbrainz";
   navidromeEnrichment?: NavidromeMetadataEnrichment;
   managedBy?: TrackManager;
   organizeSkippedAt?: string;
   metadataConfidence?: TrackFile["metadataConfidence"];
   metadataSuggestion?: TrackMetadataSuggestion;
+  identification?: TrackIdentification;
   artist: string;
   albumArtist: string;
   album: string;
@@ -701,12 +1060,84 @@ export type OrganizePlanItem = {
   status: "ready" | "same" | "skipped" | "metadata-review" | "duplicate-target" | "conflict" | "outside-library" | "missing-source";
   message: string;
   collision?: OrganizeCollision;
+  /** The riskiest kind of path change this move makes; drives the review buckets. */
+  changeKind?: OrganizeChangeKind;
+  /** Per-field differences between the current and proposed path, with where each new value came from. */
+  changes?: OrganizeFieldChange[];
+  crossCheck?: OrganizeCrossCheck;
+};
+
+/** Ordered from least to most risky. */
+export type OrganizeChangeKind = "none" | "cosmetic" | "track-number" | "year" | "layout" | "identity";
+
+export type OrganizeChangeField = "albumArtist" | "album" | "year" | "track" | "title";
+
+export type OrganizeFieldChange = {
+  field: OrganizeChangeField;
+  /** Null when the current path is not in the standard layout, so the old value is unknown. */
+  from: string | null;
+  to: string;
+  /** True when only case, punctuation, spacing or accents differ. */
+  cosmetic: boolean;
+  /** Where the proposed value came from, e.g. "this file's own tags (original release date)". */
+  source: string;
+};
+
+export type OrganizeCrossCheckDifference = {
+  field: OrganizeChangeField;
+  proposed: string;
+  spotify: string;
+};
+
+export type OrganizeCrossCheck = {
+  status: "agrees" | "differs" | "not-found" | "unavailable";
+  method: "isrc" | "search" | "none";
+  checkedAt: string;
+  message: string;
+  differences: OrganizeCrossCheckDifference[];
+  spotify?: {
+    trackId: string;
+    title: string;
+    albumArtist: string;
+    album: string;
+    year: number | null;
+    trackNumber: number;
+    url: string;
+  };
+};
+
+export type OrganizeCrossCheckResult = {
+  checked: number;
+  results: Record<string, OrganizeCrossCheck>;
+  errors: string[];
+};
+
+export type OrganizeRunSummary = {
+  id: string;
+  createdAt: string;
+  moved: number;
+  /** Moves in this run that have not been reversed yet. */
+  undoable: number;
+  undoneAt: string | null;
+  label: string;
+};
+
+export type OrganizeUndoResult = {
+  restored: number;
+  errors: string[];
+  runs: OrganizeRunSummary[];
+  plan: OrganizePlan;
 };
 
 export type OrganizeSpotifyMatchResult = {
   matchedTracks: number;
   updatedTrackIds: string[];
   selected: SpotifyMetadataMatch;
+  plan: OrganizePlan;
+};
+
+export type OrganizeIdentificationMatchResult = {
+  updatedTrackIds: string[];
   plan: OrganizePlan;
 };
 
@@ -754,6 +1185,8 @@ export type OrganizeCollisionCandidate = {
 
 export type OrganizePlan = {
   items: OrganizePlanItem[];
+  /** Hash of the ready moves; Apply must echo it back so a changed plan is never applied blind. */
+  fingerprint: string;
   warnings: string[];
   summary: {
     ready: number;
@@ -770,6 +1203,8 @@ export type OrganizeApplyResult = {
   moved: number;
   skipped: number;
   errors: string[];
+  /** Undo journal entry for this apply; null when nothing moved. */
+  runId?: string | null;
   items: Array<OrganizePlanItem & { applied: boolean }>;
   plan: OrganizePlan;
 };

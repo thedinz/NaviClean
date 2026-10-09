@@ -1,6 +1,6 @@
 {
   "name": "naviclean",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "private": true,
   "description": "Navidrome library cleaner and organizer",
   "type": "module",
@@ -10,8 +10,8 @@
     "dev:client": "vite --host 0.0.0.0",
     "test": "tsx --test tests/*.test.ts",
     "build": "tsc -p tsconfig.server.json && vite build",
-    "start": "node dist/server/server/index.js",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit"
+    "start": "node --disable-warning=ExperimentalWarning dist/server/server/index.js",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.test.json"
   },
   "engines": {
     "node": ">=24.0.0"
@@ -21,6 +21,7 @@
     "express": "^5.2.1",
     "lucide-react": "^1.21.0",
     "music-metadata": "^11.13.0",
+    "node-taglib-sharp": "^6.0.3",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

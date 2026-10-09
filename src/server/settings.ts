@@ -1,13 +1,42 @@
 import bcrypt from "bcryptjs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { NamingMode, SettingsUpdate, SettingsView } from "../shared/types.js";
+import type { CatalogProviderId, NamingSettings, QualityCodecFamily, SettingsUpdate, SettingsView } from "../shared/types.js";
+import { writeJsonAtomic } from "./file-ops.js";
+
+export type EngineSettings = {
+  /** Candidates at or above this score (0-100) download without review. */
+  autoAcceptScore: number;
+  /** Candidates between this and the auto-accept score wait in the review queue. */
+  reviewScore: number;
+  verifyDuration: boolean;
+  verifyFingerprint: boolean;
+  sourcePriority: CatalogProviderId[];
+  disabledSources: CatalogProviderId[];
+  wantedEnabled: boolean;
+  wantedIntervalMinutes: number;
+  followCheckHours: number;
+  autoDownloadFollowedReleases: boolean;
+};
+
+export type QualitySettings = {
+  /** Lowest acceptable source bitrate per codec family, in kbps. */
+  minimumBitrateKbps: Record<QualityCodecFamily, number>;
+};
+
+export type MusicBrainzSettings = {
+  /** Text search against MusicBrainz for files that fingerprinting could not identify. */
+  textSearchEnabled: boolean;
+  maxTextLookupsPerScan: number;
+  catalogSource: "musicbrainz" | "spotify";
+};
 
 export type PrivateSettings = {
   auth: {
     enabled: boolean;
     username: string;
     passwordHash: string;
+    mustChangePassword?: boolean;
   };
   navidrome: {
     baseUrl: string;
@@ -16,6 +45,7 @@ export type PrivateSettings = {
   };
   catalog: {
     spotify: {
+      enabled?: boolean;
       clientId: string;
       clientSecret: string;
       market: string;
@@ -30,16 +60,15 @@ export type PrivateSettings = {
       requestsPerMinute: number;
     };
   };
-  naming: {
-    mode: NamingMode;
-    libraryPath: string;
-    recycleBinPath: string;
-    artistFolderFormat: string;
-    standardTrackFormat: string;
-    multiDiscTrackFormat: string;
-    replaceIllegalCharacters: boolean;
-    colonReplacementFormat: number;
+  identification: {
+    acoustIdEnabled: boolean;
+    acoustIdApiKey: string;
+    useEmbeddedTagsAsHints: boolean;
+    usePathAsHints: boolean;
+    autoAcceptUniqueFingerprintMatches: boolean;
+    requireReviewBeforeFileChanges: boolean;
   };
+  naming: NamingSettings;
   scan: {
     extensions: string[];
     autoScanEnabled: boolean;
@@ -48,7 +77,61 @@ export type PrivateSettings = {
   cleanup: {
     emptyFolderExclusions: string[];
   };
+  engine?: EngineSettings;
+  quality?: QualitySettings;
+  musicbrainz?: MusicBrainzSettings;
 };
+
+export const defaultEngineSettings: EngineSettings = {
+  autoAcceptScore: 80,
+  reviewScore: 55,
+  verifyDuration: true,
+  verifyFingerprint: true,
+  sourcePriority: ["youtube", "jiosaavn"],
+  disabledSources: [],
+  wantedEnabled: true,
+  wantedIntervalMinutes: 30,
+  followCheckHours: 24,
+  autoDownloadFollowedReleases: false
+};
+
+export const defaultQualitySettings: QualitySettings = {
+  minimumBitrateKbps: {
+    opus: 96,
+    vorbis: 112,
+    aac: 128,
+    mp3: 160,
+    other: 128
+  }
+};
+
+export const defaultMusicBrainzSettings: MusicBrainzSettings = {
+  textSearchEnabled: true,
+  maxTextLookupsPerScan: 300,
+  catalogSource: "musicbrainz"
+};
+
+export function engineSettings(settings: PrivateSettings): EngineSettings {
+  return normalizeEngineSettings(settings.engine);
+}
+
+export function qualitySettings(settings: PrivateSettings): QualitySettings {
+  return normalizeQualitySettings(settings.quality);
+}
+
+export function musicBrainzSettings(settings: PrivateSettings): MusicBrainzSettings {
+  return normalizeMusicBrainzSettings(settings.musicbrainz);
+}
+
+export function passwordProblem(password: string, username: string) {
+  if (password.length < 8) {
+    return "Use at least 8 characters.";
+  }
+  if (password.toLowerCase() === "admin" || password.toLowerCase() === username.toLowerCase()) {
+    return "Choose a password that is not the default or your username.";
+  }
+  return null;
+}
 
 const defaultExtensions = [
   ".flac",
@@ -72,21 +155,13 @@ const defaultCleanup = {
   // Keep the pre-rebrand .spotifybu path excluded so existing TrackKeep installs remain safe.
   emptyFolderExclusions: ["provider-downloads", ".spotifybu/tmp/provider-downloads"]
 };
-export const standardNamingFormatDefaults = {
-  artistFolderFormat: "{Album Artist Name}",
-  standardTrackFormat: "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}",
-  multiDiscTrackFormat: "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}",
-  replaceIllegalCharacters: true,
-  colonReplacementFormat: 4
-} as const;
-const defaultNaming = {
-  mode: "standard" as const,
+const defaultNaming: NamingSettings = {
   libraryPath: process.env.NAVICLEAN_MUSIC_DIR || "/music",
-  recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash"),
-  ...standardNamingFormatDefaults
+  recycleBinPath: path.join(process.env.NAVICLEAN_MUSIC_DIR || "/music", ".naviclean-trash")
 };
 const defaultCatalog = {
   spotify: {
+    enabled: true,
     clientId: process.env.SPOTIFY_CLIENT_ID || "",
     clientSecret: process.env.SPOTIFY_CLIENT_SECRET || "",
     market: process.env.SPOTIFY_MARKET || "US"
@@ -100,6 +175,14 @@ const defaultCatalog = {
   discovery: {
     requestsPerMinute: 40
   }
+};
+const defaultIdentification = {
+  acoustIdEnabled: false,
+  acoustIdApiKey: process.env.ACOUSTID_API_KEY || "",
+  useEmbeddedTagsAsHints: true,
+  usePathAsHints: true,
+  autoAcceptUniqueFingerprintMatches: true,
+  requireReviewBeforeFileChanges: true
 };
 
 const dataDir = process.env.NAVICLEAN_DATA_DIR || path.resolve(process.cwd(), ".data");
@@ -128,10 +211,7 @@ export async function loadSettings(): Promise<PrivateSettings> {
 }
 
 export async function saveSettings(settings: PrivateSettings) {
-  await fs.mkdir(dataDir, { recursive: true });
-  const tempPath = `${settingsPath}.tmp`;
-  await fs.writeFile(tempPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-  await fs.rename(tempPath, settingsPath);
+  await writeJsonAtomic(settingsPath, settings);
 }
 
 export function toSettingsView(settings: PrivateSettings): SettingsView {
@@ -147,6 +227,7 @@ export function toSettingsView(settings: PrivateSettings): SettingsView {
     },
     catalog: {
       spotify: {
+        enabled: settings.catalog.spotify.enabled !== false,
         clientId: settings.catalog.spotify.clientId,
         clientSecretSet: settings.catalog.spotify.clientSecret.length > 0,
         market: settings.catalog.spotify.market
@@ -154,18 +235,23 @@ export function toSettingsView(settings: PrivateSettings): SettingsView {
       providers: settings.catalog.providers,
       discovery: settings.catalog.discovery
     },
+    identification: {
+      acoustIdEnabled: settings.identification.acoustIdEnabled,
+      acoustIdApiKeySet: Boolean(settings.identification.acoustIdApiKey),
+      useEmbeddedTagsAsHints: settings.identification.useEmbeddedTagsAsHints,
+      usePathAsHints: settings.identification.usePathAsHints,
+      autoAcceptUniqueFingerprintMatches: settings.identification.autoAcceptUniqueFingerprintMatches,
+      requireReviewBeforeFileChanges: settings.identification.requireReviewBeforeFileChanges
+    },
     naming: {
-      mode: settings.naming.mode,
       libraryPath: settings.naming.libraryPath,
-      recycleBinPath: settings.naming.recycleBinPath,
-      artistFolderFormat: settings.naming.artistFolderFormat,
-      standardTrackFormat: settings.naming.standardTrackFormat,
-      multiDiscTrackFormat: settings.naming.multiDiscTrackFormat,
-      replaceIllegalCharacters: settings.naming.replaceIllegalCharacters,
-      colonReplacementFormat: settings.naming.colonReplacementFormat
+      recycleBinPath: settings.naming.recycleBinPath
     },
     scan: settings.scan,
-    cleanup: settings.cleanup
+    cleanup: settings.cleanup,
+    engine: engineSettings(settings),
+    quality: qualitySettings(settings),
+    musicbrainz: musicBrainzSettings(settings)
   };
 }
 
@@ -179,9 +265,13 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
       providers: { ...current.catalog.providers },
       discovery: { ...current.catalog.discovery }
     },
+    identification: { ...current.identification },
     naming: { ...current.naming },
     scan: { ...current.scan, extensions: [...current.scan.extensions] },
-    cleanup: { ...current.cleanup, emptyFolderExclusions: [...current.cleanup.emptyFolderExclusions] }
+    cleanup: { ...current.cleanup, emptyFolderExclusions: [...current.cleanup.emptyFolderExclusions] },
+    engine: engineSettings(current),
+    quality: qualitySettings(current),
+    musicbrainz: musicBrainzSettings(current)
   };
 
   if (update.auth) {
@@ -192,8 +282,27 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
       next.auth.username = update.auth.username.trim();
     }
     if (typeof update.auth.password === "string" && update.auth.password.length > 0) {
+      const problem = passwordProblem(update.auth.password, next.auth.username);
+      if (problem) {
+        throw new SettingsValidationError(problem);
+      }
       next.auth.passwordHash = await bcrypt.hash(update.auth.password, 12);
+      next.auth.mustChangePassword = false;
     }
+  }
+
+  if (update.engine) {
+    next.engine = normalizeEngineSettings({ ...next.engine, ...update.engine } as Partial<EngineSettings>);
+  }
+
+  if (update.quality?.minimumBitrateKbps) {
+    next.quality = normalizeQualitySettings({
+      minimumBitrateKbps: { ...next.quality!.minimumBitrateKbps, ...update.quality.minimumBitrateKbps }
+    });
+  }
+
+  if (update.musicbrainz) {
+    next.musicbrainz = normalizeMusicBrainzSettings({ ...next.musicbrainz, ...update.musicbrainz });
   }
 
   if (update.navidrome) {
@@ -209,6 +318,9 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
   }
 
   if (update.catalog?.spotify) {
+    if (typeof update.catalog.spotify.enabled === "boolean") {
+      next.catalog.spotify.enabled = update.catalog.spotify.enabled;
+    }
     if (typeof update.catalog.spotify.clientId === "string") {
       next.catalog.spotify.clientId = update.catalog.spotify.clientId.trim();
     }
@@ -217,6 +329,28 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
     }
     if (typeof update.catalog.spotify.market === "string") {
       next.catalog.spotify.market = normalizeSpotifyMarket(update.catalog.spotify.market, next.catalog.spotify.market);
+    }
+  }
+
+  if (update.identification) {
+    const identification = next.identification;
+    if (typeof update.identification.acoustIdEnabled === "boolean") {
+      identification.acoustIdEnabled = update.identification.acoustIdEnabled;
+    }
+    if (typeof update.identification.acoustIdApiKey === "string" && update.identification.acoustIdApiKey.length > 0) {
+      identification.acoustIdApiKey = update.identification.acoustIdApiKey.trim();
+    }
+    if (typeof update.identification.useEmbeddedTagsAsHints === "boolean") {
+      identification.useEmbeddedTagsAsHints = update.identification.useEmbeddedTagsAsHints;
+    }
+    if (typeof update.identification.usePathAsHints === "boolean") {
+      identification.usePathAsHints = update.identification.usePathAsHints;
+    }
+    if (typeof update.identification.autoAcceptUniqueFingerprintMatches === "boolean") {
+      identification.autoAcceptUniqueFingerprintMatches = update.identification.autoAcceptUniqueFingerprintMatches;
+    }
+    if (typeof update.identification.requireReviewBeforeFileChanges === "boolean") {
+      identification.requireReviewBeforeFileChanges = update.identification.requireReviewBeforeFileChanges;
     }
   }
 
@@ -261,12 +395,15 @@ export async function updateSettings(update: SettingsUpdate): Promise<PrivateSet
   return next;
 }
 
+export class SettingsValidationError extends Error {}
+
 async function createDefaultSettings(): Promise<PrivateSettings> {
   return {
     auth: {
       enabled: true,
       username: "admin",
-      passwordHash: await bcrypt.hash("admin", 12)
+      passwordHash: await bcrypt.hash("admin", 12),
+      mustChangePassword: true
     },
     navidrome: {
       baseUrl: "",
@@ -274,9 +411,13 @@ async function createDefaultSettings(): Promise<PrivateSettings> {
       password: ""
     },
     catalog: defaultCatalog,
+    identification: defaultIdentification,
     naming: defaultNaming,
     scan: defaultScan,
-    cleanup: defaultCleanup
+    cleanup: defaultCleanup,
+    engine: defaultEngineSettings,
+    quality: defaultQualitySettings,
+    musicbrainz: defaultMusicBrainzSettings
   };
 }
 
@@ -292,6 +433,7 @@ export function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSet
       password: ""
     },
     catalog: defaultCatalog,
+    identification: defaultIdentification,
     naming: defaultNaming,
     scan: defaultScan,
     cleanup: defaultCleanup
@@ -301,7 +443,8 @@ export function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSet
     auth: {
       enabled: partial.auth?.enabled ?? fallback.auth.enabled,
       username: partial.auth?.username || fallback.auth.username,
-      passwordHash: partial.auth?.passwordHash || getFallbackPasswordHash()
+      passwordHash: partial.auth?.passwordHash || getFallbackPasswordHash(),
+      mustChangePassword: partial.auth?.passwordHash ? partial.auth.mustChangePassword === true : true
     },
     navidrome: {
       baseUrl: trimTrailingSlash(partial.navidrome?.baseUrl || fallback.navidrome.baseUrl),
@@ -309,23 +452,85 @@ export function normalizeSettings(partial: Partial<PrivateSettings>): PrivateSet
       password: partial.navidrome?.password || fallback.navidrome.password
     },
     catalog: normalizeCatalogSettings(partial.catalog),
+    identification: normalizeIdentificationSettings(partial.identification),
     naming: normalizeNamingSettings(fallback.naming, partial.naming),
     scan: normalizeScanSettings(fallback.scan, partial.scan),
-    cleanup: normalizeCleanupSettings(fallback.cleanup, partial.cleanup)
+    cleanup: normalizeCleanupSettings(fallback.cleanup, partial.cleanup),
+    engine: normalizeEngineSettings(partial.engine),
+    quality: normalizeQualitySettings(partial.quality),
+    musicbrainz: normalizeMusicBrainzSettings(partial.musicbrainz)
+  };
+}
+
+const providerIdChoices: CatalogProviderId[] = ["youtube", "jiosaavn"];
+const qualityCodecFamilies: QualityCodecFamily[] = ["opus", "vorbis", "aac", "mp3", "other"];
+
+function normalizeEngineSettings(partial: Partial<EngineSettings> | undefined): EngineSettings {
+  const autoAcceptScore = clampInteger(partial?.autoAcceptScore, 50, 100, defaultEngineSettings.autoAcceptScore);
+  const priority = Array.isArray(partial?.sourcePriority)
+    ? partial.sourcePriority.filter((value): value is CatalogProviderId => providerIdChoices.includes(value))
+    : [];
+
+  return {
+    autoAcceptScore,
+    // Review must sit below auto-accept, otherwise nothing could ever wait for review.
+    reviewScore: Math.min(autoAcceptScore - 1, clampInteger(partial?.reviewScore, 30, 99, defaultEngineSettings.reviewScore)),
+    verifyDuration: typeof partial?.verifyDuration === "boolean" ? partial.verifyDuration : defaultEngineSettings.verifyDuration,
+    verifyFingerprint:
+      typeof partial?.verifyFingerprint === "boolean" ? partial.verifyFingerprint : defaultEngineSettings.verifyFingerprint,
+    sourcePriority: [...new Set([...priority, ...defaultEngineSettings.sourcePriority])],
+    disabledSources: Array.isArray(partial?.disabledSources)
+      ? [...new Set(partial.disabledSources.filter((value): value is CatalogProviderId => providerIdChoices.includes(value)))]
+      : [],
+    wantedEnabled: typeof partial?.wantedEnabled === "boolean" ? partial.wantedEnabled : defaultEngineSettings.wantedEnabled,
+    wantedIntervalMinutes: clampInteger(partial?.wantedIntervalMinutes, 10, 1440, defaultEngineSettings.wantedIntervalMinutes),
+    followCheckHours: clampInteger(partial?.followCheckHours, 1, 168, defaultEngineSettings.followCheckHours),
+    autoDownloadFollowedReleases:
+      typeof partial?.autoDownloadFollowedReleases === "boolean"
+        ? partial.autoDownloadFollowedReleases
+        : defaultEngineSettings.autoDownloadFollowedReleases
+  };
+}
+
+function normalizeQualitySettings(partial: Partial<QualitySettings> | undefined): QualitySettings {
+  const values = partial?.minimumBitrateKbps ?? ({} as Partial<Record<QualityCodecFamily, number>>);
+  return {
+    minimumBitrateKbps: Object.fromEntries(
+      qualityCodecFamilies.map((family) => [
+        family,
+        clampInteger(values[family], 0, 320, defaultQualitySettings.minimumBitrateKbps[family])
+      ])
+    ) as Record<QualityCodecFamily, number>
+  };
+}
+
+function normalizeMusicBrainzSettings(partial: Partial<MusicBrainzSettings> | undefined): MusicBrainzSettings {
+  return {
+    textSearchEnabled:
+      typeof partial?.textSearchEnabled === "boolean" ? partial.textSearchEnabled : defaultMusicBrainzSettings.textSearchEnabled,
+    maxTextLookupsPerScan: clampInteger(
+      partial?.maxTextLookupsPerScan,
+      0,
+      5000,
+      defaultMusicBrainzSettings.maxTextLookupsPerScan
+    ),
+    catalogSource: partial?.catalogSource === "spotify" ? "spotify" : "musicbrainz"
   };
 }
 
 function normalizeNamingSettings(
-  fallback: PrivateSettings["naming"],
-  partial: Partial<PrivateSettings["naming"]> | undefined
-): PrivateSettings["naming"] {
-  const compacted = compactStringValues(partial ?? {});
+  fallback: NamingSettings,
+  partial: Partial<NamingSettings> | undefined
+): NamingSettings {
+  // Older settings files may still carry the removed template fields; only the paths are kept.
   return {
-    ...fallback,
-    ...compacted,
-    mode: "standard" as const,
-    ...standardNamingFormatDefaults
+    libraryPath: nonEmptyString(partial?.libraryPath) ?? fallback.libraryPath,
+    recycleBinPath: nonEmptyString(partial?.recycleBinPath) ?? fallback.recycleBinPath
   };
+}
+
+function nonEmptyString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeCatalogSettings(
@@ -337,6 +542,7 @@ function normalizeCatalogSettings(
 
   return {
     spotify: {
+      enabled: typeof spotify.enabled === "boolean" ? spotify.enabled : defaultCatalog.spotify.enabled,
       clientId:
         typeof spotify.clientId === "string"
           ? spotify.clientId.trim()
@@ -377,6 +583,31 @@ function normalizeCatalogSettings(
         defaultCatalog.discovery.requestsPerMinute
       )
     }
+  };
+}
+
+function normalizeIdentificationSettings(
+  partial: Partial<PrivateSettings["identification"]> | undefined
+): PrivateSettings["identification"] {
+  return {
+    acoustIdEnabled:
+      typeof partial?.acoustIdEnabled === "boolean" ? partial.acoustIdEnabled : defaultIdentification.acoustIdEnabled,
+    acoustIdApiKey:
+      typeof partial?.acoustIdApiKey === "string" ? partial.acoustIdApiKey.trim() : defaultIdentification.acoustIdApiKey,
+    useEmbeddedTagsAsHints:
+      typeof partial?.useEmbeddedTagsAsHints === "boolean"
+        ? partial.useEmbeddedTagsAsHints
+        : defaultIdentification.useEmbeddedTagsAsHints,
+    usePathAsHints:
+      typeof partial?.usePathAsHints === "boolean" ? partial.usePathAsHints : defaultIdentification.usePathAsHints,
+    autoAcceptUniqueFingerprintMatches:
+      typeof partial?.autoAcceptUniqueFingerprintMatches === "boolean"
+        ? partial.autoAcceptUniqueFingerprintMatches
+        : defaultIdentification.autoAcceptUniqueFingerprintMatches,
+    requireReviewBeforeFileChanges:
+      typeof partial?.requireReviewBeforeFileChanges === "boolean"
+        ? partial.requireReviewBeforeFileChanges
+        : defaultIdentification.requireReviewBeforeFileChanges
   };
 }
 
@@ -449,17 +680,6 @@ function normalizeRelativeFolderExclusions(paths: unknown) {
     .filter((value) => !value.split("/").some((segment) => segment === ".."));
 
   return Array.from(new Set(normalized));
-}
-
-function compactStringValues<T extends Record<string, unknown>>(values: T): Partial<T> {
-  return Object.fromEntries(
-    Object.entries(values).filter(([, value]) => {
-      if (typeof value !== "string") {
-        return typeof value !== "undefined";
-      }
-      return value.trim().length > 0;
-    })
-  ) as Partial<T>;
 }
 
 function trimTrailingSlash(value: string) {

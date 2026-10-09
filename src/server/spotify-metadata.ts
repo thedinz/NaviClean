@@ -1,7 +1,6 @@
 import path from "node:path";
 import type { SpotifyMetadataMatch, SpotifyTrackSummary, TrackFile } from "../shared/types.js";
-import { buildDuplicateKey } from "./matching.js";
-import { targetForTrack } from "./organizer.js";
+import { withIdentity } from "./identity.js";
 import type { PrivateSettings } from "./settings.js";
 import { getSpotifyAlbumDetail, getSpotifyTrackMetadata } from "./spotify.js";
 import { normalizeForMatch } from "./utils.js";
@@ -49,6 +48,7 @@ export async function resolveTrackMetadataFromSpotify(
     updatedTrackIds.push(track.id);
     return trackWithSpotifyMetadata(track, spotifyTrack, {
       album: album.name,
+      albumId: album.id,
       albumArtist: album.artist.name,
       albumType: album.albumType,
       discTotal: albumDiscTotal,
@@ -100,6 +100,7 @@ function trackWithSpotifyMetadata(
   spotifyTrack: SpotifyTrackSummary,
   album: {
     album: string;
+    albumId: string;
     albumArtist: string;
     albumType: string;
     discTotal: number;
@@ -118,8 +119,7 @@ function trackWithSpotifyMetadata(
       "Embedded metadata conflicted with structured path; used structured path metadata"
     ].includes(issue)
   );
-  const partialTrack = {
-    ...track,
+  return withIdentity(track, settings, {
     artist,
     albumArtist: album.albumArtist,
     album: album.album,
@@ -130,31 +130,23 @@ function trackWithSpotifyMetadata(
     discNumber: spotifyTrack.discNumber,
     discTotal: album.discTotal,
     year: album.releaseYear,
+    // Spotify has one date per album; drop any tag-derived original year so the choice sticks.
+    originalYear: null,
+    duration: track.duration ?? spotifyTrack.duration,
     isrc: spotifyTrack.isrc ?? track.isrc ?? null,
-    duplicateKey: buildDuplicateKey({
-      artist: album.albumArtist,
-      album: album.album,
-      albumType: album.albumType,
-      title: spotifyTrack.name,
-      trackNumber: spotifyTrack.trackNumber,
-      discNumber: spotifyTrack.discNumber,
-      year: album.releaseYear,
-      duration: track.duration ?? spotifyTrack.duration,
-      isrc: spotifyTrack.isrc ?? track.isrc ?? null
-    }),
     issues,
     organizeSkippedAt: undefined,
     navidromeEnrichment: undefined,
-    metadataConfidence: "spotify" as const,
-    targetSource: "spotify" as const
-  } satisfies TrackFile;
-  const target = targetForTrack(partialTrack, settings);
-
-  return {
-    ...partialTrack,
-    targetPath: target.targetPath,
-    targetRelativePath: target.targetRelativePath
-  };
+    metadataConfidence: "spotify",
+    targetSource: "spotify",
+    identification: {
+      status: "user-confirmed",
+      source: "spotify",
+      message: "Spotify metadata was explicitly selected by the user.",
+      spotifyTrackId: spotifyTrack.id,
+      spotifyAlbumId: album.albumId
+    }
+  });
 }
 
 function spotifySummaryFromMatch(match: SpotifyMetadataMatch): SpotifyTrackSummary {

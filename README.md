@@ -3,10 +3,29 @@
 NaviClean is a Docker-first cleaner and organizer for Navidrome music libraries.
 It scans a mounted music library, browses artists, albums, and tracks, previews clean artist/album/track paths, and only unlocks duplicate cleanup after organization is complete.
 
+## 0.7.0 — October 9, 2026
+
+- **Native download engine:** Discover now searches MusicBrainz. Request an album or single tracks and NaviClean searches YouTube and JioSaavn, scores every result (penalising live, remix, cover, karaoke, sped-up, and re-upload versions; favouring official artist and Topic uploads), and downloads at score ≥ 80. Scores of 55–80 wait in a **Review** queue; anything lower goes to **Wanted**.
+- **Verification and quarantine:** every download must meet a per-codec bitrate floor, match the release track's length, and (with AcoustID on) fingerprint as the same song. A failing source is quarantined for that track and the next candidate is tried.
+- **Wanted, Following, Upgrades:** failed tracks are re-searched in the background (1 h, 6 h, 1 day, 3 days, then weekly). Follow artists to be told about new albums, EPs, and singles, optionally downloading them automatically. Upgrades lists lossy files below your quality floor and replaces them with verified better copies; originals go to the recycle bin.
+- **Smarter identification:** files already carrying MusicBrainz IDs (Picard, beets) are trusted without a lookup; files fingerprinting cannot place are searched on MusicBrainz by tags, per album folder, and wait for confirmation. AcoustID answers are cached.
+- **Full MusicBrainz tags:** organizing and downloading write Picard-standard recording, release, release-group, artist, and release-track IDs for FLAC/Ogg/Opus, MP3 (including the UFID recording frame), and M4A.
+- **Faster, safer runtime:** scans reuse cached tags for unchanged files, read in parallel, and can be cancelled. All state lives in SQLite (`/data/naviclean.db`; old JSON files are imported once and kept as `*.migrated`). Download jobs and sign-in sessions survive restarts, failed sign-ins are throttled, and the default `admin`/`admin` password must be changed at first sign-in.
+- **Redesigned UI:** grouped navigation with live badges, a live activity bar driven by server-sent events, and new Discover, Downloads, Following, Upgrades, and sectioned Settings pages.
+
+## Also in 0.7.0 — September 14, 2026
+
+- **Identity before organization:** optional AcoustID/MusicBrainz fingerprint matching, release selection, reusable confirmed identities, and canonical tag writing before moves. TrackKeep identities and prior user confirmations remain authoritative; Spotify matching can be switched off.
+- **Clearer dashboard and scan controls:** Library overview shows Tracks, Duplicate groups, Pending moves, and Identity review, with a three-step Cleanup workflow. Identity review counts tracks awaiting identity confirmation; Organize's broader **Needs action** filter also includes ready moves, conflicts, and missing files. The **Index & scans** panel separates NaviClean's **Run scan** from Navidrome's **Quick scan** and **Full scan**.
+- **Simpler Organize review:** identity-focused filters, a combined current/proposed path column, an **Apply** button with the ready count, and collapsible index notes. Additional filters are under **More filters**, and selection actions appear when needed.
+- **Better setup and cleanup states:** Discover links to Settings when Spotify is off or lacks credentials; Empty Folders and Non-Music Files show library-access errors instead of misleading empty results. Duplicate blockers, Diagnostics controls, and Trash selection/empty states are less cluttered.
+- **Settings and navigation improvements:** configuration status labels, a sticky save bar with unsaved-change feedback, dark-mode fixes, a tablet navigation rail, a mobile menu, and a scrollable sidebar for short screens. Branch labels now come from the build instead of always showing `main`.
+- **Runtime and planning:** Docker now includes Chromaprint's `fpcalc`; the [UI roadmap](docs/ui-roadmap.md) records the design review that preceded the UI work. Its original planning status and some proposed controls predate the implementation described here.
+
 ## Current defaults
 
 - Web UI: `http://localhost:8080`
-- Login: `admin` / `admin`
+- First sign-in: `admin` / `admin`, after which NaviClean requires a new password
 - Config volume: `/data`
 - Music volume: `/music`
 - Runtime user: `PUID=1000`, `PGID=1000`
@@ -42,37 +61,55 @@ For Unraid, set `PUID=99` and `PGID=100` so NaviClean can write to `/mnt/user/ap
 
 ## Naming model
 
-NaviClean uses one selected naming mode at a time:
+NaviClean keeps one stable standard naming contract:
 
-- `Standard` is the default for fresh installs:
-  - Artist folder: `{Album Artist Name}`
-  - Standard track: `{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}`
-  - Multi-disc track: `{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}`
-- `Manual` keeps the editable templates for users who want to define their own folder and file layout.
+- Artist folder: `{Album Artist Name}`
+- Standard track: `{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}`
+- Multi-disc track: `{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}`
 
-NaviClean appends the original extension before planning moves. A normal standard target path looks like `Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track`. Missing release years are written as `Unknown Year`. In standard mode, the rendered target path is canonical, so a different year, folder name, or filename is treated as organization work instead of being accepted as close enough.
+NaviClean appends the original extension before planning moves. A normal standard target path looks like `Artist/Artist - Album Name (2026)/Artist - Album Name (2026) - 03 - Track`. Missing release years are written as `Unknown Year`. The layout is fixed (only the library and recycle-bin paths are configurable), and the rendered target path is canonical, so a different year, folder name, or filename is treated as organization work instead of being accepted as close enough.
+
+## Audio identification setup
+
+In **Settings → Audio identification**, enable **AcoustID / MusicBrainz** and enter an AcoustID application API key. Lookup is off by default. The key can also be supplied through `ACOUSTID_API_KEY` when initializing settings; enabling lookup remains a separate setting. Docker includes `fpcalc`; local installations need it available on `PATH` for fingerprinting.
+
+| Setting | Default | Behavior |
+| --- | --- | --- |
+| AcoustID / MusicBrainz | Off | Looks up audio fingerprints for recording and release candidates when enabled with an API key. |
+| Embedded tags as hints | On | Allows ordinary tags to supply search hints. |
+| Paths as hints | On | Allows filenames and folders to supply search hints. |
+| Accept unique fingerprint + release matches | On | Accepts a unique qualifying recording/release match, including release consensus among tracks in a folder. |
+| Require review before file changes | On | Keeps automatically matched tracks in identity review until confirmed. |
+
+Spotify matching has its own **Enable Spotify matching** switch under **Settings → Spotify catalog**. It defaults to on, but needs a client ID and secret to search. Discover shows a setup prompt and an **Open Settings** action when it is disabled or unconfigured. Settings labels report configuration state; use the connection test actions to check connectivity.
 
 ## Recommended workflow
 
-Existing library files are organized from the scan catalog, with Navidrome metadata used when Navidrome can match the file. Artist/album identities that depend on folder or filename inference enter a blocking Metadata review state instead of being silently accepted. Each Organize row can search Spotify using the artist and track title, without treating the current folder or album text as authoritative. NaviClean only uses a result after the user chooses the exact release, then updates the selected track and any unambiguous title/track matches in the same source folder. For a known-good folder, **Trust this folder** confirms its complete artist/album suggestion in bulk. Spotify and trusted-path decisions are persisted across scans and file moves. The refreshed target paths are shown for review before Apply. Spotify also supplies metadata and artwork for the Discover/download flow.
+Existing library files are organized only after their identity is confirmed. TrackKeep tags and prior user decisions are authoritative. When enabled, NaviClean calculates a Chromaprint fingerprint with `fpcalc`, asks AcoustID for MusicBrainz recording and release candidates, and requires ambiguous releases to be selected in Organize. Unique fingerprint-and-release matches can be accepted automatically, while the safer default still requires confirmation before file changes. Ordinary embedded tags, filenames, and folders are optional search hints rather than identity authority. Confirmed decisions are stored by audio fingerprint so they survive file moves, retagging, and compatible format changes.
+
+Spotify matching is optional and has an explicit Settings switch. Each Organize row can search Spotify using the available hints; metadata is used only after the user chooses a result. Navidrome is used for index diagnostics, artwork, and scan coordination, but its cached copy of local tags does not replace confirmed NaviClean metadata.
 
 Use this flow when cleaning a mounted Navidrome library:
 
-1. Run a full Navidrome scan/sync first and wait for it to finish.
-2. Run a NaviClean scan. This reads the files and enriches matched tracks from Navidrome.
-3. Preview organization in NaviClean, resolve conflicts/missing files, and apply the moves.
+1. On **Dashboard → Index & scans**, run **Full scan** for Navidrome and wait for it to finish. Configure the Navidrome connection in Settings to use these controls, or start the scan in Navidrome itself.
+2. Select **Run scan** beside **NaviClean library scan**. This reads the mounted library, fingerprints unidentified audio when AcoustID/MusicBrainz is enabled, and checks Navidrome index status. NaviClean and Navidrome scans update separate catalogs.
+3. Open **Organize**, preview changes, and resolve **Identity review** rows by confirming a MusicBrainz release or choosing a Spotify result. A MusicBrainz release confirmation also applies to fingerprinted tracks in the same folder that have a candidate for that release. Review the refreshed current/proposed paths, resolve conflicts/missing files, and select **Apply** for ready items. NaviClean stream-copies the audio into a safely retagged file, preserving other embedded tags and artwork, before moving it to the canonical path. If tag writing fails, the original stays in place and the move is not applied.
 4. Run a full Navidrome scan/sync again so Navidrome sees the new paths and any new tags.
 5. Run a fresh NaviClean scan before doing another organization or duplicate-cleanup pass.
 
-This keeps NaviClean and Navidrome looking at the same library state. If Navidrome is stale after a large move, a later NaviClean scan may appear to find new organization work because Navidrome has finally caught up with different metadata/path information.
+This keeps NaviClean and Navidrome looking at the same library state. Navidrome can report stale paths after a large move until its next scan; those index notes do not override confirmed NaviClean identity or naming metadata.
 
 ## Spotify catalog discovery
 
-The Discover page can connect to Spotify with client credentials, search catalog artists, show album discographies beside local library coverage, and stage missing album tracks for provider download. Users can select an album's full track list; provider discovery runs in bounded batches and reports checked/total progress as each batch completes. Spotify is used for metadata and artwork only; downloads come from configured external providers and require the user to confirm they are authorized to download the selected tracks. The Docker image includes `ffmpeg` and current `yt-dlp` for YouTube/JioSaavn provider jobs.
+The Discover page can connect to Spotify with client credentials, search catalog artists, show album discographies beside local library coverage, and stage missing album tracks for provider download. Users can select an album's full track list; provider discovery runs in bounded batches and reports checked/total progress as each batch completes. Spotify is used for metadata and artwork only; downloads come from configured external providers and require the user to confirm they are authorized to download the selected tracks. YouTube downloads share one global queue, wait at least 10 seconds between tracks, and pause for 2 minutes after every 5 attempts. Active jobs continue on the server if the user leaves Discover, and the page reconnects after navigation or a refresh. The Docker image includes `ffmpeg` and current `yt-dlp` for YouTube/JioSaavn provider jobs.
 
 Provider downloads default to Ogg Opus with a 192 kbps quality cap. Settings offers 160, 192, and 256 kbps Opus caps. These are maximums: valid provider audio below the selected bitrate is kept at source quality instead of being upconverted, while audio above the cap is normalized with `libopus`. If Opus cannot be written because of an audio-format, encoder, ffmpeg, header, or postprocessing failure, NaviClean retries the same source as MP3 by default. MP3 fallback can be disabled or set to 192, 256, or 320 kbps (320 kbps by default), uses `libmp3lame`, and writes ID3v2.3 metadata.
 
 NaviClean provider downloads use the same standard target-path renderer as the organizer and dual-write TrackKeep Identity Tags v1 in the current `trackkeep:*` namespace and the legacy `spotifybu:*` namespace. The fields are `track_id`, `track_uri`, `album_id`, `isrc`, and `identity_version`. Those tags let later scans recognize files as TrackKeep-managed so NaviClean does not keep re-organizing provider downloads, even after a file is moved or renamed. NaviClean reads either namespace in canonical colon, underscore, Apple/iTunes freeform, and ID3/native forms, case-insensitively. It also recognizes M4A comment JSON beginning with `TrackKeep identity ` or the legacy `SpotifyBU identity ` prefix. The legacy namespace and prefix remain supported solely for compatibility with files and companion releases from before the TrackKeep rename. Opus files use Navidrome-compatible Vorbis comments and embed cover art as `METADATA_BLOCK_PICTURE`; the large picture block is passed to ffmpeg through a temporary ffmetadata file so it does not consume command-line argument space.
+
+## Download engine
+
+Requests come from Discover (MusicBrainz, or Spotify when configured), Following, Wanted, and Upgrades. Each track moves through search → score → download → verify → tag → import, and every step streams to the Downloads page live. Settings → Downloads controls the auto-accept and review scores, verification checks, per-codec bitrate floors, source order, Wanted interval, and follow checks. Only download music you are authorized to access; each request asks you to confirm this.
 
 ## Library artwork
 
@@ -89,7 +126,9 @@ npm install
 npm run dev
 ```
 
-The Vite UI runs on `5173` and proxies API requests to the server on `8080`.
+The Vite UI runs on `5173` and proxies API requests to the server on `8080`. Install `ffmpeg` for retagging/conversion and Chromaprint's `fpcalc` for audio identification.
+
+The UI branch label uses `VITE_APP_BRANCH` when supplied, otherwise Vite reads the current Git branch (falling back to `unknown`). GitHub Docker builds supply the ref name automatically. For a manual Docker build, pass `--build-arg VITE_APP_BRANCH=dev` to label a development image.
 
 ## Safety
 

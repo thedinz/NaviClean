@@ -14,6 +14,7 @@ import {
   withProviderFormatFallback,
   writeOggOpusPictureMetadataFile,
   writeTaggedAudioFile,
+  youtubeDownloadDelayMs,
   type CatalogProviderTrack
 } from "../src/server/providers.js";
 import { normalizeSettings } from "../src/server/settings.js";
@@ -40,6 +41,26 @@ test("yt-dlp receives the selected Opus format and cap", () => {
   assert.deepEqual(args.slice(args.indexOf("--audio-format"), args.indexOf("--audio-format") + 4),
     ["--audio-format", "opus", "--audio-quality", "256K"]);
   assert.equal(args[args.indexOf("--format") + 1], "bestaudio[abr<=256]/bestaudio/best");
+});
+
+test("YouTube downloads wait ten seconds and cool down for two minutes after five", () => {
+  const lastFinishedAt = 1_000_000;
+
+  assert.equal(youtubeDownloadDelayMs({
+    downloadsSinceCooldown: 0,
+    lastFinishedAt: 0,
+    now: lastFinishedAt
+  }), 0);
+  assert.equal(youtubeDownloadDelayMs({
+    downloadsSinceCooldown: 4,
+    lastFinishedAt,
+    now: lastFinishedAt + 2_500
+  }), 7_500);
+  assert.equal(youtubeDownloadDelayMs({
+    downloadsSinceCooldown: 5,
+    lastFinishedAt,
+    now: lastFinishedAt + 30_000
+  }), 90_000);
 });
 
 test("Opus format failures retry MP3 at its configured quality and destination format", async () => {

@@ -6,8 +6,9 @@ import { test } from "node:test";
 import { hasTrackKeepIdentityTags, scanLibrary } from "../src/server/scanner.js";
 import { buildOrganizePlan } from "../src/server/organizer.js";
 import { trustPathMetadataForFolder } from "../src/server/metadata-review.js";
+import type { ScanStatus } from "../src/shared/types.js";
 import type { PrivateSettings } from "../src/server/settings.js";
-import { normalizeTrackKeepManagedBy, trackKeepMetadataTagsForSpotifyTrack } from "../src/server/trackkeep.js";
+import { normalizeTrackKeepManagedBy, readTrackKeepIdentity, trackKeepMetadataTagsForSpotifyTrack } from "../src/server/trackkeep.js";
 
 test("scanner recognizes TrackKeep and legacy SpotifyBU identity aliases", () => {
   const keys = ["album_id", "identity_version", "isrc", "track_id", "track_uri"];
@@ -110,6 +111,28 @@ test("TrackKeep metadata helper dual-writes scanner-recognized identity tags", (
   );
 });
 
+test("TrackKeep identity values are available as authoritative IDs", () => {
+  assert.deepEqual(
+    readTrackKeepIdentity({
+      native: {
+        ID3v24: [
+          { id: "TXXX:trackkeep:track_uri", value: "spotify:track:track-123" },
+          { id: "TXXX:trackkeep:album_id", value: "album-456" },
+          { id: "TXXX:trackkeep:isrc", value: "usabc2100001" },
+          { id: "TXXX:trackkeep:identity_version", value: "1" }
+        ]
+      }
+    }),
+    {
+      trackId: "track-123",
+      trackUri: "spotify:track:track-123",
+      albumId: "album-456",
+      isrc: "USABC2100001",
+      identityVersion: "1"
+    }
+  );
+});
+
 test("legacy persisted SpotifyBU manager values normalize to TrackKeep", () => {
   assert.equal(normalizeTrackKeepManagedBy("trackkeep"), "trackkeep");
   assert.equal(normalizeTrackKeepManagedBy("spotifybu"), "trackkeep");
@@ -126,7 +149,14 @@ test("scanner infers the release year when the parent artist folder stripped tra
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, "not real audio");
 
-    const result = await scanLibrary(settings(root));
+    const progress: Partial<ScanStatus>[] = [];
+    const result = await scanLibrary(settings(root), (update) => progress.push({ ...update }));
+    assert.deepEqual(progress.filter((update) => update.phase).map((update) => update.phase), [
+      "discovering", "metadata", "identifying", "navidrome", "saving"
+    ]);
+    assert.ok(progress.some((update) => update.scannedFiles === 1));
+    assert.ok(progress.some((update) => update.processedFiles === 1 && update.audioFiles === 1));
+    assert.equal(progress.at(-1)?.totalFiles, 1);
     const track = result.tracks[0];
 
     assert.equal(result.tracks.length, 1);
@@ -400,7 +430,7 @@ test("scanner does not block on uncached Spotify lookups", async () => {
   }
 });
 
-test("scanner uses Navidrome indexed metadata for target naming", async () => {
+test("identity-first scanning keeps Navidrome matches diagnostic-only", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-"));
   const originalFetch = globalThis.fetch;
   const sourceRelativePath = "loose/random-file.mp3";
@@ -468,26 +498,21 @@ test("scanner uses Navidrome indexed metadata for target naming", async () => {
     scanSettings.navidrome.baseUrl = "http://navidrome.local";
     scanSettings.navidrome.username = "admin";
     scanSettings.navidrome.password = "password";
-    const result = await scanLibrary(scanSettings);
-    const track = result.tracks[0];
+    const identityFirst = await scanLibrary(scanSettings);
+    const identityFirstTrack = identityFirst.tracks[0];
 
-    assert.equal(result.tracks.length, 1);
-    assert.equal(track?.targetSource, "navidrome");
-    assert.equal(track?.albumArtist, "Album Artist");
-    assert.equal(track?.album, "Best Of");
-    assert.equal(track?.title, "Shared Song");
-    assert.equal(track?.trackNumber, 9);
-    assert.equal(
-      track?.targetRelativePath,
-      "Album Artist/Album Artist - Best Of (2020)/Album Artist - Best Of (2020) - 09 - Shared Song.mp3"
-    );
+    assert.equal(identityFirst.tracks.length, 1);
+    assert.equal(identityFirstTrack?.targetSource, undefined);
+    assert.notEqual(identityFirstTrack?.title, "Shared Song");
+    assert.equal(identityFirstTrack?.navidromeEnrichment?.code, "matched");
+    assert.equal(identityFirstTrack?.identification?.status, "candidate-only");
   } finally {
     globalThis.fetch = originalFetch;
     await fs.rm(root, { force: true, recursive: true });
   }
 });
 
-test("scanner matches Navidrome metadata by exact metadata and size", async () => {
+test("scanner matches the Navidrome index by exact metadata and size", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-relaxed-"));
   const originalFetch = globalThis.fetch;
   const sourceRelativePath = "311/311 - 311 (1995)/311 - 311 (1995) - 08 - Purpose.mp3";
@@ -532,7 +557,6 @@ test("scanner matches Navidrome metadata by exact metadata and size", async () =
     const track = result.tracks[0];
 
     assert.equal(result.tracks.length, 1);
-    assert.equal(track?.targetSource, "navidrome");
     assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-relaxed-duration");
   } finally {
     globalThis.fetch = originalFetch;
@@ -540,7 +564,7 @@ test("scanner matches Navidrome metadata by exact metadata and size", async () =
   }
 });
 
-test("scanner matches Navidrome metadata by exact size when parsed durations disagree", async () => {
+test("scanner matches the Navidrome index by exact size when parsed durations disagree", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-duration-"));
   const originalFetch = globalThis.fetch;
   const sourceRelativePath =
@@ -587,8 +611,6 @@ test("scanner matches Navidrome metadata by exact size when parsed durations dis
     const track = result.tracks[0];
 
     assert.equal(result.tracks.length, 1);
-    assert.equal(track?.targetSource, "navidrome");
-    assert.equal(track?.duration, 54);
     assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-relaxed-duration");
   } finally {
     globalThis.fetch = originalFetch;
@@ -596,7 +618,7 @@ test("scanner matches Navidrome metadata by exact size when parsed durations dis
   }
 });
 
-test("scanner matches Navidrome metadata when only the release track number differs", async () => {
+test("scanner matches the Navidrome index when only the release track number differs", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-track-slot-"));
   const originalFetch = globalThis.fetch;
   const sourceRelativePath =
@@ -643,17 +665,14 @@ test("scanner matches Navidrome metadata when only the release track number diff
     const track = result.tracks[0];
 
     assert.equal(result.tracks.length, 1);
-    assert.equal(track?.targetSource, "navidrome");
-    assert.equal(track?.trackNumber, 1);
     assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-track-agnostic");
-    assert.equal(track?.targetRelativePath, sourceRelativePath);
   } finally {
     globalThis.fetch = originalFetch;
     await fs.rm(root, { force: true, recursive: true });
   }
 });
 
-test("scanner matches Navidrome metadata when local album artist is wrong", async () => {
+test("scanner matches the Navidrome index when local album artist is wrong", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-artist-mismatch-"));
   const originalFetch = globalThis.fetch;
   const sourceRelativePath =
@@ -700,20 +719,14 @@ test("scanner matches Navidrome metadata when local album artist is wrong", asyn
     const track = result.tracks[0];
 
     assert.equal(result.tracks.length, 1);
-    assert.equal(track?.targetSource, "navidrome");
-    assert.equal(track?.albumArtist, "Dave Matthews");
     assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-artist-agnostic");
-    assert.equal(
-      track?.targetRelativePath,
-      "Dave Matthews/Dave Matthews - Live at Radio City (2007)/Dave Matthews - Live at Radio City (2007) - 02-07 - Lie in Our Graves.flac"
-    );
   } finally {
     globalThis.fetch = originalFetch;
     await fs.rm(root, { force: true, recursive: true });
   }
 });
 
-test("scanner preserves a Latin artist alias from paired Navidrome artist folders", async () => {
+test("scanner matches the Navidrome index when the album artist folder is a paired alias", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-latin-alias-"));
   const originalFetch = globalThis.fetch;
   const sourceRelativePath =
@@ -760,18 +773,14 @@ test("scanner preserves a Latin artist alias from paired Navidrome artist folder
     const track = result.tracks[0];
 
     assert.equal(result.tracks.length, 1);
-    assert.equal(track?.targetSource, "navidrome");
-    assert.equal(track?.artist, "Junya Nakano");
-    assert.equal(track?.albumArtist, "Junya Nakano");
     assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-artist-agnostic");
-    assert.equal(track?.targetRelativePath, sourceRelativePath);
   } finally {
     globalThis.fetch = originalFetch;
     await fs.rm(root, { force: true, recursive: true });
   }
 });
 
-test("scanner matches Navidrome metadata when only a provider title suffix differs", async () => {
+test("scanner matches the Navidrome index when only a provider title suffix differs", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-title-suffix-"));
   const originalFetch = globalThis.fetch;
   const sourceRelativePath =
@@ -817,20 +826,14 @@ test("scanner matches Navidrome metadata when only a provider title suffix diffe
     const track = result.tracks[0];
 
     assert.equal(result.tracks.length, 1);
-    assert.equal(track?.targetSource, "navidrome");
-    assert.equal(track?.title, "Prelude (Scatter)");
     assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-title-suffix");
-    assert.equal(
-      track?.targetRelativePath,
-      "Anne Wilson/Anne Wilson - My Jesus (2022)/Anne Wilson - My Jesus (2022) - 01 - Prelude (Scatter).mp3"
-    );
   } finally {
     globalThis.fetch = originalFetch;
     await fs.rm(root, { force: true, recursive: true });
   }
 });
 
-test("scanner matches Navidrome metadata when title has junk artist disambiguation", async () => {
+test("scanner matches the Navidrome index when title has junk artist disambiguation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-title-disambiguation-"));
   const originalFetch = globalThis.fetch;
   const sourceRelativePath =
@@ -876,17 +879,14 @@ test("scanner matches Navidrome metadata when title has junk artist disambiguati
     const track = result.tracks[0];
 
     assert.equal(result.tracks.length, 1);
-    assert.equal(track?.targetSource, "navidrome");
-    assert.equal(track?.title, "Becky's Bible");
     assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-title-suffix");
-    assert.equal(track?.targetRelativePath, sourceRelativePath);
   } finally {
     globalThis.fetch = originalFetch;
     await fs.rm(root, { force: true, recursive: true });
   }
 });
 
-test("scanner matches Navidrome metadata when title repeats in a parenthetical suffix", async () => {
+test("scanner matches the Navidrome index when title repeats in a parenthetical suffix", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-title-repeat-"));
   const originalFetch = globalThis.fetch;
   const sourceRelativePath =
@@ -933,8 +933,6 @@ test("scanner matches Navidrome metadata when title repeats in a parenthetical s
     const track = result.tracks[0];
 
     assert.equal(result.tracks.length, 1);
-    assert.equal(track?.targetSource, "navidrome");
-    assert.equal(track?.title, "I Wish You Would");
     assert.equal(track?.navidromeEnrichment?.matchMethod, "metadata-size-title-suffix");
   } finally {
     globalThis.fetch = originalFetch;
@@ -942,7 +940,7 @@ test("scanner matches Navidrome metadata when title repeats in a parenthetical s
   }
 });
 
-test("scanner matches Navidrome metadata across album edition text and title version suffix", async () => {
+test("scanner matches the Navidrome index across album edition text and title version suffix", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-edition-title-suffix-"));
   const originalFetch = globalThis.fetch;
   const sourceRelativePath =
@@ -988,8 +986,6 @@ test("scanner matches Navidrome metadata across album edition text and title ver
     const track = result.tracks[0];
 
     assert.equal(result.tracks.length, 1);
-    assert.equal(track?.targetSource, "navidrome");
-    assert.equal(track?.title, "Out of Touch");
     assert.equal(track?.navidromeEnrichment?.matchMethod, "edition-title-suffix-metadata-size");
   } finally {
     globalThis.fetch = originalFetch;
@@ -997,7 +993,7 @@ test("scanner matches Navidrome metadata across album edition text and title ver
   }
 });
 
-test("scanner matches Navidrome metadata across leading artist articles and redundant album years", async () => {
+test("scanner matches the Navidrome index across leading artist articles and redundant album years", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-artist-article-"));
   const originalFetch = globalThis.fetch;
   const sourceRelativePath =
@@ -1044,21 +1040,14 @@ test("scanner matches Navidrome metadata across leading artist articles and redu
     const track = result.tracks[0];
 
     assert.equal(result.tracks.length, 1);
-    assert.equal(track?.targetSource, "navidrome");
-    assert.equal(track?.albumArtist, "The Beach Boys");
-    assert.equal(track?.album, "Greatest Hits");
     assert.equal(track?.navidromeEnrichment?.matchMethod, "edition-metadata-size");
-    assert.equal(
-      track?.targetRelativePath,
-      "The Beach Boys/The Beach Boys - Greatest Hits (2012)/The Beach Boys - Greatest Hits (2012) - 01 - That's Why God Made the Radio.flac"
-    );
   } finally {
     globalThis.fetch = originalFetch;
     await fs.rm(root, { force: true, recursive: true });
   }
 });
 
-test("scanner matches Navidrome metadata when album only differs by edition text", async () => {
+test("scanner matches the Navidrome index when album only differs by edition text", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "naviclean-scanner-navidrome-edition-"));
   const originalFetch = globalThis.fetch;
   const sourceRelativePath =
@@ -1105,9 +1094,6 @@ test("scanner matches Navidrome metadata when album only differs by edition text
     const track = result.tracks[0];
 
     assert.equal(result.tracks.length, 1);
-    assert.equal(track?.targetSource, "navidrome");
-    assert.equal(track?.albumArtist, "AC/DC");
-    assert.equal(track?.album, "High Voltage (international version)");
     assert.equal(track?.navidromeEnrichment?.matchMethod, "edition-metadata-size");
   } finally {
     globalThis.fetch = originalFetch;
@@ -1217,9 +1203,6 @@ test("scanner falls back to Navidrome search when album catalog misses an editio
     const track = result.tracks[0];
 
     assert.equal(result.tracks.length, 1);
-    assert.equal(track?.targetSource, "navidrome");
-    assert.equal(track?.albumArtist, "AC/DC");
-    assert.equal(track?.album, "High Voltage (Australian version)");
     assert.equal(track?.navidromeEnrichment?.matchMethod, "edition-metadata-size");
     assert.ok(result.warnings.some((warning) => warning.includes("matched through Navidrome search fallback")));
   } finally {
@@ -1539,17 +1522,19 @@ function settings(libraryPath: string): PrivateSettings {
         requestsPerMinute: 40
       }
     },
+    identification: {
+      acoustIdEnabled: false,
+      acoustIdApiKey: "",
+      useEmbeddedTagsAsHints: true,
+      usePathAsHints: true,
+      autoAcceptUniqueFingerprintMatches: true,
+      requireReviewBeforeFileChanges: true
+    },
+    // Tests never query MusicBrainz over the network.
+    musicbrainz: { textSearchEnabled: false, maxTextLookupsPerScan: 0, catalogSource: "musicbrainz" },
     naming: {
-      mode: "standard",
       libraryPath,
       recycleBinPath: path.join(libraryPath, ".naviclean-trash"),
-      artistFolderFormat: "{Album Artist Name}",
-      standardTrackFormat:
-        "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {track:00} - {Track Title}",
-      multiDiscTrackFormat:
-        "{Album Artist Name} - {Album Title} ({Release Year})/{Album Artist Name} - {Album Title} ({Release Year}) - {medium:00}-{track:00} - {Track Title}",
-      replaceIllegalCharacters: true,
-      colonReplacementFormat: 4
     },
     scan: {
       extensions: [".mp3"],

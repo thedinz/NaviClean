@@ -1,4 +1,4 @@
-import { constants, type Dirent } from "node:fs";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -10,6 +10,12 @@ import type {
   LibraryTrashResult,
   TrackFile
 } from "../shared/types.js";
+import {
+  createRecycleSession,
+  pruneEmptyDirectories,
+  recycleSessionFolderName,
+  safeRecycleBinPath
+} from "./file-ops.js";
 import type { PrivateSettings } from "./settings.js";
 import { isInsidePath, normalizeForMatch, sha1, toPosixRelative } from "./utils.js";
 
@@ -85,9 +91,7 @@ export async function trashLibraryTracks(
   const errors = trackIds
     .filter((id) => !selectedTrackIds.has(id))
     .map((id) => `${id}: track is no longer in the catalog`);
-  const libraryRoot = path.resolve(settings.naming.libraryPath);
-  const trashRoot = safeRecycleBinPath(settings);
-  const trashSessionRoot = path.join(trashRoot, new Date().toISOString().replace(/[:.]/g, "-"));
+  const session = createRecycleSession(settings);
   const removedTrackIds = new Set<string>();
   const touchedDirectories = new Set<string>();
   let trashed = 0;
@@ -95,21 +99,8 @@ export async function trashLibraryTracks(
   for (const track of selectedTracks) {
     const sourcePath = path.resolve(track.absolutePath);
 
-    if (!isInsidePath(libraryRoot, sourcePath) || sourcePath === libraryRoot) {
-      errors.push(`${track.relativePath}: only files inside the configured library can be recycled`);
-      continue;
-    }
-
     try {
-      const targetPath = path.join(trashSessionRoot, ...track.relativePath.split("/").filter(Boolean));
-
-      if (!isInsidePath(trashSessionRoot, targetPath) || targetPath === trashSessionRoot) {
-        errors.push(`${track.relativePath}: recycle target leaves the recycle session folder`);
-        continue;
-      }
-
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await moveFile(sourcePath, targetPath);
+      await session.recycle(sourcePath, track.relativePath);
       touchedDirectories.add(path.dirname(sourcePath));
       removedTrackIds.add(track.id);
       trashed += 1;
@@ -119,7 +110,7 @@ export async function trashLibraryTracks(
   }
 
   for (const directory of touchedDirectories) {
-    await pruneEmptyDirectories(libraryRoot, directory);
+    await pruneEmptyDirectories(session.libraryRoot, directory);
   }
 
   return {
@@ -161,8 +152,7 @@ export async function deleteEmptyLibraryFolders(
 
   const before = await listEmptyLibraryFolders(settings);
   const libraryRoot = path.resolve(settings.naming.libraryPath);
-  const trashRoot = safeRecycleBinPath(settings);
-  const trashSessionRoot = path.join(trashRoot, new Date().toISOString().replace(/[:.]/g, "-"));
+  const trashSessionRoot = path.join(safeRecycleBinPath(settings), recycleSessionFolderName());
   const currentFolders = new Map(before.folders.map((folder) => [folder.id, folder]));
   const errors: string[] = [...before.errors];
   let deleted = 0;
@@ -521,63 +511,6 @@ function pathMatchesExclusion(relativePath: string, exclusions: Set<string>) {
   }
 
   return false;
-}
-
-function safeRecycleBinPath(settings: PrivateSettings) {
-  const recycleBinPath = path.resolve(settings.naming.recycleBinPath);
-  const libraryPath = path.resolve(settings.naming.libraryPath);
-
-  if (recycleBinPath === path.parse(recycleBinPath).root) {
-    throw new Error("Recycle bin path cannot be a drive or filesystem root.");
-  }
-
-  if (recycleBinPath === libraryPath || isInsidePath(recycleBinPath, libraryPath)) {
-    throw new Error("Recycle bin path cannot be the library path or contain the library path.");
-  }
-
-  return recycleBinPath;
-}
-
-async function moveFile(source: string, target: string) {
-  try {
-    await fs.rename(source, target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EXDEV") {
-      throw error;
-    }
-
-    const stat = await fs.stat(source);
-    await fs.copyFile(source, target, constants.COPYFILE_EXCL);
-    await fs.chmod(target, stat.mode);
-    await fs.utimes(target, stat.atime, stat.mtime);
-    await fs.unlink(source);
-  }
-}
-
-async function pruneEmptyDirectories(root: string, startDirectory: string) {
-  let current = path.resolve(startDirectory);
-  const resolvedRoot = path.resolve(root);
-
-  while (current !== resolvedRoot && isInsidePath(resolvedRoot, current)) {
-    try {
-      await fs.rmdir(current);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-
-      if (code === "ENOENT") {
-        current = path.dirname(current);
-        continue;
-      }
-
-      if (code === "ENOTEMPTY" || code === "EEXIST") {
-        break;
-      }
-
-      throw error;
-    }
-
-    current = path.dirname(current);
-  }
 }
 
 async function moveEmptyDirectoryToTrash(source: string, target: string) {

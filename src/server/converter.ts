@@ -13,8 +13,11 @@ import type {
   TrackFile
 } from "../shared/types.js";
 import { loadCatalog } from "./catalog.js";
-import { scanLibrary } from "./scanner.js";
+import { moveFileNoOverwrite, TargetExistsError } from "./file-ops.js";
+import { withLibraryLock } from "./library-lock.js";
+import { scanAndWait } from "./scan-service.js";
 import type { PrivateSettings } from "./settings.js";
+import { moveTrackDecisions } from "./track-decisions.js";
 import { isInsidePath, toPosixRelative } from "./utils.js";
 
 type StoredAudioConvertJobItem = AudioConvertJobItem & {
@@ -263,10 +266,10 @@ async function runAudioConvertJob(settings: PrivateSettings, jobId: string) {
 
   updateJobCounts(job);
 
-  try {
-    await scanLibrary(settings);
-  } catch (error) {
-    job.errors.push(`Catalog refresh failed after conversion: ${errorMessage(error)}`);
+  // Go through the shared scan service so this refresh never runs alongside a user-started scan.
+  const scan = await scanAndWait();
+  if (scan.phase === "failed") {
+    job.errors.push(`Catalog refresh failed after conversion: ${scan.errors.join("; ")}`);
   }
 
   updateJobCounts(job);
@@ -309,11 +312,14 @@ async function runAudioConvertJobItem(
       throw new Error("ffmpeg produced an empty output file.");
     }
 
-    if (await canAccess(item.targetPath, constants.F_OK)) {
-      throw new Error(`Target already exists: ${item.targetRelativePath}`);
+    try {
+      await moveFileNoOverwrite(tempPath, item.targetPath);
+    } catch (error) {
+      if (error instanceof TargetExistsError) {
+        throw new Error(`Target already exists: ${item.targetRelativePath}`);
+      }
+      throw error;
     }
-
-    await fs.rename(tempPath, item.targetPath);
     await fs.utimes(item.targetPath, new Date(), new Date(item.sourceMtimeMs)).catch(() => undefined);
 
     try {
@@ -322,6 +328,11 @@ async function runAudioConvertJobItem(
       await fs.rm(item.targetPath, { force: true }).catch(() => undefined);
       throw new Error(`Converted output was created, but the original could not be deleted: ${errorMessage(error)}`);
     }
+
+    // The converted file is the same recording, so the user's metadata and skip decisions follow it.
+    await withLibraryLock(() =>
+      moveTrackDecisions([{ sourcePath: item.sourcePath, targetPath: item.targetPath, size: outputStats.size }])
+    );
 
     item.completedAt = new Date().toISOString();
     item.outputSize = outputStats.size;
@@ -608,9 +619,12 @@ export function formatFfmpegError(
 }
 
 function compactFfmpegDiagnostic(stderr: string, context: { sourcePath?: string; targetPath?: string }) {
-  const hiddenPaths = [context.sourcePath, context.targetPath]
-    .filter((filePath): filePath is string => Boolean(filePath))
-    .map((filePath) => path.resolve(filePath));
+  // Hide both the path as given and as resolved: ffmpeg echoes whichever form it was passed.
+  const hiddenPaths = Array.from(new Set(
+    [context.sourcePath, context.targetPath]
+      .filter((filePath): filePath is string => Boolean(filePath))
+      .flatMap((filePath) => [filePath, path.resolve(filePath)])
+  ));
 
   return stderr
     .split(/\r?\n/)

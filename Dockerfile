@@ -1,4 +1,6 @@
 FROM node:24-bookworm-slim AS build
+ARG VITE_APP_BRANCH=unknown
+ENV VITE_APP_BRANCH=$VITE_APP_BRANCH
 WORKDIR /app
 
 COPY package*.json ./
@@ -26,6 +28,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ffmpeg \
     gosu \
+    libchromaprint-tools \
     python3 \
     python3-pip \
   && rm -rf /var/lib/apt/lists/* \
@@ -42,4 +45,4 @@ RUN mkdir -p /data /music \
 EXPOSE 8080
 VOLUME ["/data", "/music"]
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["node", "dist/server/server/index.js"]
+CMD ["node", "--disable-warning=ExperimentalWarning", "dist/server/server/index.js"]

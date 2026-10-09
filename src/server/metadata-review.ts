@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { TrackFile } from "../shared/types.js";
-import { targetForTrack } from "./organizer.js";
+import { withIdentity } from "./identity.js";
 import type { PrivateSettings } from "./settings.js";
 import { isTrackKeepManaged } from "./trackkeep.js";
 
@@ -9,6 +9,10 @@ export function trustPathMetadataForFolder(
   tracks: TrackFile[],
   localTrackId: string
 ) {
+  if (!settings.identification.usePathAsHints) {
+    throw new Error("Filename and folder hints are disabled in Settings.");
+  }
+
   const selected = tracks.find((track) => track.id === localTrackId);
 
   if (!selected) {
@@ -41,19 +45,19 @@ export function trustPathMetadataForFolder(
       return track;
     }
 
-    const partialTrack = {
-      ...track,
-      organizeSkippedAt: undefined,
-      metadataConfidence: "trusted-path" as const,
-      issues: track.issues.filter((issue) => issue !== "Path-derived artist or album requires metadata review")
-    };
-    const target = targetForTrack(partialTrack, settings);
     updatedTrackIds.push(track.id);
-    return {
-      ...partialTrack,
-      targetPath: target.targetPath,
-      targetRelativePath: target.targetRelativePath
-    };
+    return withIdentity(track, settings, {
+      organizeSkippedAt: undefined,
+      metadataConfidence: "trusted-path",
+      // Mark the identity confirmed now; otherwise the organizer keeps the folder in review
+      // until the next scan re-derives this status.
+      identification: {
+        status: "user-confirmed",
+        source: "local-path",
+        message: "This metadata was explicitly confirmed by the user.",
+        fingerprint: track.identification?.fingerprint
+      }
+    });
   });
 
   return {
