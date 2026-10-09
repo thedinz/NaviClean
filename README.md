@@ -3,7 +3,7 @@
 NaviClean is a Docker-first cleaner and organizer for Navidrome music libraries.
 It scans a mounted music library, browses artists, albums, and tracks, previews clean artist/album/track paths, and only unlocks duplicate cleanup after organization is complete.
 
-## Latest changes on `dev` — September 28, 2026 (0.7.0)
+## 0.7.0 — October 9, 2026
 
 - **Native download engine:** Discover now searches MusicBrainz. Request an album or single tracks and NaviClean searches YouTube and JioSaavn, scores every result (penalising live, remix, cover, karaoke, sped-up, and re-upload versions; favouring official artist and Topic uploads), and downloads at score ≥ 80. Scores of 55–80 wait in a **Review** queue; anything lower goes to **Wanted**.
 - **Verification and quarantine:** every download must meet a per-codec bitrate floor, match the release track's length, and (with AcoustID on) fingerprint as the same song. A failing source is quarantined for that track and the next candidate is tried.
@@ -13,7 +13,7 @@ It scans a mounted music library, browses artists, albums, and tracks, previews 
 - **Faster, safer runtime:** scans reuse cached tags for unchanged files, read in parallel, and can be cancelled. All state lives in SQLite (`/data/naviclean.db`; old JSON files are imported once and kept as `*.migrated`). Download jobs and sign-in sessions survive restarts, failed sign-ins are throttled, and the default `admin`/`admin` password must be changed at first sign-in.
 - **Redesigned UI:** grouped navigation with live badges, a live activity bar driven by server-sent events, and new Discover, Downloads, Following, Upgrades, and sectioned Settings pages.
 
-## Changes on `dev` — September 14, 2026
+## Also in 0.7.0 — September 14, 2026
 
 - **Identity before organization:** optional AcoustID/MusicBrainz fingerprint matching, release selection, reusable confirmed identities, and canonical tag writing before moves. TrackKeep identities and prior user confirmations remain authoritative; Spotify matching can be switched off.
 - **Clearer dashboard and scan controls:** Library overview shows Tracks, Duplicate groups, Pending moves, and Identity review, with a three-step Cleanup workflow. Identity review counts tracks awaiting identity confirmation; Organize's broader **Needs action** filter also includes ready moves, conflicts, and missing files. The **Index & scans** panel separates NaviClean's **Run scan** from Navidrome's **Quick scan** and **Full scan**.
