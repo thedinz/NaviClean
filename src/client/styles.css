@@ -2900,6 +2900,22 @@ button.stat:hover {
   white-space: normal;
 }
 
+.metadata-review-summary.identification-confirmed {
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+  background: var(--success-soft);
+}
+
+.identification-confirmed .status-detail {
+  color: var(--success-text);
+}
+
+.identification-candidate.selected,
+.identification-candidate.selected:disabled {
+  border-color: var(--success);
+  color: var(--success-text);
+  opacity: 1;
+}
+
 .spotify-metadata-panel {
   width: min(460px, 70vw);
   padding: 10px;
