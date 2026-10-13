@@ -3,6 +3,10 @@
 NaviClean is a Docker-first cleaner and organizer for Navidrome music libraries.
 It scans a mounted music library, browses artists, albums, and tracks, previews clean artist/album/track paths, and only unlocks duplicate cleanup after organization is complete.
 
+## 0.7.1 — October 13, 2026
+
+- **Clearer release confirmation in Organize:** after you confirm a MusicBrainz release for a track, the chosen release is marked with a check and the panel turns green, with the other candidates still available if you want to switch. Before, a successful confirmation could look like nothing had happened.
+
 ## 0.7.0 — October 9, 2026
 
 - **Native download engine:** Discover now searches MusicBrainz. Request an album or single tracks and NaviClean searches YouTube and JioSaavn, scores every result (penalising live, remix, cover, karaoke, sped-up, and re-upload versions; favouring official artist and Topic uploads), and downloads at score ≥ 80. Scores of 55–80 wait in a **Review** queue; anything lower goes to **Wanted**.
