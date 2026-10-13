@@ -723,6 +723,7 @@ export function SpotifyMetadataResolver({
   const [skipBusy, setSkipBusy] = useState(false);
   const [identifyBusy, setIdentifyBusy] = useState<string | null>(null);
   const organizationSkipped = Boolean(item.organizeSkippedAt);
+  const confirmedCandidateId = confirmedIdentificationCandidateId(item.identification);
 
   const confirmIdentification = async (candidateId: string) => {
     if (!onIdentified) {
@@ -797,22 +798,33 @@ export function SpotifyMetadataResolver({
   return (
     <div className="spotify-metadata-resolver">
       {!organizationSkipped && item.identification?.source === "musicbrainz" && Boolean(item.identification.candidates?.length) && (
-        <div className="metadata-review-summary">
+        <div className={confirmedCandidateId ? "metadata-review-summary identification-confirmed" : "metadata-review-summary"}>
           <span className="status-detail">
-            {item.identification.candidateSource === "musicbrainz-search"
-              ? "Found by MusicBrainz search — confirm the right release"
-              : "Identified from the audio fingerprint"}
+            {confirmedCandidateId
+              ? "Release confirmed — pick another to change it"
+              : item.identification.candidateSource === "musicbrainz-search"
+                ? "Found by MusicBrainz search — confirm the right release"
+                : "Identified from the audio fingerprint"}
           </span>
           {item.identification.candidates?.slice(0, 6).map((candidate) => (
             <button
-              className="secondary-button compact-button identification-candidate"
+              className={
+                candidate.id === confirmedCandidateId
+                  ? "secondary-button compact-button identification-candidate selected"
+                  : "secondary-button compact-button identification-candidate"
+              }
               type="button"
               key={candidate.id}
-              disabled={disabled || Boolean(identifyBusy)}
+              aria-pressed={candidate.id === confirmedCandidateId}
+              disabled={disabled || Boolean(identifyBusy) || candidate.id === confirmedCandidateId}
               onClick={() => void confirmIdentification(candidate.id)}
               title={`MusicBrainz recording ${candidate.recordingId}${candidate.releaseId ? ` · release ${candidate.releaseId}` : ""}`}
             >
-              {identifyBusy === candidate.id ? <Loader2 className="spin" size={16} /> : <Fingerprint size={16} />}
+              {identifyBusy === candidate.id
+                ? <Loader2 className="spin" size={16} />
+                : candidate.id === confirmedCandidateId
+                  ? <Check size={16} />
+                  : <Fingerprint size={16} />}
               <span>
                 {candidate.artist} — {candidate.title} · {candidate.album}
                 {candidate.year ? ` (${candidate.year})` : ""}
@@ -1271,6 +1283,24 @@ export function selectOrganizeFilterAfterRefresh(current: OrganizePreviewFilter,
   }
 
   return "all";
+}
+
+/**
+ * The candidate a confirmed identity came from. Confirming keeps the candidate list so the release
+ * can still be changed, so the list has to show which one is already in effect.
+ */
+export function confirmedIdentificationCandidateId(identification: TrackFile["identification"]) {
+  if (
+    !identification?.releaseId ||
+    (identification.status !== "user-confirmed" && identification.status !== "fingerprint-and-release-confirmed")
+  ) {
+    return null;
+  }
+
+  // The first six are the ones shown; editions listed further down are not selectable.
+  const candidates = identification.candidates?.slice(0, 6) ?? [];
+  const sameRelease = candidates.filter((candidate) => candidate.releaseId === identification.releaseId);
+  return (sameRelease.find((candidate) => candidate.recordingId === identification.recordingId) ?? sameRelease[0])?.id ?? null;
 }
 
 export function selectedOrganizeTrashSelections(
