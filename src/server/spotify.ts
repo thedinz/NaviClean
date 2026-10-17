@@ -11,6 +11,7 @@ import type {
   SpotifyTrackSummary,
   TrackFile
 } from "../shared/types.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { PrivateSettings } from "./settings.js";
 import { mapWithConcurrency, normalizeForMatch } from "./utils.js";
 
@@ -67,6 +68,7 @@ type SpotifyToken = {
 let cachedToken: SpotifyToken | null = null;
 let requestWindowStartedAt = 0;
 let requestWindowCount = 0;
+const interactiveRequests = new AsyncLocalStorage<boolean>();
 const spotifyMetadataMatchCache = new Map<string, { expiresAt: number; match: SpotifyMetadataMatch }>();
 const spotifyMetadataMatchCacheTtlMs = 10 * 60 * 1000;
 const spotifyTrackDetailCache = new Map<string, { expiresAt: number; track: SpotifyTrack }>();
@@ -530,6 +532,15 @@ async function getSpotifyAccessToken(credentials: PrivateSettings["catalog"]["sp
   return cachedToken.accessToken;
 }
 
+/**
+ * Runs `work` as a request someone is waiting on in the UI. Its Spotify calls still count toward the
+ * per-minute budget, so background work backs off, but they never wait for the budget to refill.
+ * Spotify's own 429 responses are still honoured.
+ */
+export function runInteractiveSpotifyRequest<T>(work: () => Promise<T>) {
+  return interactiveRequests.run(true, work);
+}
+
 async function throttleSpotifyRequest(settings: PrivateSettings) {
   const requestsPerMinute = settings.catalog.discovery.requestsPerMinute;
   const now = Date.now();
@@ -539,7 +550,7 @@ async function throttleSpotifyRequest(settings: PrivateSettings) {
     requestWindowCount = 0;
   }
 
-  if (requestWindowCount >= requestsPerMinute) {
+  if (requestWindowCount >= requestsPerMinute && !interactiveRequests.getStore()) {
     const waitMs = Math.max(0, 60_000 - (now - requestWindowStartedAt));
     await new Promise((resolve) => setTimeout(resolve, waitMs));
     requestWindowStartedAt = Date.now();

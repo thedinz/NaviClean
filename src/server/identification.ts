@@ -409,6 +409,20 @@ export async function confirmIdentificationCandidate(
   };
 }
 
+let confirmedIdentityQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Remembers confirmed identities after the response is sent. Fingerprinting runs fpcalc on every
+ * updated file, which for a whole album folder takes long enough to hold up the review page. The
+ * path-based metadata override is saved before this, so nothing the next scan needs waits on it.
+ */
+export function queueConfirmedTrackIdentities(tracks: TrackFile[], source: "spotify" | "trusted-path") {
+  confirmedIdentityQueue = confirmedIdentityQueue
+    .then(() => rememberConfirmedTrackIdentities(tracks, source))
+    .catch((error) => console.error("Failed to remember confirmed track identities:", error));
+  return confirmedIdentityQueue;
+}
+
 export async function rememberConfirmedTrackIdentities(tracks: TrackFile[], source: "spotify" | "trusted-path") {
   const identities = IdentityStore.load();
   const cache = new FingerprintCache();

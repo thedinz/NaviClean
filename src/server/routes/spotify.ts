@@ -9,6 +9,7 @@ import {
   getSpotifyArtistDiscography,
   matchLibraryArtistsToSpotify,
   searchSpotifyArtists,
+  runInteractiveSpotifyRequest,
   searchSpotifyTrackMetadata,
   testSpotifyConnection
 } from "../spotify.js";
@@ -39,7 +40,8 @@ spotifyRouter.get("/spotify/tracks/search", route(async (req, res) => {
     ? ""
     : track.albumArtist || track.artist;
   const query = requestedQuery || [knownArtist, track.title].filter(Boolean).join(" ");
-  res.json(await searchSpotifyTrackMetadata(await loadSettings(), query));
+  const settings = await loadSettings();
+  res.json(await runInteractiveSpotifyRequest(() => searchSpotifyTrackMetadata(settings, query)));
 }));
 
 spotifyRouter.get("/spotify/library-artists", route(async (req, res) => {
