@@ -25,7 +25,9 @@ export async function resolveTrackMetadataFromSpotify(
   }
 
   const selected = await getSpotifyTrackMetadata(settings, spotifyTrackId);
-  const album = await getSpotifyAlbumDetail(settings, tracks, selected.albumId, {
+  // No local tracks: which album tracks are already in the library is not needed here, and checking
+  // that walks the whole catalog once per album track.
+  const album = await getSpotifyAlbumDetail(settings, [], selected.albumId, {
     hydrateTrackDetails: false
   });
   const selectedFolder = path.posix.dirname(selectedLocalTrack.relativePath.replace(/\\/g, "/"));
