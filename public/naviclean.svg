@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">NaviClean</title>
+  <rect width="512" height="512" rx="112" fill="#17211f"/>
+  <g transform="translate(256 248) scale(1.06) translate(-252 -282)">
+    <path d="M78 436h352" stroke="#2b3a36" stroke-width="10" stroke-linecap="round"/>
+    <path d="M84 424 L228 424 Q214 404 196 392 Q146 352 96 340 Q82 380 84 424 Z" fill="#f2b84b" stroke="#f2b84b" stroke-width="12" stroke-linejoin="round"/>
+    <path d="M98 350 L68 300" stroke="#f2b84b" stroke-width="22" stroke-linecap="round"/>
+    <path d="M422 128 L324 300" stroke="#e9f3ef" stroke-width="24" stroke-linecap="round"/>
+    <path d="M294 292 L354 324" stroke="#e9f3ef" stroke-width="30" stroke-linecap="round"/>
+    <path d="M290 312 L358 348 L372 428 L238 428 Z" fill="#1c8f84" stroke="#1c8f84" stroke-width="12" stroke-linejoin="round"/>
+    <path d="M304 344 L276 422 M328 356 L310 422 M350 366 L344 422" stroke="#17211f" stroke-width="8" stroke-linecap="round"/>
+    <g fill="#e9f3ef" transform="rotate(-14 180 290)">
+      <ellipse cx="166" cy="306" rx="25" ry="19" transform="rotate(-20 166 306)"/>
+      <rect x="181" y="206" width="13" height="102" rx="6.5"/>
+      <path d="M187 206 q46 12 40 60 q-6 -32 -40 -34 z"/>
+    </g>
+    <g stroke="#e9f3ef" stroke-width="10" stroke-linecap="round" opacity=".5">
+      <path d="M244 262 l34 -8"/><path d="M236 298 l28 -6"/>
+    </g>
+  </g>
+</svg>
