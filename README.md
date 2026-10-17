@@ -3,6 +3,11 @@
 NaviClean is a Docker-first cleaner and organizer for Navidrome music libraries.
 It scans a mounted music library, browses artists, albums, and tracks, previews clean artist/album/track paths, and only unlocks duplicate cleanup after organization is complete.
 
+## 0.7.2 — October 17, 2026
+
+- **Faster Spotify matches in Organize:** picking a track from **Find on Spotify** no longer waits for the background Spotify request budget, so it doesn't stall after a dozen or so tracks. Fingerprinting the matched folder now happens after the page updates, so you can move straight on to the next track.
+- **New logo:** a broom sweeping a music note into a dustpan, in the app, browser tab and Unraid template.
+
 ## 0.7.1 — October 13, 2026
 
 - **Clearer release confirmation in Organize:** after you confirm a MusicBrainz release for a track, the chosen release is marked with a check and the panel turns green, with the other candidates still available if you want to switch. Before, a successful confirmation could look like nothing had happened.
