@@ -6,7 +6,7 @@ import { buildDuplicateGroups, resolveDuplicates, resolveSelectedDuplicates } fr
 import { HttpError, mutation, optionalStringList, requireList, requireString, route, stringList } from "../http.js";
 import { crossCheckTracks } from "../organize-crosscheck.js";
 import { listOrganizeRuns, startOrganizeRun, tracksAfterUndo, undoOrganizeRun } from "../organize-journal.js";
-import { confirmIdentificationCandidate, rememberConfirmedTrackIdentities } from "../identification.js";
+import { confirmIdentificationCandidate, queueConfirmedTrackIdentities } from "../identification.js";
 import { trustPathMetadataForFolder } from "../metadata-review.js";
 import {
   buildWorkflowState,
@@ -17,6 +17,7 @@ import {
 import { setTrackOrganizationSkipped } from "../organize-skip.js";
 import { applyOrganizePlan, trashOrganizeCandidates } from "../organizer.js";
 import { loadSettings, type PrivateSettings } from "../settings.js";
+import { runInteractiveSpotifyRequest } from "../spotify.js";
 import { resolveTrackMetadataFromSpotify } from "../spotify-metadata.js";
 import { moveTrackDecisions, saveMetadataOverridesForTracks, saveSkipDecision } from "../track-decisions.js";
 
@@ -138,7 +139,9 @@ organizeRouter.post("/organize/spotify-match", mutation(async (req, res) => {
   const spotifyTrackId = requireString(req.body?.spotifyTrackId, "localTrackId and spotifyTrackId are required");
   const catalog = await loadCatalog();
   const settings = await loadSettings();
-  const resolution = await resolveTrackMetadataFromSpotify(settings, catalog.tracks, localTrackId, spotifyTrackId);
+  const resolution = await runInteractiveSpotifyRequest(() =>
+    resolveTrackMetadataFromSpotify(settings, catalog.tracks, localTrackId, spotifyTrackId)
+  );
   await rememberUserConfirmedTracks(resolution.tracks, resolution.updatedTrackIds, "spotify");
   const plan = await saveAndReplan(resolution.tracks, settings);
 
@@ -278,7 +281,7 @@ async function rememberUserConfirmedTracks(tracks: TrackFile[], updatedTrackIds:
   const updatedIds = new Set(updatedTrackIds);
   const updated = tracks.filter((track) => updatedIds.has(track.id));
   await saveMetadataOverridesForTracks(updated, source);
-  await rememberConfirmedTrackIdentities(updated, source);
+  void queueConfirmedTrackIdentities(updated, source);
 }
 
 async function trashOrganizeSelections(selections: OrganizeTrashSelection[]) {

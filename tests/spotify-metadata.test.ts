@@ -3,7 +3,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { resolveTrackMetadataFromSpotify } from "../src/server/spotify-metadata.js";
 import type { PrivateSettings } from "../src/server/settings.js";
-import { searchSpotifyTrackMetadata } from "../src/server/spotify.js";
+import { runInteractiveSpotifyRequest, searchSpotifyTrackMetadata } from "../src/server/spotify.js";
 import type { TrackFile } from "../src/shared/types.js";
 
 test("a confirmed Spotify match corrects unambiguous album siblings in the same source folder", async () => {
@@ -191,6 +191,42 @@ function jsonResponse(body: unknown, status = 200) {
     status
   });
 }
+
+test("an interactive Spotify search does not wait for the background request budget to refill", { timeout: 10_000 }, async () => {
+  const originalFetch = globalThis.fetch;
+  let searches = 0;
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.hostname === "accounts.spotify.com") {
+      return jsonResponse({ access_token: "budget-test-token", expires_in: 3600 });
+    }
+
+    if (url.pathname === "/v1/search") {
+      searches += 1;
+      return jsonResponse({ tracks: { items: [] } });
+    }
+
+    return jsonResponse({ error: `Unexpected request: ${url.pathname}` }, 404);
+  };
+
+  try {
+    const budgeted = settings();
+    budgeted.catalog.discovery.requestsPerMinute = 1;
+    // Spends the whole one-request budget (it still counts while interactive), so a further
+    // background request would wait for the minute to run out.
+    await runInteractiveSpotifyRequest(() => searchSpotifyTrackMetadata(budgeted, "first search"));
+
+    const startedAt = Date.now();
+    await runInteractiveSpotifyRequest(() => searchSpotifyTrackMetadata(budgeted, "second search"));
+
+    assert.equal(searches, 2);
+    assert.ok(Date.now() - startedAt < 5_000);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 function settings(): PrivateSettings {
   return {

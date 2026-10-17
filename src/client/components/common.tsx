@@ -115,7 +115,7 @@ export function LibraryAccessError({ messages, onOpenSettings }: { messages: str
 }
 
 export function BrandLogo() {
-  return <img className="brand-mark" src="/naviclean.png" alt="" width={42} height={42} />;
+  return <img className="brand-mark" src="/naviclean.svg" alt="" width={42} height={42} />;
 }
 
 export function MessageScreen({ title, message }: { title: string; message: string }) {
