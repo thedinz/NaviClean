@@ -1206,7 +1206,22 @@ export type OrganizeApplyResult = {
   /** Undo journal entry for this apply; null when nothing moved. */
   runId?: string | null;
   items: Array<OrganizePlanItem & { applied: boolean }>;
-  plan: OrganizePlan;
+};
+
+/** Progress of the organize apply running in the background; the Organize page polls it. */
+export type OrganizeApplyStatus = {
+  running: boolean;
+  label: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  total: number;
+  processed: number;
+  moved: number;
+  errors: string[];
+  /** Undo journal entry for this apply; null when nothing moved. */
+  runId: string | null;
+  /** Why the apply stopped before finishing, if it did. */
+  error: string | null;
 };
 
 export type OrganizeTrashResult = {

@@ -2,6 +2,7 @@ import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { getActiveAudioConvertJob } from "./converter.js";
 import { advancedDiagnosticsEnabled } from "./diagnostics.js";
 import { withLibraryLock } from "./library-lock.js";
+import { isOrganizeApplyRunning } from "./organize-apply.js";
 import { isScanRunning } from "./scan-service.js";
 
 type Handler = (req: Request, res: Response) => Promise<void> | void;
@@ -48,6 +49,10 @@ export function assertLibraryIdle() {
 
   if (getActiveAudioConvertJob()) {
     throw new HttpError(409, "An audio conversion is running. Wait for it to finish, then try again.");
+  }
+
+  if (isOrganizeApplyRunning()) {
+    throw new HttpError(409, "Organize is applying changes. Wait for it to finish, then try again.");
   }
 }
 

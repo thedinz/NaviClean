@@ -17,6 +17,8 @@ const { crossCheckTrack } = await import("../src/server/organize-crosscheck.js")
 const { listOrganizeRuns, startOrganizeRun, tracksAfterUndo, undoOrganizeRun } = await import("../src/server/organize-journal.js");
 const { normalizeSettings } = await import("../src/server/settings.js");
 const { closeDbForTests } = await import("../src/server/db.js");
+const { getOrganizeApplyStatus, isOrganizeApplyRunning, runOrganizeApply } = await import("../src/server/organize-apply.js");
+const { loadCatalog } = await import("../src/server/catalog.js");
 
 const libraryPath = path.join(root, "library");
 const settings = normalizeSettings({ naming: { libraryPath, recycleBinPath: path.join(root, "trash") } as never });
@@ -177,6 +179,39 @@ test("an organize run can be undone: old path, old tags, and empty folders remov
   const [moved] = tracksAfterUndo([{ ...planned, absolutePath: target.targetPath }], undo.moves, settings);
   assert.equal(moved.absolutePath, sourcePath);
   assert.equal(moved.relativePath, "Downloads/on my own.flac");
+});
+
+test("a background apply reports progress and records the moved files in the catalog", async (t) => {
+  if (!(await commandAvailable("ffmpeg")) || !(await commandAvailable("ffprobe"))) {
+    t.skip("ffmpeg and ffprobe are required");
+    return;
+  }
+
+  const sourcePath = path.join(libraryPath, "Background", "background.flac");
+  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+  await execFileAsync("ffmpeg", [
+    "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.1", "-c:a", "flac", sourcePath
+  ]);
+  const organizedTrack = track({ id: "background", absolutePath: sourcePath, relativePath: "Background/background.flac", title: "Background", identification: tagged() });
+  const target = targetForTrack(organizedTrack, settings);
+  const planned = { ...organizedTrack, targetPath: target.targetPath, targetRelativePath: target.targetRelativePath };
+  const plan = await buildOrganizePlan([planned], settings);
+
+  const job = runOrganizeApply(plan, [planned], "Background run");
+  // Running is set before the first await, so the request can reply with it right away.
+  assert.equal(isOrganizeApplyRunning(), true);
+  assert.equal(getOrganizeApplyStatus().total, 1);
+  await job;
+
+  const status = getOrganizeApplyStatus();
+  assert.equal(status.running, false);
+  assert.equal(status.processed, 1);
+  assert.equal(status.moved, 1);
+  assert.equal(status.error, null);
+  assert.ok(status.runId);
+  assert.ok(status.finishedAt);
+  const saved = (await loadCatalog()).tracks.find((entry) => entry.id === "background");
+  assert.equal(saved?.absolutePath, target.targetPath);
 });
 
 test("undo leaves a file alone when it changed after it was organized", async (t) => {
