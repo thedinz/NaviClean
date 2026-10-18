@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import type {
   LibraryStats,
-  OrganizeApplyResult,
+  OrganizeApplyStatus,
   OrganizeCrossCheckResult,
   OrganizeRunSummary,
   OrganizeUndoResult,
@@ -37,7 +37,7 @@ import type {
   TrackFile
 } from "../../shared/types";
 import { api, ApiError } from "../api";
-import { ActionProgress, EmptyState, PathDiff, StatusPill } from "../components/common";
+import { ActionProgress, DeterminateProgress, EmptyState, PathDiff, StatusPill } from "../components/common";
 import { collisionRoleLabel, isTrackKeepManaged, navidromeMatchMethodLabel, pathDirectory, pathFilename, pluralize, qualitySummary } from "../lib/format";
 import {
   ChangeDetails,
@@ -53,6 +53,7 @@ import {
 } from "./organize-review";
 
 const crossCheckBatchSize = 20;
+const applyStatusPollMs = 1000;
 
 /** Names an apply after the filters that selected it, so the history says what each run was. */
 export function applyRunLabel(changeFilter: OrganizeChangeFilter, textFilter: string, count: number) {
@@ -103,6 +104,7 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
   const [pageIndex, setPageIndex] = useState(0);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
+  const [applyProgress, setApplyProgress] = useState<OrganizeApplyStatus | null>(null);
   const [trashBusyKey, setTrashBusyKey] = useState<string | null>(null);
   const [selectedTrashCandidates, setSelectedTrashCandidates] = useState<Record<string, string>>({});
   const [changeFilter, setChangeFilter] = useState<OrganizeChangeFilter>("all");
@@ -111,6 +113,7 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
   const [lastRunId, setLastRunId] = useState<string | null>(null);
   const [crossCheckProgress, setCrossCheckProgress] = useState<{ done: number; total: number } | null>(null);
   const crossCheckStop = useRef(false);
+  const mounted = useRef(true);
   const previewRequestId = useRef(0);
   const lastScanFinishedAtRef = useRef<string | null | undefined>(undefined);
   const workflow = stats?.workflow;
@@ -224,9 +227,60 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
     }
   };
 
+  /** Polls the background apply until it finishes, then shows its result and the refreshed preview. */
+  const followApply = async (started: OrganizeApplyStatus) => {
+    setApplyBusy(true);
+    setApplyProgress(started);
+    let status = started;
+    try {
+      while (status.running && mounted.current) {
+        await new Promise((resolve) => window.setTimeout(resolve, applyStatusPollMs));
+        try {
+          status = await api<OrganizeApplyStatus>("/organize/apply/status");
+        } catch {
+          // A dropped poll is retried; the apply keeps going on the server.
+          continue;
+        }
+        if (status.startedAt !== started.startedAt) {
+          // The server restarted mid-apply; the history shows what was moved before it did.
+          setNotice("Lost track of the apply. Check Organize history for what was moved.");
+          await load({ clearNotice: false, resetPlan: true });
+          await loadRuns();
+          return;
+        }
+        setApplyProgress(status);
+      }
+      if (!mounted.current) {
+        return;
+      }
+
+      const errorSuffix = status.errors.length ? `, ${status.errors.length} errors` : "";
+      setNotice(
+        status.error
+          ? `Apply stopped: ${status.error.replace(/\.$/, "")}. ${status.moved} moved before it stopped. Preview refreshed.`
+          : `${status.moved} moved${errorSuffix}. Preview refreshed.`
+      );
+      setApplyErrors(status.errors);
+      setLastRunId(status.runId);
+      await load({ clearNotice: false, resetPlan: true });
+      await loadRuns();
+    } finally {
+      setApplyBusy(false);
+      setApplyProgress(null);
+    }
+  };
+
   useEffect(() => {
+    mounted.current = true;
     void load({ quick: true });
     void loadRuns();
+    // Pick up an apply started before this page was opened or reloaded.
+    void api<OrganizeApplyStatus>("/organize/apply/status")
+      .then((status) => (status.running ? followApply(status) : undefined))
+      .catch(() => undefined);
+    return () => {
+      mounted.current = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -260,8 +314,10 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
     setNotice(null);
     setApplyErrors([]);
     setLastRunId(null);
+    let started: OrganizeApplyStatus;
     try {
-      const result = await api<OrganizeApplyResult>("/organize/apply", {
+      // The server confirms the reviewed plan and replies at once; the moves run in the background.
+      started = await api<OrganizeApplyStatus>("/organize/apply", {
         method: "POST",
         body: JSON.stringify({
           fingerprint: plan.fingerprint,
@@ -269,13 +325,6 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
           ...(applyingSubset ? { itemIds: readyInView.map((item) => item.id) } : {})
         })
       });
-      const errorSuffix = result.errors.length ? `, ${result.errors.length} errors` : "";
-      setNotice(`${result.moved} moved${errorSuffix}. Preview refreshed.`);
-      setApplyErrors(result.errors);
-      setLastRunId(result.runId ?? null);
-
-      await load({ clearNotice: false, resetPlan: true });
-      await loadRuns();
     } catch (caught) {
       // A 409 means the plan changed since it was reviewed; show the refreshed plan instead.
       const changedPlan = caught instanceof ApiError && caught.status === 409
@@ -286,9 +335,10 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
         showMutationPlan(changedPlan);
       }
       setNotice((caught as Error).message);
-    } finally {
       setApplyBusy(false);
+      return;
     }
+    await followApply(started);
   };
 
   const undoRun = async (run: OrganizeRunSummary) => {
@@ -440,7 +490,12 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
           </button>
         </div>
       </div>
-      {(previewBusy || applyBusy || trashBusyKey) && (
+      {applyProgress && applyProgress.total > 0 ? (
+        <DeterminateProgress
+          label={`Applying organization plan: ${applyProgress.processed.toLocaleString()} of ${applyProgress.total.toLocaleString()} files`}
+          value={(applyProgress.processed / applyProgress.total) * 100}
+        />
+      ) : (previewBusy || applyBusy || trashBusyKey) && (
         <ActionProgress
           label={trashBusyKey ? "Moving selected files to recycle bin" : applyBusy ? "Applying organization plan" : "Building organization preview"}
         />

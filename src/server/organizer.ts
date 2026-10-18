@@ -43,7 +43,6 @@ type PlannedOrganizeItem = {
   targetKey: string;
   track: TrackFile;
 };
-type OrganizeMoveResult = Omit<OrganizeApplyResult, "plan">;
 
 export function targetForTrack(track: TrackFile, settings: PrivateSettings) {
   const extension = track.extension.startsWith(".") ? track.extension : `.${track.extension}`;
@@ -413,9 +412,10 @@ export type OrganizeJournalEntry = {
 export async function applyOrganizePlan(
   plan: OrganizePlan,
   tracks: TrackFile[] = [],
-  journal?: (entry: OrganizeJournalEntry) => void
-): Promise<OrganizeMoveResult> {
-  const result: OrganizeMoveResult = {
+  journal?: (entry: OrganizeJournalEntry) => void,
+  onProgress?: (processed: number) => void
+): Promise<OrganizeApplyResult> {
+  const result: OrganizeApplyResult = {
     moved: 0,
     skipped: 0,
     errors: [],
@@ -460,6 +460,7 @@ export async function applyOrganizePlan(
       result.errors.push(`${item.sourceRelativePath}: ${(error as Error).message}`);
       result.items.push({ ...item, applied: false });
     }
+    onProgress?.(result.items.length);
   }
 
   return result;
