@@ -214,6 +214,30 @@ test("a background apply reports progress and records the moved files in the cat
   assert.equal(saved?.absolutePath, target.targetPath);
 });
 
+test("an uncatalogued file already at the target is scored from its audio", async (t) => {
+  if (!(await commandAvailable("ffmpeg"))) {
+    t.skip("ffmpeg is required");
+    return;
+  }
+
+  const sourcePath = path.join(libraryPath, "Collide", "collide.flac");
+  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+  await fs.writeFile(sourcePath, "source");
+  const collidingTrack = track({ id: "collide", absolutePath: sourcePath, relativePath: "Collide/collide.flac", title: "Collide", extension: ".mp3", identification: tagged() });
+  const target = targetForTrack(collidingTrack, settings);
+  await fs.mkdir(path.dirname(target.targetPath), { recursive: true });
+  await execFileAsync("ffmpeg", [
+    "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "libmp3lame", "-b:a", "128k", "-f", "mp3", target.targetPath
+  ]);
+  const planned = { ...collidingTrack, targetPath: target.targetPath, targetRelativePath: target.targetRelativePath };
+
+  const plan = await buildOrganizePlan([planned], settings);
+  const existing = plan.items[0].collision?.candidates.find((candidate) => candidate.role === "existing-target");
+  assert.ok(existing?.bitrate);
+  assert.equal(typeof existing?.qualityScore, "number");
+  assert.ok(existing!.qualityScore! > 550);
+});
+
 test("undo leaves a file alone when it changed after it was organized", async (t) => {
   if (!(await commandAvailable("ffmpeg")) || !(await commandAvailable("ffprobe"))) {
     t.skip("ffmpeg and ffprobe are required");

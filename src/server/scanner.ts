@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isConfirmedIdentityStatus } from "../shared/identity.js";
 import type { NavidromeMetadataEnrichment, NavidromeMetadataMatchMethod, ScanStatus, TrackFile } from "../shared/types.js";
-import { AudioMetadataCache, musicBrainzIdsFromMetadata, readAudioMetadata, type AudioMetadata } from "./audio-metadata.js";
+import { AudioMetadataCache, isLosslessFormat, musicBrainzIdsFromMetadata, qualityScore, readAudioMetadata, type AudioMetadata } from "./audio-metadata.js";
 import { saveCatalog } from "./catalog.js";
 import { identifyTracks } from "./identification.js";
 import { pathReviewIssue, withIdentity } from "./identity.js";
@@ -43,19 +43,6 @@ type ProgressHandler = (status: Partial<ScanStatus>) => void;
 type ParsedCommonTags = IAudioMetadata["common"];
 type StructuredPathIdentityReason = "missing-tags" | "placeholder-tags" | "conflicting-tags";
 
-const extensionQuality: Record<string, number> = {
-  ".flac": 1000,
-  ".alac": 960,
-  ".wav": 920,
-  ".aiff": 900,
-  ".aif": 900,
-  ".opus": 760,
-  ".ogg": 720,
-  ".m4a": 680,
-  ".aac": 650,
-  ".mp3": 550,
-  ".wma": 420
-};
 export class ScanCancelledError extends Error {
   constructor() {
     super("The scan was cancelled. Files read so far are cached, so the next scan resumes quickly.");
@@ -594,7 +581,7 @@ async function readTrack(
   const bitsPerSample = typeof format?.bitsPerSample === "number" ? format.bitsPerSample : null;
   const codec = cleanNullable(format?.codec);
   const container = cleanNullable(format?.container);
-  const lossless = Boolean(format?.lossless || [".flac", ".alac", ".wav", ".aiff", ".aif"].includes(extension));
+  const lossless = isLosslessFormat(extension, format);
   const managedBy = trackKeepIdentity ? "trackkeep" : undefined;
 
   if (artist === "Unknown Artist") {
@@ -681,13 +668,6 @@ async function readTrack(
   } satisfies TrackFile;
 
   return withIdentity(partialTrack, settings);
-}
-
-function qualityScore(extension: string, bitrate: number | null, bitsPerSample: number | null, lossless: boolean) {
-  const base = extensionQuality[extension] || 100;
-  const bitrateBonus = bitrate ? Math.min(240, Math.round(bitrate / 1000)) : 0;
-  const bitDepthBonus = bitsPerSample ? bitsPerSample * 4 : 0;
-  return base + bitrateBonus + bitDepthBonus + (lossless ? 100 : 0);
 }
 
 function fileId(filePath: string, size: number, mtimeMs: number) {

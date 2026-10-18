@@ -123,6 +123,34 @@ export function slimAudioMetadata(parsed: Awaited<ReturnType<typeof parseFile>>)
   };
 }
 
+const extensionQuality: Record<string, number> = {
+  ".flac": 1000,
+  ".alac": 960,
+  ".wav": 920,
+  ".aiff": 900,
+  ".aif": 900,
+  ".opus": 760,
+  ".ogg": 720,
+  ".m4a": 680,
+  ".aac": 650,
+  ".mp3": 550,
+  ".wma": 420
+};
+
+/** Ranks how good a copy of a track is; higher is better. Used to pick which duplicate to keep. */
+export function qualityScore(extension: string, bitrate: number | null, bitsPerSample: number | null, lossless: boolean) {
+  const base = extensionQuality[extension] || 100;
+  const bitrateBonus = bitrate ? Math.min(240, Math.round(bitrate / 1000)) : 0;
+  const bitDepthBonus = bitsPerSample ? bitsPerSample * 4 : 0;
+  return base + bitrateBonus + bitDepthBonus + (lossless ? 100 : 0);
+}
+
+const losslessExtensions = new Set([".flac", ".alac", ".wav", ".aiff", ".aif"]);
+
+export function isLosslessFormat(extension: string, format: AudioMetadata["format"] | undefined) {
+  return Boolean(format?.lossless || losslessExtensions.has(extension));
+}
+
 const mbidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** MusicBrainz identifiers written by Picard, beets, or NaviClean itself. Invalid values are ignored. */

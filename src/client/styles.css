@@ -2998,6 +2998,26 @@ button.stat:hover {
   overflow-wrap: anywhere;
 }
 
+.collision-candidate .collision-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  vertical-align: 1px;
+}
+
+.collision-tag.keep {
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.collision-tag.recycle {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 /* ---------- Duplicates, convert, trash ---------- */
 
 .duplicate-list {
