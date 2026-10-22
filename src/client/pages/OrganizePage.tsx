@@ -39,6 +39,7 @@ import type {
 import { api, ApiError } from "../api";
 import { ActionProgress, DeterminateProgress, EmptyState, PathDiff, StatusPill } from "../components/common";
 import { collisionRoleLabel, isTrackKeepManaged, navidromeMatchMethodLabel, pathDirectory, pathFilename, pluralize, qualitySummary } from "../lib/format";
+import { rankCollisionCandidates, withSuggestedTrashCandidates } from "../lib/organize-collisions";
 import {
   ChangeDetails,
   ChangeFilterBar,
@@ -173,7 +174,9 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
     setPlan(nextPlan);
     setPageIndex(0);
     setOrganizeFilter((current) => selectOrganizeFilterAfterRefresh(current, nextPlan));
-    setSelectedTrashCandidates((current) => pruneSelectedTrashCandidates(nextPlan.items, current));
+    setSelectedTrashCandidates((current) =>
+      withSuggestedTrashCandidates(nextPlan.items, pruneSelectedTrashCandidates(nextPlan.items, current))
+    );
   };
 
   const showMutationPlan = (nextPlan: OrganizePlan) => {
@@ -702,14 +705,10 @@ export function OrganizePage({ stats, onChanged }: { stats: LibraryStats | null;
                               selectedCandidateId={selectedTrashCandidates[item.id] || ""}
                               onSelect={(candidate) => {
                                 setSelectedTrashCandidates((current) => {
-                                  if (!candidate) {
-                                    const { [item.id]: _removed, ...next } = current;
-                                    return next;
-                                  }
-
+                                  // "" records that the reviewer cleared the suggestion, so a refresh does not re-select it.
                                   return {
                                     ...current,
-                                    [item.id]: candidate.id
+                                    [item.id]: candidate?.id ?? ""
                                   };
                                 });
                               }}
@@ -1099,6 +1098,7 @@ export function CollisionCandidates({
   onSelect: (candidate: OrganizeCollisionCandidate | null) => void;
 }) {
   const candidates = item.collision?.candidates || [];
+  const bestCandidateId = rankCollisionCandidates(candidates)?.[0].id;
 
   return (
     <div className="collision-candidates">
@@ -1114,7 +1114,14 @@ export function CollisionCandidates({
               onChange={() => onSelect(selected ? null : candidate)}
             />
             <div>
-              <strong>{collisionRoleLabel(candidate)}</strong>
+              <strong>
+                {collisionRoleLabel(candidate)}
+                {selected ? (
+                  <span className="collision-tag recycle">Recycle</span>
+                ) : candidate.id === bestCandidateId && (
+                  <span className="collision-tag keep">Best quality</span>
+                )}
+              </strong>
               <span>{candidate.relativePath}</span>
               <span>{qualitySummary(candidate)}</span>
             </div>
@@ -1371,7 +1378,9 @@ export function selectedOrganizeTrashSelections(
 export function pruneSelectedTrashCandidates(items: OrganizePreviewItem[], selectedCandidates: Record<string, string>) {
   return Object.fromEntries(
     Object.entries(selectedCandidates).filter(([itemId, candidateId]) =>
-      itemHasCollisionCandidate(items, itemId, candidateId)
+      candidateId
+        ? itemHasCollisionCandidate(items, itemId, candidateId)
+        : items.some((item) => item.id === itemId && item.collision)
     )
   );
 }
