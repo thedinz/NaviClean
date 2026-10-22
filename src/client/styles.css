@@ -2886,6 +2886,17 @@ button.stat:hover {
   background: var(--warning-soft);
 }
 
+/* Fingerprints can match many editions; about six rows show before the list scrolls. */
+.identification-candidates {
+  display: grid;
+  grid-auto-rows: max-content;
+  gap: 8px;
+  max-height: 340px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
 .metadata-review-summary strong {
   overflow-wrap: anywhere;
 }
