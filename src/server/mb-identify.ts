@@ -235,8 +235,11 @@ async function recordingCandidatesForTrack(track: TrackFile) {
       perGroup.set(key, candidate);
     }
   }
-  return [...perGroup.values()].slice(0, 6);
+  return [...perGroup.values()].slice(0, searchCandidateLimit);
 }
+
+// The resolver list scrolls, so it can offer more albums than fit on screen.
+export const searchCandidateLimit = 15;
 
 export const recordingSearchLimit = 12;
 

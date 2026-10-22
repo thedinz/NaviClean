@@ -861,33 +861,35 @@ export function SpotifyMetadataResolver({
                 ? "Found by MusicBrainz search — confirm the right release"
                 : "Identified from the audio fingerprint"}
           </span>
-          {item.identification.candidates?.slice(0, 6).map((candidate) => (
-            <button
-              className={
-                candidate.id === confirmedCandidateId
-                  ? "secondary-button compact-button identification-candidate selected"
-                  : "secondary-button compact-button identification-candidate"
-              }
-              type="button"
-              key={candidate.id}
-              aria-pressed={candidate.id === confirmedCandidateId}
-              disabled={disabled || Boolean(identifyBusy) || candidate.id === confirmedCandidateId}
-              onClick={() => void confirmIdentification(candidate.id)}
-              title={`MusicBrainz recording ${candidate.recordingId}${candidate.releaseId ? ` · release ${candidate.releaseId}` : ""}`}
-            >
-              {identifyBusy === candidate.id
-                ? <Loader2 className="spin" size={16} />
-                : candidate.id === confirmedCandidateId
-                  ? <Check size={16} />
-                  : <Fingerprint size={16} />}
-              <span>
-                {candidate.artist} — {candidate.title} · {candidate.album}
-                {candidate.year ? ` (${candidate.year})` : ""}
-                {candidate.trackNumber ? ` · #${candidate.trackNumber}` : ""}
-                {` · ${Math.round(candidate.score * 100)}%`}
-              </span>
-            </button>
-          ))}
+          <div className="identification-candidates">
+            {item.identification.candidates?.map((candidate) => (
+              <button
+                className={
+                  candidate.id === confirmedCandidateId
+                    ? "secondary-button compact-button identification-candidate selected"
+                    : "secondary-button compact-button identification-candidate"
+                }
+                type="button"
+                key={candidate.id}
+                aria-pressed={candidate.id === confirmedCandidateId}
+                disabled={disabled || Boolean(identifyBusy) || candidate.id === confirmedCandidateId}
+                onClick={() => void confirmIdentification(candidate.id)}
+                title={`MusicBrainz recording ${candidate.recordingId}${candidate.releaseId ? ` · release ${candidate.releaseId}` : ""}`}
+              >
+                {identifyBusy === candidate.id
+                  ? <Loader2 className="spin" size={16} />
+                  : candidate.id === confirmedCandidateId
+                    ? <Check size={16} />
+                    : <Fingerprint size={16} />}
+                <span>
+                  {candidate.artist} — {candidate.title} · {candidate.album}
+                  {candidate.year ? ` (${candidate.year})` : ""}
+                  {candidate.trackNumber ? ` · #${candidate.trackNumber}` : ""}
+                  {` · ${Math.round(candidate.score * 100)}%`}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
       {!isTrackKeepManaged(item.managedBy) && item.metadataConfidence === "path-suggestion" && !organizationSkipped && (
@@ -1352,8 +1354,7 @@ export function confirmedIdentificationCandidateId(identification: TrackFile["id
     return null;
   }
 
-  // The first six are the ones shown; editions listed further down are not selectable.
-  const candidates = identification.candidates?.slice(0, 6) ?? [];
+  const candidates = identification.candidates ?? [];
   const sameRelease = candidates.filter((candidate) => candidate.releaseId === identification.releaseId);
   return (sameRelease.find((candidate) => candidate.recordingId === identification.recordingId) ?? sameRelease[0])?.id ?? null;
 }
