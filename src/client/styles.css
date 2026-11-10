@@ -2927,6 +2927,12 @@ button.stat:hover {
   opacity: 1;
 }
 
+/* An automatic match the user still has to confirm: highlighted, and still clickable. */
+.identification-candidate.suggested {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
 .spotify-metadata-panel {
   width: min(460px, 70vw);
   padding: 10px;
