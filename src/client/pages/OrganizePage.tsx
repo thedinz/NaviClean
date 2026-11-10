@@ -39,6 +39,7 @@ import type {
 import { api, ApiError } from "../api";
 import { ActionProgress, DeterminateProgress, EmptyState, PathDiff, StatusPill } from "../components/common";
 import { collisionRoleLabel, isTrackKeepManaged, navidromeMatchMethodLabel, pathDirectory, pathFilename, pluralize, qualitySummary } from "../lib/format";
+import { matchedIdentificationCandidate } from "../lib/identification-candidates";
 import { rankCollisionCandidates, withSuggestedTrashCandidates } from "../lib/organize-collisions";
 import {
   ChangeDetails,
@@ -765,7 +766,7 @@ export function SpotifyMetadataResolver({
   onTrusted,
   onSkipped
 }: {
-  item: SpotifyResolvableItem;
+  item: SpotifyResolvableItem & Partial<Pick<OrganizePreviewItem, "status">>;
   disabled: boolean;
   onResolved: (result: OrganizeSpotifyMatchResult) => void;
   onIdentified?: (result: OrganizeIdentificationMatchResult) => void;
@@ -777,7 +778,9 @@ export function SpotifyMetadataResolver({
   const [skipBusy, setSkipBusy] = useState(false);
   const [identifyBusy, setIdentifyBusy] = useState<string | null>(null);
   const organizationSkipped = Boolean(item.organizeSkippedAt);
-  const confirmedCandidateId = confirmedIdentificationCandidateId(item.identification);
+  const matchedCandidate = matchedIdentificationCandidate(item.identification);
+  const confirmedCandidateId = matchedCandidate?.confirmed ? matchedCandidate.id : null;
+  const suggestedCandidateId = matchedCandidate && !matchedCandidate.confirmed ? matchedCandidate.id : null;
 
   const confirmIdentification = async (candidateId: string) => {
     if (!onIdentified) {
@@ -856,6 +859,10 @@ export function SpotifyMetadataResolver({
           <span className="status-detail">
             {confirmedCandidateId
               ? "Release confirmed — pick another to change it"
+              : suggestedCandidateId && item.status === "metadata-review"
+                ? "Matched by fingerprint — click the highlighted release to confirm it"
+              : suggestedCandidateId
+                ? "Matched by fingerprint"
               : item.identification.candidateSource === "musicbrainz-search"
                 ? "Found by MusicBrainz search — confirm the right release"
                 : "Identified from the audio fingerprint"}
@@ -866,7 +873,9 @@ export function SpotifyMetadataResolver({
                 className={
                   candidate.id === confirmedCandidateId
                     ? "secondary-button compact-button identification-candidate selected"
-                    : "secondary-button compact-button identification-candidate"
+                    : candidate.id === suggestedCandidateId
+                      ? "secondary-button compact-button identification-candidate suggested"
+                      : "secondary-button compact-button identification-candidate"
                 }
                 type="button"
                 key={candidate.id}
@@ -1353,19 +1362,6 @@ export function selectOrganizeFilterAfterRefresh(current: OrganizePreviewFilter,
  * The candidate a confirmed identity came from. Confirming keeps the candidate list so the release
  * can still be changed, so the list has to show which one is already in effect.
  */
-export function confirmedIdentificationCandidateId(identification: TrackFile["identification"]) {
-  if (
-    !identification?.releaseId ||
-    (identification.status !== "user-confirmed" && identification.status !== "fingerprint-and-release-confirmed")
-  ) {
-    return null;
-  }
-
-  const candidates = identification.candidates ?? [];
-  const sameRelease = candidates.filter((candidate) => candidate.releaseId === identification.releaseId);
-  return (sameRelease.find((candidate) => candidate.recordingId === identification.recordingId) ?? sameRelease[0])?.id ?? null;
-}
-
 export function selectedOrganizeTrashSelections(
   items: OrganizePreviewItem[],
   selectedCandidates: Record<string, string>
