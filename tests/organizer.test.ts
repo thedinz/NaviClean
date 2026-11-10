@@ -840,6 +840,8 @@ test("trashing an organize existing-file conflict refreshes the plan", async () 
     assert.equal(plan.summary.conflicts, 1);
     assert.equal(sourceItem?.status, "conflict");
     assert.ok(existingTargetCandidate);
+    // Not a readable audio file, so it has no score and the page suggests nothing to remove.
+    assert.equal(existingTargetCandidate.qualityScore, null);
 
     const result = await trashOrganizeCandidate(testSettings, tracks, "copy", existingTargetCandidate.id);
 

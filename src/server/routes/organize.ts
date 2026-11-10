@@ -1,11 +1,11 @@
 import { Router } from "express";
-import fs from "node:fs/promises";
 import type { OrganizeTrashSelection, TrackFile } from "../../shared/types.js";
 import { loadCatalog, saveCatalog, type Catalog } from "../catalog.js";
 import { buildDuplicateGroups, resolveDuplicates, resolveSelectedDuplicates } from "../duplicates.js";
-import { HttpError, mutation, optionalStringList, requireList, requireString, route, stringList } from "../http.js";
+import { assertLibraryIdle, HttpError, mutation, optionalStringList, requireList, requireString, route, stringList } from "../http.js";
+import { getOrganizeApplyStatus, runOrganizeApply } from "../organize-apply.js";
 import { crossCheckTracks } from "../organize-crosscheck.js";
-import { listOrganizeRuns, startOrganizeRun, tracksAfterUndo, undoOrganizeRun } from "../organize-journal.js";
+import { listOrganizeRuns, tracksAfterUndo, undoOrganizeRun } from "../organize-journal.js";
 import { confirmIdentificationCandidate, queueConfirmedTrackIdentities } from "../identification.js";
 import { trustPathMetadataForFolder } from "../metadata-review.js";
 import {
@@ -15,7 +15,8 @@ import {
   rebuildOrganizeEvaluation
 } from "../organize-service.js";
 import { setTrackOrganizationSkipped } from "../organize-skip.js";
-import { applyOrganizePlan, trashOrganizeCandidates } from "../organizer.js";
+import { trashOrganizeCandidates } from "../organizer.js";
+import { withLibraryLock } from "../library-lock.js";
 import { loadSettings, type PrivateSettings } from "../settings.js";
 import { runInteractiveSpotifyRequest } from "../spotify.js";
 import { resolveTrackMetadataFromSpotify } from "../spotify-metadata.js";
@@ -38,68 +39,44 @@ organizeRouter.post("/organize/preview", route(async (req, res) => {
   res.json(evaluation.plan);
 }));
 
-organizeRouter.post("/organize/apply", mutation(async (req, res) => {
-  const reviewedFingerprint = String(req.body?.fingerprint || "");
-  const catalog = await loadCatalog();
-  const settings = await loadSettings();
-  // Re-plan against the disk instead of trusting the cache: files may have appeared at targets
-  // since the preview, and only the moves the user actually reviewed may be applied.
-  const planned = await rebuildOrganizeEvaluation(catalog, settings);
-  const plan = planned.plan;
+// Not a `mutation`: a large apply takes minutes, longer than a reverse proxy or browser keeps a
+// request open. The reply comes once the reviewed plan is confirmed, the moves continue under
+// the library lock, and the page polls /organize/apply/status until they finish.
+organizeRouter.post("/organize/apply", route(async (req, res) => {
+  assertLibraryIdle();
+  await withLibraryLock(async () => {
+    assertLibraryIdle();
+    const reviewedFingerprint = String(req.body?.fingerprint || "");
+    const catalog = await loadCatalog();
+    const settings = await loadSettings();
+    // Re-plan against the disk instead of trusting the cache: files may have appeared at targets
+    // since the preview, and only the moves the user actually reviewed may be applied.
+    const planned = await rebuildOrganizeEvaluation(catalog, settings);
+    const plan = planned.plan;
 
-  if (!reviewedFingerprint || plan.fingerprint !== reviewedFingerprint) {
-    throw new HttpError(
-      409,
-      "The organize plan changed since it was reviewed. Nothing was moved; review the refreshed preview and apply again.",
-      { plan }
+    if (!reviewedFingerprint || plan.fingerprint !== reviewedFingerprint) {
+      throw new HttpError(
+        409,
+        "The organize plan changed since it was reviewed. Nothing was moved; review the refreshed preview and apply again.",
+        { plan }
+      );
+    }
+
+    // A batch applies only the chosen items, but the whole reviewed plan must still be unchanged.
+    const itemIds = optionalStringList(req.body?.itemIds);
+    const batch = itemIds ? new Set(itemIds) : null;
+    const job = runOrganizeApply(
+      batch ? { ...plan, items: plan.items.filter((item) => batch.has(item.id)) } : plan,
+      planned.tracks,
+      String(req.body?.label || "").trim().slice(0, 120) || "Organize"
     );
-  }
+    res.status(202).json(getOrganizeApplyStatus());
+    await job;
+  });
+}));
 
-  // A batch applies only the chosen items, but the whole reviewed plan must still be unchanged.
-  const itemIds = optionalStringList(req.body?.itemIds);
-  const batch = itemIds ? new Set(itemIds) : null;
-  const run = startOrganizeRun(String(req.body?.label || "").trim().slice(0, 120) || "Organize");
-  const result = await applyOrganizePlan(
-    batch ? { ...plan, items: plan.items.filter((item) => batch.has(item.id)) } : plan,
-    planned.tracks,
-    run.record
-  );
-  const runId = run.close();
-  let tracks = planned.tracks;
-  let latestCatalog = catalog;
-
-  if (result.moved > 0) {
-    // Canonical retagging rewrites files before they move, so record their new size and mtime;
-    // decisions and the catalog would otherwise describe the pre-retag file.
-    const moved = await Promise.all(
-      result.items
-        .filter((item) => item.applied)
-        .map(async (item) => ({ item, stat: await fs.stat(item.targetPath) }))
-    );
-    await moveTrackDecisions(
-      moved.map(({ item, stat }) => ({ sourcePath: item.sourcePath, targetPath: item.targetPath, size: stat.size }))
-    );
-    const movedById = new Map(moved.map((entry) => [entry.item.id, entry]));
-    tracks = planned.tracks.map((track) => {
-      const entry = movedById.get(track.id);
-      return entry
-        ? {
-            ...track,
-            absolutePath: entry.item.targetPath,
-            relativePath: entry.item.targetRelativePath,
-            targetPath: entry.item.targetPath,
-            targetRelativePath: entry.item.targetRelativePath,
-            size: entry.stat.size,
-            mtimeMs: entry.stat.mtimeMs
-          }
-        : track;
-    });
-    latestCatalog = await saveCatalog(tracks);
-    invalidateOrganizeEvaluationCache();
-  }
-
-  const refreshed = await rebuildOrganizeEvaluation({ ...latestCatalog, tracks }, settings);
-  res.json({ ...result, runId, plan: refreshed.plan });
+organizeRouter.get("/organize/apply/status", route(async (_req, res) => {
+  res.json(getOrganizeApplyStatus());
 }));
 
 organizeRouter.get("/organize/runs", route(async (_req, res) => {

@@ -12,6 +12,7 @@ import type {
   OrganizeTrashSelection,
   TrackFile
 } from "../shared/types.js";
+import { AudioMetadataCache, isLosslessFormat, qualityScore, readAudioMetadata } from "./audio-metadata.js";
 import { createRecycleSession, moveFileNoOverwrite, pathExists, TargetExistsError } from "./file-ops.js";
 import { identificationNeedsReview } from "./identification-status.js";
 import { duplicateKeyForTrack } from "./matching.js";
@@ -43,7 +44,6 @@ type PlannedOrganizeItem = {
   targetKey: string;
   track: TrackFile;
 };
-type OrganizeMoveResult = Omit<OrganizeApplyResult, "plan">;
 
 export function targetForTrack(track: TrackFile, settings: PrivateSettings) {
   const extension = track.extension.startsWith(".") ? track.extension : `.${track.extension}`;
@@ -115,6 +115,8 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
     plannedItemsByTargetPath.set(planned.targetKey, targetGroup);
   }
 
+  // Uncatalogued files already at a target are read for their quality; cached for the next preview.
+  const metadataCache = new AudioMetadataCache();
   const items = await mapWithConcurrency(plannedItems, organizePlanIoConcurrency, async (planned) => {
     const { item, target, targetKey, track } = planned;
     const targetGroup = plannedItemsByTargetPath.get(targetKey) || [];
@@ -126,7 +128,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
       ? await statIfExists(target.targetPath)
       : null;
     const collision = !trackKeepManaged && !organizationSkipped
-      ? buildCollision(track, target, targetGroup, tracksBySourcePath.get(targetKey), targetStat)
+      ? await buildCollision(track, target, targetGroup, tracksBySourcePath.get(targetKey), targetStat, metadataCache)
       : undefined;
 
     if (collision) {
@@ -174,6 +176,7 @@ export async function buildOrganizePlan(tracks: TrackFile[], settings: PrivateSe
 
     return item;
   });
+  metadataCache.flush();
 
   return {
     items,
@@ -279,13 +282,14 @@ function navidromePlanWarning(code: NavidromeMetadataDiagnosticCode, count: numb
   return `Navidrome metadata: ${formattedCount} local files did not match any API record by absolute path, relative path, filename+size, metadata key, or metadata+size. Review them under Navidrome unmatched.`;
 }
 
-function buildCollision(
+async function buildCollision(
   track: TrackFile,
   target: ReturnType<typeof targetForTrack>,
   targetGroup: PlannedOrganizeItem[],
   existingTargetTrack: TrackFile | undefined,
-  targetStat: Stats | null
-): OrganizeCollision | undefined {
+  targetStat: Stats | null,
+  metadataCache: AudioMetadataCache
+): Promise<OrganizeCollision | undefined> {
   const hasTargetCollision = Boolean(targetStat) && path.resolve(track.absolutePath) !== path.resolve(target.targetPath);
   const hasPlannedCollision = targetGroup.length > 1;
 
@@ -303,7 +307,7 @@ function buildCollision(
   if (existingTargetTrack) {
     candidates.set(trackIdentity(existingTargetTrack), trackToCollisionCandidate(existingTargetTrack, "existing-target"));
   } else if (targetStat && target.targetRelativePath) {
-    const fileCandidate = fileToCollisionCandidate(target, targetStat);
+    const fileCandidate = await fileToCollisionCandidate(target, targetStat, metadataCache);
     candidates.set(fileCandidate.id, fileCandidate);
   }
 
@@ -354,8 +358,22 @@ function trackToCollisionCandidate(track: TrackFile, role: OrganizeCollisionCand
   };
 }
 
-function fileToCollisionCandidate(target: ReturnType<typeof targetForTrack>, stat: Stats): OrganizeCollisionCandidate {
+async function fileToCollisionCandidate(
+  target: ReturnType<typeof targetForTrack>,
+  stat: Stats,
+  metadataCache: AudioMetadataCache
+): Promise<OrganizeCollisionCandidate> {
   const parsed = path.parse(target.targetPath);
+  const extension = parsed.ext.toLowerCase();
+  // The scan has not catalogued this file, so read its format to rank it against the source.
+  // An unreadable file keeps a null score, and the page then suggests nothing to remove.
+  // A parse that found no bitrate or duration did not find audio, so it says nothing about quality.
+  const format = await readAudioMetadata(target.targetPath, { size: stat.size, mtimeMs: stat.mtimeMs }, metadataCache)
+    .then((metadata) => (metadata.format.bitrate || metadata.format.duration ? metadata.format : null))
+    .catch(() => null);
+  const bitrate = typeof format?.bitrate === "number" ? Math.round(format.bitrate) : null;
+  const bitsPerSample = format?.bitsPerSample ?? null;
+  const lossless = format ? isLosslessFormat(extension, format) : false;
 
   return {
     id: `file:${target.targetRelativePath}`,
@@ -371,14 +389,14 @@ function fileToCollisionCandidate(target: ReturnType<typeof targetForTrack>, sta
     title: parsed.name,
     extension: parsed.ext,
     size: stat.size,
-    duration: null,
-    bitrate: null,
-    sampleRate: null,
-    bitsPerSample: null,
-    codec: null,
-    container: null,
-    lossless: false,
-    qualityScore: null,
+    duration: format?.duration ?? null,
+    bitrate,
+    sampleRate: format?.sampleRate ?? null,
+    bitsPerSample,
+    codec: format?.codec ?? null,
+    container: format?.container ?? null,
+    lossless,
+    qualityScore: format ? qualityScore(extension, bitrate, bitsPerSample, lossless) : null,
     duplicateKey: ""
   };
 }
@@ -413,9 +431,10 @@ export type OrganizeJournalEntry = {
 export async function applyOrganizePlan(
   plan: OrganizePlan,
   tracks: TrackFile[] = [],
-  journal?: (entry: OrganizeJournalEntry) => void
-): Promise<OrganizeMoveResult> {
-  const result: OrganizeMoveResult = {
+  journal?: (entry: OrganizeJournalEntry) => void,
+  onProgress?: (processed: number) => void
+): Promise<OrganizeApplyResult> {
+  const result: OrganizeApplyResult = {
     moved: 0,
     skipped: 0,
     errors: [],
@@ -460,6 +479,7 @@ export async function applyOrganizePlan(
       result.errors.push(`${item.sourceRelativePath}: ${(error as Error).message}`);
       result.items.push({ ...item, applied: false });
     }
+    onProgress?.(result.items.length);
   }
 
   return result;
